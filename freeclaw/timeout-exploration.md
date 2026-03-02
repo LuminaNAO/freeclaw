@@ -179,3 +179,24 @@ Create a simple logging mechanism that writes to `/home/lumina/timeout.log`
 ---
 
 *Last updated: 2026-03-02*
+
+---
+
+## Status
+
+### Completed ✅
+1. Documented timeout issues in `freeclaw/timeout-exploration.md`
+2. Created timeout logging utility in `freeclaw/timeout-logger.js`
+3. Added logging to attempt.ts when timeout occurs
+4. Committed changes to `freeclaw` branch
+
+### Pending ⏳
+1. Implement Fix 1: Increase/remove 10-minute default timeout
+2. Implement Fix 2: Exclude local providers from rate-limit detection
+3. Test fixes with long-running inference tasks
+
+## Git Commits
+
+- `0d22f92cd` - Document timeout issues for local inference
+- `0999a79c5` - Add timeout logging utility  
+- `d90390c7d` - Add timeout logging when inference is killed
