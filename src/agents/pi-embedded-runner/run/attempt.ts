@@ -33,6 +33,7 @@ import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
+import { logInferenceTimeout } from "/home/lumina/code/openclaw/freeclaw/timeout-logger.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
   analyzeBootstrapBudget,
@@ -2244,6 +2245,7 @@ export async function runEmbeddedAttempt(
             log.warn(
               `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
             );
+            logInferenceTimeout(params.timeoutMs, params.provider, `runId=${params.runId}`);
           }
           if (
             shouldFlagCompactionTimeout({
