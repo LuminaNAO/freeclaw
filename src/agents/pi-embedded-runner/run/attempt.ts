@@ -11,6 +11,8 @@ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { logInferenceStop } from "../../../infra/stop-logger.js";
+import { logInferenceTimeout } from "../../../infra/timeout-logger.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -29,7 +31,6 @@ import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
-import { logInferenceTimeout } from "/home/lumina/code/openclaw/freeclaw/timeout-logger.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
   analyzeBootstrapBudget,
@@ -1361,6 +1362,9 @@ export async function runEmbeddedAttempt(
         return err;
       };
       const abortRun = (isTimeout = false, reason?: unknown) => {
+        if (!isTimeout) {
+          logInferenceStop(params.runId, "stop-command", params.sessionId);
+        }
         aborted = true;
         if (isTimeout) {
           timedOut = true;

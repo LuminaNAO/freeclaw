@@ -5,8 +5,8 @@
  * Format: [TIMESTAMP] TYPE: message
  */
 
-import { writeFileSync, appendFileSync, mkdirSync } from 'fs';
-import { existsSync } from 'fs';
+import { writeFileSync, appendFileSync, mkdirSync } from "fs";
+import { existsSync } from "fs";
 
 const LOG_PATH = `${process.env.HOME}/timeout.log`;
 
@@ -16,7 +16,7 @@ const LOG_PATH = `${process.env.HOME}/timeout.log`;
 function ensureLogFile() {
   if (!existsSync(LOG_PATH)) {
     mkdirSync(`${process.env.HOME}`, { recursive: true });
-    writeFileSync(LOG_PATH, '', 'utf-8');
+    writeFileSync(LOG_PATH, "", "utf-8");
   }
 }
 
@@ -29,7 +29,7 @@ export function logTimeout(type, message) {
   ensureLogFile();
   const timestamp = new Date().toISOString();
   const logEntry = `[${timestamp}] ${type}: ${message}\n`;
-  appendFileSync(LOG_PATH, logEntry, 'utf-8');
+  appendFileSync(LOG_PATH, logEntry, "utf-8");
 }
 
 /**
@@ -46,7 +46,7 @@ export function logInferenceTimeout(timeoutMs, provider, context) {
   if (context) {
     message += ` (${context})`;
   }
-  logTimeout('TIMEOUT', message);
+  logTimeout("TIMEOUT", message);
 }
 
 /**
@@ -57,7 +57,7 @@ export function logInferenceTimeout(timeoutMs, provider, context) {
  */
 export function logFalseRateLimit(provider, errorMessage, expectedBehavior) {
   const message = `Rate limit incorrectly flagged for local provider ${provider}: "${errorMessage}". Expected: ${expectedBehavior}`;
-  logTimeout('RATE_LIMIT', message);
+  logTimeout("RATE_LIMIT", message);
 }
 
 /**
@@ -67,5 +67,5 @@ export function logFalseRateLimit(provider, errorMessage, expectedBehavior) {
  */
 export function logProfileRotation(reason, profile) {
   const message = `Profile rotation triggered: ${reason} (profile: ${profile})`;
-  logTimeout('PROFILE_ROTATION', message);
+  logTimeout("PROFILE_ROTATION", message);
 }
