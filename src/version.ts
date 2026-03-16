@@ -118,11 +118,34 @@ export function resolveRuntimeServiceVersion(
   );
 }
 
+// Check if we're on the freeclaw branch
+function isFreeClawBranch(): boolean {
+  try {
+    const { execSync } = require("child_process");
+    const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+      cwd: require("path").dirname(require("url").fileURLToPath(import.meta.url)),
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+    return branch === "freeclaw";
+  } catch {
+    // If git command fails, assume not on freeclaw branch
+    return false;
+  }
+}
+
 // Single source of truth for the current OpenClaw version.
 // - Embedded/bundled builds: injected define or env var.
 // - Dev/npm builds: package.json.
-export const VERSION = resolveBinaryVersion({
-  moduleUrl: import.meta.url,
-  injectedVersion: typeof __OPENCLAW_VERSION__ === "string" ? __OPENCLAW_VERSION__ : undefined,
-  bundledVersion: process.env.OPENCLAW_BUNDLED_VERSION,
-});
+export const VERSION =
+  (typeof __OPENCLAW_VERSION__ === "string" && __OPENCLAW_VERSION__) ||
+  process.env.OPENCLAW_BUNDLED_VERSION ||
+  (() => {
+    const version = resolveVersionFromModuleUrl(import.meta.url) || "0.0.0";
+    // Add 'f' prefix when on freeclaw branch
+    if (isFreeClawBranch() && !version.startsWith("f")) {
+      return "f" + version;
+    }
+    return version;
+  })() ||
+  "0.0.0";
