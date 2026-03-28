@@ -815,10 +815,22 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
   return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }
 
-export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
+// Local providers that should never be rate-limited
+const LOCAL_PROVIDERS = ["ollama", "vllm", "llama.cpp", "local", "ollama.cpp"];
+
+export function isRateLimitAssistantError(
+  msg: AssistantMessage | undefined,
+  provider?: string,
+): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;
   }
+
+  // Always return false for local providers
+  if (provider && LOCAL_PROVIDERS.some((p) => provider.toLowerCase().includes(p))) {
+    return false;
+  }
+
   return isRateLimitErrorMessage(msg.errorMessage ?? "");
 }
 
