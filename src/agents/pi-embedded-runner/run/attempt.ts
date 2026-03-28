@@ -2150,6 +2150,26 @@ export async function runEmbeddedAttempt(
         err.name = "AbortError";
         return err;
       };
+      const abortCompaction = () => {
+        if (!activeSession.isCompacting) {
+          return;
+        }
+        try {
+          activeSession.abortCompaction();
+        } catch (err) {
+          if (!isProbeSession) {
+            log.warn(
+              `embedded run abortCompaction failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
+            );
+          }
+        }
+      };
+      // Local providers that should never be rate-limited or aborted prematurely
+      const isLocalProvider =
+        params.provider &&
+        ["ollama", "vllm", "llama.cpp", "local", "ollama.cpp"].some((p) =>
+          params.provider.toLowerCase().includes(p),
+        );
       const abortRun = (isTimeout = false, reason?: unknown) => {
         aborted = true;
         if (isTimeout) {
@@ -2159,11 +2179,18 @@ export async function runEmbeddedAttempt(
           logInferenceStop(params.runId, "stop-command", params.sessionId);
         }
         if (isTimeout) {
-          runAbortController.abort(reason ?? makeTimeoutAbortReason());
+          // For local providers, don't abort the session on timeout — let them run to completion
+          // This prevents premature "srv stop: cancel task" in llama.cpp
+          if (!isLocalProvider) {
+            runAbortController.abort(reason ?? makeTimeoutAbortReason());
+            abortCompaction();
+            void activeSession.abort();
+          }
         } else {
           runAbortController.abort(reason);
+          abortCompaction();
+          void activeSession.abort();
         }
-        void activeSession.abort();
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
         const signal = runAbortController.signal;
