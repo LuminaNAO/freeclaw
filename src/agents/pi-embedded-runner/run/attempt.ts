@@ -15,6 +15,8 @@ import {
   ensureGlobalUndiciEnvProxyDispatcher,
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
+import { logInferenceStop } from "../../../infra/stop-logger.js";
+import { logInferenceTimeout } from "../../../infra/timeout-logger.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -2153,6 +2155,9 @@ export async function runEmbeddedAttempt(
         aborted = true;
         if (isTimeout) {
           timedOut = true;
+          logInferenceTimeout(params.timeoutMs, params.provider, `runId=${params.runId}`);
+        } else {
+          logInferenceStop(params.runId, "stop-command", params.sessionId);
         }
         if (isTimeout) {
           runAbortController.abort(reason ?? makeTimeoutAbortReason());
