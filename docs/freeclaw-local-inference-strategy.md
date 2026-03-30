@@ -178,6 +178,31 @@ reducing to 1 slot and increasing context per slot.
 
 ---
 
+## Live Test Results
+
+### Run 1 — 2026-03-31 (Qwen 3.5 27B BF16, ROCm)
+
+**Test:** rustyclaw build tasks driven via openclaw CLI, 10 incremental tasks on same session.
+
+| Task | Result | Duration | Context (tokens) | Notes |
+|------|--------|----------|-----------------|-------|
+| 1 — bootstrap | ✅ | 127s | ~15.9k | First run after fixes |
+| 2 — HTTP client | ✅ | 207s | ~17.0k | Context growing normally |
+| 3 — SSE parser | running | - | ~17.5k | Still in progress |
+
+**Key observations:**
+- With `--timeout 0`, embedded mode works — no premature aborts
+- GPU spikes to ~89% during generation, returns to ~4% idle — healthy
+- VRAM holds steady at 74% (pre-allocated by llama.cpp — no growth)
+- Context checkpointing working well (KV cache reuse ~99%)
+- WS gateway handshake still timing out — fallback to embedded works, but investigate
+- Session ID not being returned in JSON output — driver uses stateless calls (each turn re-sends full context via embedded runner)
+
+**Issues found:**
+- `openclaw agent --json` not returning `sessionId` in output → driver can't chain sessions via session ID. Openclaw embedded runner maintains session internally per agent. No fix needed for functionality but means full conversation history is re-sent each turn (explains the context growth).
+
+**WS Gateway issue:** `[ws] handshake timeout` — gateway is running but WS auth handshake times out. HTTP health endpoint works fine. Needs investigation — may be a timing issue in the WS auth negotiation on slow local inference setups.
+
 ## Notes
 
 - Dense 27B BF16 is intentional — it's slow enough to expose timing issues that
