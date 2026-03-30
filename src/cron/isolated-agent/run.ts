@@ -429,6 +429,7 @@ export async function runCronIsolatedAgentTurn(params: {
     cfg: cfgWithAgentDefaults,
     overrideSeconds:
       params.job.payload.kind === "agentTurn" ? params.job.payload.timeoutSeconds : undefined,
+    provider,
   });
 
   const agentPayload = params.job.payload.kind === "agentTurn" ? params.job.payload : null;

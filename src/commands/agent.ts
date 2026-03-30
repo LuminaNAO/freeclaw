@@ -599,6 +599,7 @@ async function prepareAgentCommandExecution(
   const timeoutMs = resolveAgentTimeoutMs({
     cfg,
     overrideSeconds: timeoutSecondsRaw,
+    provider: configuredModel.provider,
   });
 
   const sessionResolution = resolveSession({
