@@ -4,6 +4,8 @@ node_modules
 docker-compose.override.yml
 docker-compose.extra.yml
 dist
+dist-runtime/
+skills/.cache/
 pnpm-lock.yaml
 bun.lock
 bun.lockb
