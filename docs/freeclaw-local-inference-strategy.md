@@ -188,7 +188,8 @@ reducing to 1 slot and increasing context per slot.
 |------|--------|----------|-----------------|-------|
 | 1 — bootstrap | ✅ | 127s | ~15.9k | First run after fixes |
 | 2 — HTTP client | ✅ | 207s | ~17.0k | Context growing normally |
-| 3 — SSE parser | running | - | ~17.5k | Still in progress |
+| 3 — SSE parser | ✅ | 528s | ~20k → 4.5k | Compaction fired mid-task; would have hit 600s timeout |
+| 4 — conversation core | running | - | growing | - |
 
 **Key observations:**
 - With `--timeout 0`, embedded mode works — no premature aborts
@@ -202,6 +203,37 @@ reducing to 1 slot and increasing context per slot.
 - `openclaw agent --json` not returning `sessionId` in output → driver can't chain sessions via session ID. Openclaw embedded runner maintains session internally per agent. No fix needed for functionality but means full conversation history is re-sent each turn (explains the context growth).
 
 **WS Gateway issue:** `[ws] handshake timeout` — gateway is running but WS auth handshake times out. HTTP health endpoint works fine. Needs investigation — may be a timing issue in the WS auth negotiation on slow local inference setups.
+
+## llama.cpp Observations (from llama.log)
+
+### Performance
+- **Generation speed**: ~3.93–3.99 tok/s (eval) — very consistent regardless of context size. Good ROCm baseline.
+- **Prefill speed**: 28–72 tok/s depending on batch size. Larger batches prefill faster (expected). KV cache checkpoint reuse interferes with batch sizing sometimes.
+- **Task 3 took 528s** — would have been killed by the old 600s default timeout with only 72s to spare. Confirms `--timeout 0` is essential.
+
+### Flags that do nothing for Qwen3.5 BF16
+- **`--swa-full`**: Log says `swa_full is not supported by this model, it will be disabled`. This flag in the launcher is dead weight — remove it.
+- **Speculative decoding**: `speculative decoding not supported by this context` — not harmful but not doing anything either.
+
+### KV Cache / Slots
+- **4 slots (`-n_slots 4` implied by default)**: Only slot 3 was used throughout all tasks. 3 idle slots are consuming VRAM for KV cache that will never be used in a single-user local setup. **Recommendation: launch with `--parallel 1`** (or `-np 1`) to reduce to 1 slot and free that VRAM for larger context.
+- **Context checkpointing**: Working well — llama.cpp creates checkpoints every ~500 tokens and reuses them (LCP similarity >0.94). Very efficient for multi-turn where context grows incrementally.
+
+### Compaction behavior (task 3088)
+- Context grew to ~20k tokens, then openclaw compaction fired.
+- llama.cpp saw a new prompt with `n_past=4572` (post-compaction summary) vs `19929` tokens total — a ~75% context reduction.
+- All old KV checkpoints were erased cleanly. No errors. This is the system working as designed.
+- **Implication**: openclaw compaction is working but is expensive (fires a full summarization call). At ~4 tok/s, a 500-token summary takes ~125s — this is invisible to the user but adds latency between turns when compaction fires.
+
+### Launch flags to investigate
+| Flag | Current | Suggestion | Reason |
+|------|---------|-----------|--------|
+| `--swa-full` | present | remove | does nothing for this model |
+| `-n_slots` / `--parallel` | 4 (default) | 1 | single-user, saves VRAM/KV cache |
+| `--no-mmap` | present | test without | BF16 on ROCm may load fine with mmap; could speed up startup |
+| `-c 122144` | present | keep | large context is the goal |
+| `-fa on` | present | keep | Flash attention helps with long context on ROCm |
+| `--temp 0.3` | present | consider 0.6 | low temp can cause repetition loops on coding tasks |
 
 ## Notes
 
