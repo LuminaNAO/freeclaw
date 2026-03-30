@@ -3,6 +3,16 @@ import type { OpenClawConfig } from "../config/config.js";
 const DEFAULT_AGENT_TIMEOUT_SECONDS = 600;
 const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
+// Local inference providers (llama.cpp, ollama, vllm, etc.) can take minutes
+// per response — the cloud-oriented 600s default is unsafe for them.
+const LOCAL_PROVIDER_HINTS = ["ollama", "vllm", "llama.cpp", "local", "ollama.cpp"];
+
+export function isLocalInferenceProvider(provider?: string | null): boolean {
+  if (!provider) return false;
+  const p = provider.toLowerCase();
+  return LOCAL_PROVIDER_HINTS.some((hint) => p.includes(hint));
+}
+
 const normalizeNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
 
@@ -17,6 +27,8 @@ export function resolveAgentTimeoutMs(opts: {
   overrideMs?: number | null;
   overrideSeconds?: number | null;
   minMs?: number;
+  /** When set, local providers default to no-timeout instead of the 600s cloud default. */
+  provider?: string | null;
 }): number {
   const minMs = Math.max(normalizeNumber(opts.minMs) ?? 1, 1);
   const clampTimeoutMs = (valueMs: number) =>
@@ -43,6 +55,11 @@ export function resolveAgentTimeoutMs(opts: {
       return defaultMs;
     }
     return clampTimeoutMs(overrideSeconds * 1000);
+  }
+  // No explicit override: local providers get no-timeout by default since their
+  // generation time is unbounded and the 600s cloud default would kill long runs.
+  if (isLocalInferenceProvider(opts.provider)) {
+    return NO_TIMEOUT_MS;
   }
   return defaultMs;
 }
