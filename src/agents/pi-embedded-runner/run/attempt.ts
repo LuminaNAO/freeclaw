@@ -98,6 +98,7 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { isLocalInferenceProvider } from "../../timeout.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
@@ -1384,7 +1385,9 @@ export async function runEmbeddedAttempt(
   // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
   // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.
   ensureGlobalUndiciEnvProxyDispatcher();
-  ensureGlobalUndiciStreamTimeouts();
+  ensureGlobalUndiciStreamTimeouts(
+    isLocalInferenceProvider(params.provider) ? { timeoutMs: 2_147_000_000 } : undefined,
+  );
 
   const runStartMs = Date.now();
   logAttemptStart({
@@ -2336,7 +2339,7 @@ export async function runEmbeddedAttempt(
           runId: params.runId,
           provider: params.provider,
           elapsedMs: Date.now() - runStartMs,
-          reason: String(reason ?? "unknown"),
+          reason: typeof reason === "string" ? reason : JSON.stringify(reason ?? "unknown"),
         });
         if (
           shouldFlagCompactionTimeout({
