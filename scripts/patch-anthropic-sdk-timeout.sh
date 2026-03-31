@@ -36,6 +36,33 @@ else
     echo "[patch-anthropic-sdk] patched $patched file(s)"
 fi
 
+# ── Part 1b: Patch hardcoded 600000 fallback in messages resources ─────────
+# The SDK's messages.create() has `timeout: timeout ?? 600000` which bypasses
+# DEFAULT_TIMEOUT when _options.timeout is undefined (no explicit timeout
+# passed to constructor). This hardcoded 10-minute fallback kills requests
+# during long prompt processing.
+
+MSG_OLD="timeout: timeout ?? 600000,"
+MSG_NEW="timeout: timeout ?? 2147000000, // patched for local inference (freeclaw)"
+
+msg_patched=0
+
+for f in $(find "$REPO_ROOT/node_modules" -path "*/@anthropic-ai/sdk/resources/*/messages.js" -o -path "*/@anthropic-ai/sdk/resources/*/messages.mjs" 2>/dev/null); do
+    if grep -q "$MSG_OLD" "$f" 2>/dev/null; then
+        sed -i "s|$MSG_OLD|$MSG_NEW|g" "$f"
+        echo "[patch-anthropic-sdk-msg] patched: $f"
+        msg_patched=$((msg_patched + 1))
+    elif grep -q "patched for local inference" "$f" 2>/dev/null; then
+        echo "[patch-anthropic-sdk-msg] already patched: $f"
+    fi
+done
+
+if [ "$msg_patched" -eq 0 ]; then
+    echo "[patch-anthropic-sdk-msg] no files needed patching"
+else
+    echo "[patch-anthropic-sdk-msg] patched $msg_patched file(s)"
+fi
+
 # ── Part 2: Patch undici bodyTimeout / headersTimeout ──────────────────────
 # undici (Node.js built-in fetch HTTP client) defaults bodyTimeout and
 # headersTimeout to 300,000ms (5 minutes). During local inference, llama.cpp
