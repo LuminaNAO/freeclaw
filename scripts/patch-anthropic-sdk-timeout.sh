@@ -74,3 +74,39 @@ if [ "$undici_patched" -eq 0 ]; then
 else
     echo "[patch-undici] patched $undici_patched file(s)"
 fi
+
+# ── Part 3: Inject patched undici fetch into pi-ai Anthropic provider ──────
+# The Anthropic SDK uses globalThis.fetch (Node's built-in fetch), which has
+# its own internal undici with hardcoded bodyTimeout=300s. Patching the npm
+# undici package doesn't affect the built-in fetch. We must inject the npm
+# undici's fetch function explicitly so the patched timeouts take effect.
+
+PIIA_IMPORT_OLD='import Anthropic from "@anthropic-ai/sdk";'
+PIIA_IMPORT_NEW='import Anthropic from "@anthropic-ai/sdk";\nimport { fetch as undiciFetch } from "undici"; // [freeclaw] patched undici with no bodyTimeout'
+
+PIIA_CLIENT_OLD='        baseURL: model.baseUrl,\n        dangerouslyAllowBrowser: true,'
+PIIA_CLIENT_NEW='        baseURL: model.baseUrl,\n        fetch: undiciFetch, // [freeclaw] use patched undici with no bodyTimeout\n        dangerouslyAllowBrowser: true,'
+
+piia_patched=0
+
+for f in $(find "$REPO_ROOT/node_modules" -path "*/@mariozechner/pi-ai/dist/providers/anthropic.js" 2>/dev/null); do
+    changed=0
+    if grep -q 'import Anthropic from "@anthropic-ai/sdk";' "$f" 2>/dev/null && ! grep -q 'undiciFetch' "$f" 2>/dev/null; then
+        # Add undici import
+        sed -i '1s|import Anthropic from "@anthropic-ai/sdk";|import Anthropic from "@anthropic-ai/sdk";\nimport { fetch as undiciFetch } from "undici"; // [freeclaw] patched undici with no bodyTimeout|' "$f"
+        # Add fetch option to all Anthropic client constructors
+        sed -i 's|        baseURL: model.baseUrl,$|        baseURL: model.baseUrl,\n        fetch: undiciFetch, // [freeclaw] use patched undici with no bodyTimeout|' "$f"
+        echo "[patch-pi-ai] patched: $f"
+        piia_patched=$((piia_patched + 1))
+    elif grep -q 'undiciFetch' "$f" 2>/dev/null; then
+        echo "[patch-pi-ai] already patched: $f"
+    else
+        echo "[patch-pi-ai] WARNING: unexpected content in $f"
+    fi
+done
+
+if [ "$piia_patched" -eq 0 ]; then
+    echo "[patch-pi-ai] no files needed patching (already patched or pi-ai not installed)"
+else
+    echo "[patch-pi-ai] patched $piia_patched file(s)"
+fi
