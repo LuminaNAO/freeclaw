@@ -16,7 +16,13 @@ import {
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { logInferenceStop } from "../../../infra/stop-logger.js";
-import { logInferenceTimeout } from "../../../infra/timeout-logger.js";
+import {
+  logAttemptStart,
+  logExternalAbort,
+  logInferenceTimeout,
+  logLocalTimeoutSuppressed,
+  logYieldAbort,
+} from "../../../infra/timeout-logger.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -1379,6 +1385,14 @@ export async function runEmbeddedAttempt(
   ensureGlobalUndiciEnvProxyDispatcher();
   ensureGlobalUndiciStreamTimeouts();
 
+  const runStartMs = Date.now();
+  logAttemptStart({
+    runId: params.runId,
+    provider: params.provider,
+    timeoutMs: params.timeoutMs,
+    hasAbortSignal: !!params.abortSignal,
+  });
+
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
   );
@@ -1527,6 +1541,7 @@ export async function runEmbeddedAttempt(
             yieldDetected = true;
             yieldMessage = message;
             queueYieldInterruptForSession?.();
+            logYieldAbort({ runId: params.runId, elapsedMs: Date.now() - runStartMs });
             runAbortController.abort("sessions_yield");
             abortSessionForYield?.();
           },
@@ -2185,6 +2200,13 @@ export async function runEmbeddedAttempt(
             runAbortController.abort(reason ?? makeTimeoutAbortReason());
             abortCompaction();
             void activeSession.abort();
+          } else {
+            logLocalTimeoutSuppressed({
+              runId: params.runId,
+              provider: params.provider,
+              timeoutMs: params.timeoutMs,
+              elapsedMs: Date.now() - runStartMs,
+            });
           }
         } else {
           runAbortController.abort(reason);
@@ -2308,6 +2330,12 @@ export async function runEmbeddedAttempt(
       const onAbort = () => {
         const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
         const timeout = reason ? isTimeoutError(reason) : false;
+        logExternalAbort({
+          runId: params.runId,
+          provider: params.provider,
+          elapsedMs: Date.now() - runStartMs,
+          reason: String(reason ?? "unknown"),
+        });
         if (
           shouldFlagCompactionTimeout({
             isTimeout: timeout,

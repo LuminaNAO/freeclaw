@@ -1,75 +1,114 @@
-#!/usr/bin/env node
 /**
- * Minimal timeout logging utility for FreeClaw
- * Writes timeout events to $HOME/timeout.log
- * Format: [TIMESTAMP] TYPE: message
+ * Inference event logger for FreeClaw local provider diagnostics.
+ * Writes to $HOME/timeout.log — covers all abort/cancel/timeout events
+ * so root causes can be identified from the log alone.
+ *
+ * Log format: [ISO_TIMESTAMP] TYPE provider=X runId=Y elapsedMs=Z | message
  */
 
-import { writeFileSync, appendFileSync, mkdirSync } from "fs";
-import { existsSync } from "fs";
+import { appendFileSync } from "fs";
 
 const LOG_PATH = `${process.env.HOME}/timeout.log`;
 
-/**
- * Ensure the log file exists
- */
-function ensureLogFile() {
-  if (!existsSync(LOG_PATH)) {
-    mkdirSync(`${process.env.HOME}`, { recursive: true });
-    writeFileSync(LOG_PATH, "", "utf-8");
+function write(type: string, fields: Record<string, string | number | boolean | undefined>, message: string) {
+  const ts = new Date().toISOString();
+  const fieldStr = Object.entries(fields)
+    .filter(([, v]) => v !== undefined)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(" ");
+  const line = `[${ts}] ${type} ${fieldStr} | ${message}\n`;
+  try {
+    appendFileSync(LOG_PATH, line, "utf-8");
+  } catch {
+    // Best-effort — never throw from a logger
   }
 }
 
-/**
- * Log a timeout event
- * @param type - Event type (TIMEOUT, RATE_LIMIT, etc.)
- * @param message - Message to log
- */
-export function logTimeout(type: string, message: string) {
-  ensureLogFile();
-  const timestamp = new Date().toISOString();
-  const logEntry = `[${timestamp}] ${type}: ${message}\n`;
-  appendFileSync(LOG_PATH, logEntry, "utf-8");
+// ─── Run lifecycle ────────────────────────────────────────────────────────────
+
+/** Log the start of an embedded attempt — confirms what timeoutMs and abortSignal were wired in. */
+export function logAttemptStart(opts: {
+  runId: string;
+  provider: string;
+  timeoutMs: number;
+  hasAbortSignal: boolean;
+}) {
+  write("ATTEMPT_START", {
+    runId: opts.runId,
+    provider: opts.provider,
+    timeoutMs: opts.timeoutMs,
+    hasAbortSignal: opts.hasAbortSignal,
+  }, `attempt started timeoutMs=${opts.timeoutMs} hasAbortSignal=${opts.hasAbortSignal}`);
 }
 
+// ─── Abort events ─────────────────────────────────────────────────────────────
+
 /**
- * Log when an inference task is killed due to timeout
- * @param timeoutMs - The timeout value that was reached
- * @param provider - The provider that timed out (ollama, vllm, etc.)
- * @param context - Additional context about what was happening
+ * Log when abortRun() fires for a timeout.
+ * For local providers the abort is SKIPPED — this still fires so we know the timer
+ * triggered, and whether it was suppressed.
  */
 export function logInferenceTimeout(timeoutMs: number, provider?: string, context?: string) {
-  let message = `10-min inference killed at ${timeoutMs}ms`;
-  if (provider) {
-    message += ` (provider: ${provider})`;
-  }
-  if (context) {
-    message += ` (${context})`;
-  }
-  logTimeout("TIMEOUT", message);
+  write("TIMEOUT", { provider, timeoutMs }, `timer fired${context ? ` (${context})` : ""}`);
 }
 
 /**
- * Log when a rate-limit error is incorrectly detected for a local provider
- * @param provider - The local provider that was incorrectly flagged
- * @param errorMessage - The error message that triggered the detection
- * @param expectedBehavior - What should have happened instead
+ * Log when abortRun() fires for a timeout on a LOCAL provider and the abort is suppressed.
+ * This distinguishes "timer fired but we let it run" from "timer never fired".
  */
-export function logFalseRateLimit(
-  provider: string,
-  errorMessage: string,
-  expectedBehavior: string,
-) {
-  const message = `Rate limit incorrectly flagged for local provider ${provider}: "${errorMessage}". Expected: ${expectedBehavior}`;
-  logTimeout("RATE_LIMIT", message);
+export function logLocalTimeoutSuppressed(opts: {
+  runId: string;
+  provider: string;
+  timeoutMs: number;
+  elapsedMs: number;
+}) {
+  write("TIMEOUT_SUPPRESSED", opts, `local provider timeout suppressed — inference allowed to continue`);
 }
 
 /**
- * Log when profile rotation is triggered
- * @param reason - Why profile rotation was triggered
- * @param profile - The profile that was rotated
+ * Log when abortRun() fires for a non-timeout reason (stop-command).
  */
+export function logInferenceStop(runId: string, reason: string, sessionId: string, durationMs?: number) {
+  write("STOP", { runId, sessionId, durationMs }, `stopped: ${reason}`);
+}
+
+/**
+ * Log when an EXTERNAL AbortSignal (params.abortSignal) fires mid-run.
+ * This is NOT guarded for local providers — if it fires, the run dies.
+ * This is critical to capture because it's the most likely unknown cause.
+ */
+export function logExternalAbort(opts: {
+  runId: string;
+  provider: string;
+  elapsedMs: number;
+  reason: string;
+}) {
+  write("EXTERNAL_ABORT", opts, `external abortSignal fired after ${opts.elapsedMs}ms — reason: ${opts.reason}`);
+}
+
+/**
+ * Log when a sessions_yield abort fires.
+ */
+export function logYieldAbort(opts: { runId: string; elapsedMs: number }) {
+  write("YIELD_ABORT", opts, `sessions_yield abort after ${opts.elapsedMs}ms`);
+}
+
+// ─── Undici / HTTP layer ──────────────────────────────────────────────────────
+
+/**
+ * Log when the undici global dispatcher timeout is configured.
+ * Confirms the 30-min timeout is active before each inference attempt.
+ */
+export function logUndiciTimeout(opts: { timeoutMs: number; kind: string }) {
+  write("UNDICI_TIMEOUT", opts, `undici dispatcher set: bodyTimeout=${opts.timeoutMs}ms headersTimeout=${opts.timeoutMs}ms kind=${opts.kind}`);
+}
+
+// ─── Other diagnostic events ──────────────────────────────────────────────────
+
+export function logFalseRateLimit(provider: string, errorMessage: string, expectedBehavior: string) {
+  write("RATE_LIMIT", { provider }, `rate limit incorrectly flagged: "${errorMessage}". Expected: ${expectedBehavior}`);
+}
+
 export function logProfileRotation(reason: string, profile: string) {
-  const message = `Profile rotation triggered: ${reason} (profile: ${profile})`;
-  logTimeout("PROFILE_ROTATION", message);
+  write("PROFILE_ROTATION", { profile }, `rotation triggered: ${reason}`);
 }

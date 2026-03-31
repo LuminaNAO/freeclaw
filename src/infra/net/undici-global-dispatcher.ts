@@ -1,6 +1,7 @@
 import * as net from "node:net";
 import { Agent, EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
+import { logUndiciTimeout } from "../timeout-logger.js";
 
 export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -136,6 +137,7 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
       );
     }
     lastAppliedTimeoutKey = nextKey;
+    logUndiciTimeout({ timeoutMs, kind });
   } catch {
     // Best-effort hardening only.
   }
