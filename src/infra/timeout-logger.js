@@ -1,71 +1,63 @@
-#!/usr/bin/env node
 /**
- * Minimal timeout logging utility for FreeClaw
- * Writes timeout events to $HOME/timeout.log
- * Format: [TIMESTAMP] TYPE: message
+ * Inference event logger for FreeClaw local provider diagnostics.
+ * Writes to $HOME/timeout.log — covers all abort/cancel/timeout events.
  */
 
-import { writeFileSync, appendFileSync, mkdirSync } from "fs";
-import { existsSync } from "fs";
+import { appendFileSync } from "fs";
 
 const LOG_PATH = `${process.env.HOME}/timeout.log`;
 
-/**
- * Ensure the log file exists
- */
-function ensureLogFile() {
-  if (!existsSync(LOG_PATH)) {
-    mkdirSync(`${process.env.HOME}`, { recursive: true });
-    writeFileSync(LOG_PATH, "", "utf-8");
+function write(type, fields, message) {
+  const ts = new Date().toISOString();
+  const fieldStr = Object.entries(fields)
+    .filter(([, v]) => v !== undefined)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(" ");
+  const line = `[${ts}] ${type} ${fieldStr} | ${message}\n`;
+  try {
+    appendFileSync(LOG_PATH, line, "utf-8");
+  } catch {
+    // Best-effort — never throw from a logger
   }
 }
 
-/**
- * Log a timeout event
- * @param type - Event type (TIMEOUT, RATE_LIMIT, etc.)
- * @param message - Message to log
- */
-export function logTimeout(type, message) {
-  ensureLogFile();
-  const timestamp = new Date().toISOString();
-  const logEntry = `[${timestamp}] ${type}: ${message}\n`;
-  appendFileSync(LOG_PATH, logEntry, "utf-8");
+export function logAttemptStart(opts) {
+  write("ATTEMPT_START", {
+    runId: opts.runId,
+    provider: opts.provider,
+    timeoutMs: opts.timeoutMs,
+    hasAbortSignal: opts.hasAbortSignal,
+  }, `attempt started timeoutMs=${opts.timeoutMs} hasAbortSignal=${opts.hasAbortSignal}`);
 }
 
-/**
- * Log when an inference task is killed due to timeout
- * @param timeoutMs - The timeout value that was reached
- * @param provider - The provider that timed out (ollama, vllm, etc.)
- * @param context - Additional context about what was happening
- */
 export function logInferenceTimeout(timeoutMs, provider, context) {
-  let message = `10-min inference killed at ${timeoutMs}ms`;
-  if (provider) {
-    message += ` (provider: ${provider})`;
-  }
-  if (context) {
-    message += ` (${context})`;
-  }
-  logTimeout("TIMEOUT", message);
+  write("TIMEOUT", { provider, timeoutMs }, `timer fired${context ? ` (${context})` : ""}`);
 }
 
-/**
- * Log when a rate-limit error is incorrectly detected for a local provider
- * @param provider - The local provider that was incorrectly flagged
- * @param errorMessage - The error message that triggered the detection
- * @param expectedBehavior - What should have happened instead
- */
+export function logLocalTimeoutSuppressed(opts) {
+  write("TIMEOUT_SUPPRESSED", opts, `local provider timeout suppressed — inference allowed to continue`);
+}
+
+export function logInferenceStop(runId, reason, sessionId, durationMs) {
+  write("STOP", { runId, sessionId, durationMs }, `stopped: ${reason}`);
+}
+
+export function logExternalAbort(opts) {
+  write("EXTERNAL_ABORT", opts, `external abortSignal fired after ${opts.elapsedMs}ms — reason: ${opts.reason}`);
+}
+
+export function logYieldAbort(opts) {
+  write("YIELD_ABORT", opts, `sessions_yield abort after ${opts.elapsedMs}ms`);
+}
+
+export function logUndiciTimeout(opts) {
+  write("UNDICI_TIMEOUT", opts, `undici dispatcher set: bodyTimeout=${opts.timeoutMs}ms headersTimeout=${opts.timeoutMs}ms kind=${opts.kind}`);
+}
+
 export function logFalseRateLimit(provider, errorMessage, expectedBehavior) {
-  const message = `Rate limit incorrectly flagged for local provider ${provider}: "${errorMessage}". Expected: ${expectedBehavior}`;
-  logTimeout("RATE_LIMIT", message);
+  write("RATE_LIMIT", { provider }, `rate limit incorrectly flagged: "${errorMessage}". Expected: ${expectedBehavior}`);
 }
 
-/**
- * Log when profile rotation is triggered
- * @param reason - Why profile rotation was triggered
- * @param profile - The profile that was rotated
- */
 export function logProfileRotation(reason, profile) {
-  const message = `Profile rotation triggered: ${reason} (profile: ${profile})`;
-  logTimeout("PROFILE_ROTATION", message);
+  write("PROFILE_ROTATION", { profile }, `rotation triggered: ${reason}`);
 }
