@@ -12,8 +12,54 @@ export function isAssistantMessageWithContent(message: AgentMessage): message is
   );
 }
 
+// Gemma 4 thinking tags that leak into text blocks when the peg-gemma4 parser
+// misroutes thinking content. Matches both <channel|> (closing) and
+// <|channel> / <|channel|> (opening/full) forms.
+const GEMMA4_CHANNEL_TAG_RE = /<[|]?channel[|]?>/g;
+
+/**
+ * Detect text blocks that are leaked Gemma 4 thinking content.
+ * The peg-gemma4 parser sometimes emits thinking as text blocks that:
+ *   - start with "thought\n" (the channel label)
+ *   - consist only of a bare closing tag like "<channel|>"
+ *   - contain "<channel|>" tags mixed into text
+ */
+function isLeakedThinkingTextBlock(
+  block: AssistantContentBlock,
+): block is AssistantContentBlock & { type: "text"; text: string } {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const b = block as { type?: string; text?: string };
+  if (b.type !== "text" || typeof b.text !== "string") {
+    return false;
+  }
+  const text = b.text.trim();
+  if (!text) {
+    return false;
+  }
+  // Bare closing tag or tag-only content
+  if (text === "<channel|>" || text === "<|channel>" || text === "<|channel|>") {
+    return true;
+  }
+  // Text block starts with "thought" label — leaked thinking content
+  if (text.startsWith("thought\n") || text === "thought") {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Strip Gemma 4 channel tags from text content without removing the whole block.
+ */
+function stripGemma4ChannelTags(text: string): string {
+  return text.replace(GEMMA4_CHANNEL_TAG_RE, "").trim();
+}
+
 /**
  * Strip all `type: "thinking"` content blocks from assistant messages.
+ * Also strips leaked Gemma 4 thinking that ends up in text blocks
+ * (bare "thought\n..." content or "<channel|>" tags).
  *
  * If an assistant message becomes empty after stripping, it is replaced with
  * a synthetic `{ type: "text", text: "" }` block to preserve turn structure
@@ -34,6 +80,29 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
     let changed = false;
     for (const block of msg.content) {
       if (block && typeof block === "object" && (block as { type?: unknown }).type === "thinking") {
+        touched = true;
+        changed = true;
+        continue;
+      }
+      // Drop text blocks that are entirely leaked thinking content
+      if (isLeakedThinkingTextBlock(block)) {
+        touched = true;
+        changed = true;
+        continue;
+      }
+      // Strip inline channel tags from text blocks that have real content too
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: string }).type === "text" &&
+        typeof (block as { text?: string }).text === "string" &&
+        GEMMA4_CHANNEL_TAG_RE.test((block as { text: string }).text)
+      ) {
+        GEMMA4_CHANNEL_TAG_RE.lastIndex = 0;
+        const cleaned = stripGemma4ChannelTags((block as { text: string }).text);
+        if (cleaned) {
+          nextContent.push({ ...block, text: cleaned } as AssistantContentBlock);
+        }
         touched = true;
         changed = true;
         continue;
