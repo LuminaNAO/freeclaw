@@ -58,4 +58,84 @@ describe("dropThinkingBlocks", () => {
     const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
     expect(assistant.content).toEqual([{ type: "text", text: "" }]);
   });
+
+  it("drops text blocks that are leaked Gemma 4 thinking (bare 'thought' label)", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "text", text: "thought\nThe user wants me to call a tool..." },
+          { type: "text", text: "Hello! How can I help?" },
+        ],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "Hello! How can I help?" }]);
+  });
+
+  it("drops text blocks that are bare Gemma 4 channel closing tags", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "text", text: "<channel|>" },
+          { type: "text", text: "actual response" },
+        ],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "actual response" }]);
+  });
+
+  it("strips inline channel tags from text blocks with real content", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "Hello <channel|> world" }],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "Hello  world" }]);
+  });
+
+  it("drops leaked thinking with channel closing tag", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "text", text: "thought\nLet me check the error.<channel|>" },
+          {
+            type: "tool_use",
+            id: "abc",
+            name: "exec",
+            input: { command: "ls" },
+          },
+        ],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([
+      { type: "tool_use", id: "abc", name: "exec", input: { command: "ls" } },
+    ]);
+  });
+
+  it("preserves the original array when no thinking or leaked content exists", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "clean response" }],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    expect(result).toBe(messages);
+  });
 });
