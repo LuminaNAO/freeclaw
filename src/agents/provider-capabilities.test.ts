@@ -113,4 +113,36 @@ describe("resolveProviderCapabilities", () => {
       }),
     ).toBe(true);
   });
+
+  it("drops thinking blocks for llama.cpp local models", () => {
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "llama.cpp",
+        modelId: "gemma-4-26B-A4B-it-Q8_0.gguf",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "llama.cpp",
+        modelId: "Qwen3.5-35B-A3B.gguf",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "llama.cpp",
+        modelId: "deepseek-r1-0528-Q4_K_M.gguf",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "llama.cpp",
+        modelId: "Meta-Llama-3.1-70B-Instruct.gguf",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not preserve anthropic thinking signatures for llama.cpp", () => {
+    const caps = resolveProviderCapabilities("llama.cpp");
+    expect(caps.preserveAnthropicThinkingSignatures).toBe(false);
+  });
 });

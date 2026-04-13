@@ -80,6 +80,17 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
   "github-copilot": {
     dropThinkingBlockModelHints: ["claude"],
   },
+  // llama.cpp serves local models via the Anthropic Messages API. When
+  // --reasoning is active, it produces native thinking blocks in the stream
+  // but cannot consume them back in history (it regenerates reasoning each
+  // turn). Drop thinking blocks for all models to prevent leaking prior
+  // reasoning into subsequent requests. Gemma 4 is particularly affected:
+  // its <|channel>thought...<|channel|> tags get stored as thinking blocks
+  // that, if replayed as text, confuse the model and leak into output.
+  "llama.cpp": {
+    preserveAnthropicThinkingSignatures: false,
+    dropThinkingBlockModelHints: ["gemma", "qwen", "llama", "mistral", "phi", "deepseek", "gguf"],
+  },
 };
 
 export function resolveProviderCapabilities(provider?: string | null): ProviderCapabilities {
