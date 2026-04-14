@@ -91,17 +91,16 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
         continue;
       }
       // Strip inline channel tags from text blocks that have real content too
+      const blockObj = block as unknown as { type?: string; text?: string };
       if (
-        block &&
-        typeof block === "object" &&
-        (block as { type?: string }).type === "text" &&
-        typeof (block as { text?: string }).text === "string" &&
-        GEMMA4_CHANNEL_TAG_RE.test((block as { text: string }).text)
+        blockObj.type === "text" &&
+        typeof blockObj.text === "string" &&
+        GEMMA4_CHANNEL_TAG_RE.test(blockObj.text)
       ) {
         GEMMA4_CHANNEL_TAG_RE.lastIndex = 0;
-        const cleaned = stripGemma4ChannelTags((block as { text: string }).text);
+        const cleaned = stripGemma4ChannelTags(blockObj.text);
         if (cleaned) {
-          nextContent.push({ ...block, text: cleaned } as AssistantContentBlock);
+          nextContent.push({ ...block, text: cleaned } as unknown as AssistantContentBlock);
         }
         touched = true;
         changed = true;
