@@ -2565,7 +2565,10 @@ export async function runEmbeddedAttempt(
         // Only trust snapshot if compaction wasn't running before or after capture
         const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
         const preCompactionSessionId = activeSession.sessionId;
-        const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS = 600_000;
+        // Local inference compaction needs much longer — each summarization
+        // chunk takes ~50s generation + prompt processing at ~43 tok/s.
+        // 100K context with multi-stage summarization can need 20+ minutes.
+        const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS = 1_800_000;
 
         try {
           // Flush buffered block replies before waiting for compaction so the
