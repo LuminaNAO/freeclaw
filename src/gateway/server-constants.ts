@@ -29,6 +29,14 @@ export const getHandshakeTimeoutMs = () => {
       return parsed;
     }
   }
+  // Allow production override via env var — useful on slow/loaded hosts where
+  // Node.js startup takes longer than the default 3s (e.g. local inference machines).
+  if (process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS) {
+    const parsed = Number(process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
   return DEFAULT_HANDSHAKE_TIMEOUT_MS;
 };
 export const TICK_INTERVAL_MS = 30_000;

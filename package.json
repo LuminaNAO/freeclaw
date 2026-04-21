@@ -430,6 +430,10 @@
       "optional": true
     }
   },
+  "optionalDependencies": {
+    "@napi-rs/canvas": "^0.1.89",
+    "node-llama-cpp": "3.16.2"
+  },
   "engines": {
     "node": ">=22.16.0"
   },
