@@ -4,6 +4,28 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
 
+/**
+ * Configuration for the signalcli-archive-raw integration. When enabled,
+ * freeclaw spawns the archive supervisor (which spawns signal-cli and runs
+ * a tee proxy) and attaches to the proxy's randomised port, enabling
+ * lossless raw archival of all signal-cli HTTP traffic.
+ */
+export type SignalArchiveRawConfig =
+  | boolean
+  | {
+      enabled?: boolean;
+      /** Path to the signalcli-archive-raw binary (default: "signalcli-archive-raw" on PATH). */
+      binary?: string;
+      /** Path to the discovery JSON file the supervisor writes (default: ~/.signal-archive/endpoint.json). */
+      endpointFile?: string;
+      /** Path to the raw log file the supervisor appends to (default: archive-raw's own default). */
+      log?: string;
+      /** Lower bound for random port selection (forwarded to archive-raw). */
+      portMin?: number;
+      /** Upper bound for random port selection (forwarded to archive-raw). */
+      portMax?: number;
+    };
+
 export type SignalGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
@@ -39,6 +61,12 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
+  /**
+   * When set, freeclaw spawns signalcli-archive-raw as a managed child
+   * instead of signal-cli directly, attaching to the supervisor's tee
+   * proxy via the discovery JSON it publishes. See SignalArchiveRawConfig.
+   */
+  archiveRaw?: SignalArchiveRawConfig;
   /** Per-group overrides keyed by Signal group id (or "*"). */
   groups?: Record<string, SignalGroupConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
