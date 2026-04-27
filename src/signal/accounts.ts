@@ -1,8 +1,60 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SignalAccountConfig } from "../config/types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+
+function expandUserPath(path: string): string {
+  if (path === "~") {
+    return homedir();
+  }
+  if (path.startsWith("~/")) {
+    return join(homedir(), path.slice(2));
+  }
+  return path;
+}
+
+// Read a discovery JSON written by an external supervisor (e.g.
+// signalcli-archive-raw) and return its baseUrl. Synchronous because account
+// resolution itself is synchronous and runs once at channel start; the file
+// is small and local.
+function readEndpointFile(rawPath: string): string {
+  const path = expandUserPath(rawPath.trim());
+  let contents: string;
+  try {
+    contents = readFileSync(path, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      throw new Error(
+        `Signal httpEndpointFile not found at ${path}. Is the external signal-cli supervisor (e.g. signalcli-archive-raw) running?`,
+        { cause: err },
+      );
+    }
+    throw new Error(`Failed to read Signal httpEndpointFile at ${path}: ${String(err)}`, {
+      cause: err,
+    });
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents);
+  } catch (err) {
+    throw new Error(`Signal httpEndpointFile at ${path} is not valid JSON: ${String(err)}`, {
+      cause: err,
+    });
+  }
+  const baseUrl =
+    parsed && typeof parsed === "object" && "baseUrl" in parsed
+      ? (parsed as { baseUrl?: unknown }).baseUrl
+      : undefined;
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    throw new Error(`Signal httpEndpointFile at ${path} is missing a string "baseUrl" field`);
+  }
+  return baseUrl.trim();
+}
 
 export type ResolvedSignalAccount = {
   accountId: string;
@@ -43,10 +95,16 @@ export function resolveSignalAccount(params: {
   const enabled = baseEnabled && accountEnabled;
   const host = merged.httpHost?.trim() || "127.0.0.1";
   const port = merged.httpPort ?? 8080;
-  const baseUrl = merged.httpUrl?.trim() || `http://${host}:${port}`;
+  // Precedence: httpEndpointFile (dynamic, from external supervisor) >
+  // httpUrl (static config) > httpHost:httpPort (default).
+  const baseUrl =
+    (merged.httpEndpointFile?.trim() ? readEndpointFile(merged.httpEndpointFile) : undefined) ||
+    merged.httpUrl?.trim() ||
+    `http://${host}:${port}`;
   const configured = Boolean(
     merged.account?.trim() ||
     merged.httpUrl?.trim() ||
+    merged.httpEndpointFile?.trim() ||
     merged.cliPath?.trim() ||
     merged.httpHost?.trim() ||
     typeof merged.httpPort === "number" ||

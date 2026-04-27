@@ -17,6 +17,14 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   accountUuid?: string;
   /** Optional full base URL for signal-cli HTTP daemon. */
   httpUrl?: string;
+  /**
+   * Optional path to a discovery JSON file produced by an external supervisor
+   * (e.g. signalcli-archive-raw) that publishes a randomly chosen proxy port.
+   * The file must contain `{ "baseUrl": "http://host:port", ... }`. When set,
+   * autoStart defaults to false and the daemon is not spawned by freeclaw.
+   * Leading `~/` is expanded to $HOME.
+   */
+  httpEndpointFile?: string;
   /** HTTP host for signal-cli daemon (default 127.0.0.1). */
   httpHost?: string;
   /** HTTP port for signal-cli daemon (default 8080). */
