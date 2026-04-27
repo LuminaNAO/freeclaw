@@ -16,6 +16,11 @@ import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveSignalAccount } from "./accounts.js";
+import {
+  resolveArchiveRawSettings,
+  spawnArchiveSupervisor,
+  waitForEndpointFile,
+} from "./archive-supervisor.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
@@ -340,7 +345,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(cfg, "signal", accountInfo.accountId);
   const chunkMode = resolveChunkMode(cfg, "signal", accountInfo.accountId);
-  const baseUrl = opts.baseUrl?.trim() || accountInfo.baseUrl;
+  let baseUrl = opts.baseUrl?.trim() || accountInfo.baseUrl;
   const account = opts.account?.trim() || accountInfo.config.account?.trim();
   const dmPolicy = accountInfo.config.dmPolicy ?? "pairing";
   const allowFrom = normalizeAllowList(opts.allowFrom ?? accountInfo.config.allowFrom);
@@ -370,6 +375,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
 
+  const archiveRawSettings = resolveArchiveRawSettings(accountInfo.config.archiveRaw);
   const autoStart =
     opts.autoStart ??
     accountInfo.config.autoStart ??
@@ -383,21 +389,35 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   let daemonHandle: SignalDaemonHandle | null = null;
 
   if (autoStart) {
-    const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
-    const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
-    const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
-    daemonHandle = spawnSignalDaemon({
-      cliPath,
-      account,
-      httpHost,
-      httpPort,
-      receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode,
-      ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
-      ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
-      sendReadReceipts,
-      runtime,
-    });
-    daemonLifecycle.attach(daemonHandle);
+    if (archiveRawSettings.enabled) {
+      // Spawn signalcli-archive-raw, which itself spawns signal-cli on a
+      // randomised backend port and exposes the tee proxy at another
+      // randomised port. Discover the proxy URL from its endpoint file.
+      daemonHandle = spawnArchiveSupervisor({ settings: archiveRawSettings, account, runtime });
+      daemonLifecycle.attach(daemonHandle);
+      baseUrl = await waitForEndpointFile({
+        path: archiveRawSettings.endpointFile,
+        timeoutMs: startupTimeoutMs,
+        abortSignal: daemonLifecycle.abortSignal,
+      });
+      runtime.log?.(`signal: archive-raw proxy attached at ${baseUrl}`);
+    } else {
+      const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
+      const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
+      const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
+      daemonHandle = spawnSignalDaemon({
+        cliPath,
+        account,
+        httpHost,
+        httpPort,
+        receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode,
+        ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
+        ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
+        sendReadReceipts,
+        runtime,
+      });
+      daemonLifecycle.attach(daemonHandle);
+    }
   }
 
   const onAbort = () => {

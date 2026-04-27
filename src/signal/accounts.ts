@@ -97,8 +97,16 @@ export function resolveSignalAccount(params: {
   const port = merged.httpPort ?? 8080;
   // Precedence: httpEndpointFile (dynamic, from external supervisor) >
   // httpUrl (static config) > httpHost:httpPort (default).
+  // When archiveRaw is enabled, defer file resolution: the file does not
+  // exist until the supervisor spawns. monitor.ts re-reads it post-spawn
+  // and overrides baseUrl for downstream use.
+  const archiveRawDeferred =
+    merged.archiveRaw === true ||
+    (typeof merged.archiveRaw === "object" && merged.archiveRaw?.enabled !== false);
   const baseUrl =
-    (merged.httpEndpointFile?.trim() ? readEndpointFile(merged.httpEndpointFile) : undefined) ||
+    (merged.httpEndpointFile?.trim() && !archiveRawDeferred
+      ? readEndpointFile(merged.httpEndpointFile)
+      : undefined) ||
     merged.httpUrl?.trim() ||
     `http://${host}:${port}`;
   const configured = Boolean(
@@ -108,7 +116,8 @@ export function resolveSignalAccount(params: {
     merged.cliPath?.trim() ||
     merged.httpHost?.trim() ||
     typeof merged.httpPort === "number" ||
-    typeof merged.autoStart === "boolean",
+    typeof merged.autoStart === "boolean" ||
+    merged.archiveRaw !== undefined,
   );
   return {
     accountId,

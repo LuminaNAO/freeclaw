@@ -62,6 +62,18 @@ describe("resolveSignalAccount httpEndpointFile", () => {
     ).toThrow(/not valid JSON/);
   });
 
+  it("does not eagerly read the endpoint file when archiveRaw is enabled", () => {
+    // Supervisor has not yet started, so the file does not exist. Resolution
+    // must succeed (monitor.ts re-reads the file post-spawn).
+    const path = join(dir, "deferred-endpoint.json");
+    const resolved = resolveSignalAccount({
+      cfg: makeCfg({ httpEndpointFile: path, archiveRaw: true }),
+      accountId: undefined,
+    });
+    expect(resolved.configured).toBe(true);
+    expect(resolved.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:8080$/);
+  });
+
   it("throws when baseUrl is missing", () => {
     const path = join(dir, "missing-baseurl.json");
     writeFileSync(path, JSON.stringify({ host: "127.0.0.1", port: 40947 }));
