@@ -55,18 +55,20 @@ export async function dashboardCommand(
   const cfg = snapshot.valid ? snapshot.config : {};
   const port = resolveGatewayPort(cfg);
   const bind = cfg.gateway?.bind ?? "loopback";
+  const tlsEnabled = cfg.gateway?.tls?.enabled === true;
   const basePath = cfg.gateway?.controlUi?.basePath;
   const customBindHost = cfg.gateway?.customBindHost;
   const resolvedToken = await resolveDashboardToken(cfg, process.env);
   const token = resolvedToken.token ?? "";
 
-  // LAN URLs fail secure-context checks in browsers.
-  // Coerce only lan->loopback and preserve other bind modes.
+  // Plain HTTP LAN URLs fail secure-context checks in browsers. Coerce only
+  // non-TLS lan->loopback and preserve TLS LAN plus other bind modes.
   const links = resolveControlUiLinks({
     port,
-    bind: bind === "lan" ? "loopback" : bind,
+    bind: bind === "lan" && !tlsEnabled ? "loopback" : bind,
     customBindHost,
     basePath,
+    tlsEnabled,
   });
   // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
   const includeTokenInUrl = token.length > 0 && !resolvedToken.tokenSecretRefConfigured;

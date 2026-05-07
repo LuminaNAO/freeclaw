@@ -35,6 +35,7 @@ function mockSnapshot(params?: {
   token?: string;
   bind?: GatewayBindMode;
   customBindHost?: string;
+  tlsEnabled?: boolean;
 }) {
   const token = params?.token ?? "abc123";
   mocks.readConfigFileSnapshot.mockResolvedValue({
@@ -48,6 +49,7 @@ function mockSnapshot(params?: {
         auth: { token },
         bind: params?.bind,
         customBindHost: params?.customBindHost,
+        tls: params?.tlsEnabled ? { enabled: true } : undefined,
       },
     },
     issues: [],
@@ -85,6 +87,21 @@ describe("dashboardCommand bind selection", () => {
       bind: "loopback",
       customBindHost: undefined,
       basePath: undefined,
+      tlsEnabled: false,
+    });
+  });
+
+  it("preserves lan bind mode when TLS is enabled", async () => {
+    mockSnapshot({ bind: "lan", tlsEnabled: true });
+
+    await dashboardCommand(runtime, { noOpen: true });
+
+    expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({
+      port: 18789,
+      bind: "lan",
+      customBindHost: undefined,
+      basePath: undefined,
+      tlsEnabled: true,
     });
   });
 
@@ -98,6 +115,7 @@ describe("dashboardCommand bind selection", () => {
       bind: "custom",
       customBindHost: "10.0.0.5",
       basePath: undefined,
+      tlsEnabled: false,
     });
   });
 
@@ -111,6 +129,7 @@ describe("dashboardCommand bind selection", () => {
       bind: "tailnet",
       customBindHost: undefined,
       basePath: undefined,
+      tlsEnabled: false,
     });
   });
 });
