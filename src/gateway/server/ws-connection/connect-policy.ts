@@ -35,9 +35,9 @@ export function resolveControlUiAuthPolicy(params: {
 export function shouldSkipControlUiPairing(
   policy: ControlUiAuthPolicy,
   role: GatewayRole,
-  trustedProxyAuthOk = false,
+  sharedAuthOk = false,
 ): boolean {
-  if (trustedProxyAuthOk) {
+  if (roleCanSkipDeviceIdentity(role, sharedAuthOk)) {
     return true;
   }
   // dangerouslyDisableDeviceAuth is the break-glass path for Control UI

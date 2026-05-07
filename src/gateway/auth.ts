@@ -21,7 +21,12 @@ import {
   resolveClientIp,
 } from "./net.js";
 
-export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+export type ResolvedGatewayAuthMode =
+  | "none"
+  | "token"
+  | "password"
+  | "token-password"
+  | "trusted-proxy";
 export type ResolvedGatewayAuthModeSource =
   | "override"
   | "config"
@@ -44,6 +49,7 @@ export type GatewayAuthResult = {
     | "none"
     | "token"
     | "password"
+    | "token-password"
     | "tailscale"
     | "device-token"
     | "bootstrap-token"
@@ -305,6 +311,18 @@ export function assertGatewayAuthConfigured(
     }
     throw new Error("gateway auth mode is password, but no password was configured");
   }
+  if (auth.mode === "token-password") {
+    if (!auth.token) {
+      throw new Error(
+        "gateway auth mode is token-password, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+      );
+    }
+    if (!auth.password) {
+      throw new Error(
+        "gateway auth mode is token-password, but no password was configured (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
+      );
+    }
+  }
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
       throw new Error(
@@ -452,6 +470,54 @@ export async function authorizeGatewayConnect(
     }
     limiter?.reset(ip, rateLimitScope);
     return { ok: true, method: "token" };
+  }
+
+  if (auth.mode === "token-password") {
+    if (!auth.token) {
+      return { ok: false, reason: "token_missing_config" };
+    }
+    if (!auth.password) {
+      return { ok: false, reason: "password_missing_config" };
+    }
+
+    const tokenProvided = Boolean(connectAuth?.token);
+    const passwordProvided = Boolean(connectAuth?.password);
+    const tokenOk = tokenProvided && safeEqualSecret(connectAuth?.token ?? "", auth.token);
+    const passwordOk =
+      passwordProvided && safeEqualSecret(connectAuth?.password ?? "", auth.password);
+
+    if (localDirect) {
+      if (tokenOk || passwordOk) {
+        limiter?.reset(ip, rateLimitScope);
+        return { ok: true, method: tokenOk ? "token" : "password" };
+      }
+      if (tokenProvided) {
+        limiter?.recordFailure(ip, rateLimitScope);
+        return { ok: false, reason: "token_mismatch" };
+      }
+      if (passwordProvided) {
+        limiter?.recordFailure(ip, rateLimitScope);
+        return { ok: false, reason: "password_mismatch" };
+      }
+      return { ok: false, reason: "token_missing" };
+    }
+
+    if (!tokenProvided) {
+      return { ok: false, reason: "token_missing" };
+    }
+    if (!passwordProvided) {
+      return { ok: false, reason: "password_missing" };
+    }
+    if (!tokenOk) {
+      limiter?.recordFailure(ip, rateLimitScope);
+      return { ok: false, reason: "token_mismatch" };
+    }
+    if (!passwordOk) {
+      limiter?.recordFailure(ip, rateLimitScope);
+      return { ok: false, reason: "password_mismatch" };
+    }
+    limiter?.reset(ip, rateLimitScope);
+    return { ok: true, method: "token-password" };
   }
 
   if (auth.mode === "password") {

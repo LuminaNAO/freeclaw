@@ -660,6 +660,7 @@ export const OpenClawSchema = z
                 z.literal("none"),
                 z.literal("token"),
                 z.literal("password"),
+                z.literal("token-password"),
                 z.literal("trusted-proxy"),
               ])
               .optional(),

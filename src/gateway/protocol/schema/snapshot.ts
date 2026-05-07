@@ -57,6 +57,7 @@ export const SnapshotSchema = Type.Object(
         Type.Literal("none"),
         Type.Literal("token"),
         Type.Literal("password"),
+        Type.Literal("token-password"),
         Type.Literal("trusted-proxy"),
       ]),
     ),

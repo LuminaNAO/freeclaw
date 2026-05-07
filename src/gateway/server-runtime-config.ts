@@ -109,7 +109,9 @@ export async function resolveGatewayRuntimeConfig(params: {
   const hasPassword =
     typeof resolvedAuth.password === "string" && resolvedAuth.password.trim().length > 0;
   const hasSharedSecret =
-    (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
+    (authMode === "token" && hasToken) ||
+    (authMode === "password" && hasPassword) ||
+    (authMode === "token-password" && hasToken && hasPassword);
   const hooksConfig = resolveHooksConfig(params.cfg);
   const canvasHostEnabled =
     process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;

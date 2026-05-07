@@ -83,7 +83,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.auth":
     "Authentication policy for gateway HTTP/WebSocket access including mode, credentials, trusted-proxy behavior, and rate limiting. Keep auth enabled for every non-loopback deployment.",
   "gateway.auth.mode":
-    'Gateway auth mode: "none", "token", "password", or "trusted-proxy" depending on your edge architecture. Use token/password for direct exposure, and trusted-proxy only behind hardened identity-aware proxies.',
+    'Gateway auth mode: "none", "token", "password", "token-password", or "trusted-proxy" depending on your edge architecture. Use token/password for direct exposure, token-password when remote browsers need both shared secrets, and trusted-proxy only behind hardened identity-aware proxies.',
   "gateway.auth.allowTailscale":
     "Allows trusted Tailscale identity paths to satisfy gateway auth checks when configured. Use this only when your tailnet identity posture is strong and operator workflows depend on it.",
   "gateway.auth.rateLimit":
