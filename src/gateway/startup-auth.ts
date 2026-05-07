@@ -145,7 +145,7 @@ function shouldResolveGatewayTokenSecretRef(params: {
     return false;
   }
   const explicitMode = params.authOverride?.mode ?? params.cfg.gateway?.auth?.mode;
-  if (explicitMode === "token") {
+  if (explicitMode === "token" || explicitMode === "token-password") {
     return true;
   }
   if (explicitMode === "password" || explicitMode === "none" || explicitMode === "trusted-proxy") {
@@ -186,7 +186,7 @@ function shouldResolveGatewayPasswordSecretRef(params: {
     return false;
   }
   const explicitMode = params.authOverride?.mode ?? params.cfg.gateway?.auth?.mode;
-  if (explicitMode === "password") {
+  if (explicitMode === "password" || explicitMode === "token-password") {
     return true;
   }
   if (explicitMode === "token" || explicitMode === "none" || explicitMode === "trusted-proxy") {

@@ -209,7 +209,7 @@ describe("ws connect policy", () => {
     ).toBe("reject-device-required");
   });
 
-  test("dangerouslyDisableDeviceAuth skips pairing for operator control-ui only", () => {
+  test("shared auth and dangerouslyDisableDeviceAuth skip pairing for operator control-ui only", () => {
     const bypass = resolveControlUiAuthPolicy({
       isControlUi: true,
       controlUiConfig: { dangerouslyDisableDeviceAuth: true },
@@ -224,6 +224,7 @@ describe("ws connect policy", () => {
     expect(shouldSkipControlUiPairing(bypass, "node", false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, "operator", false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, "operator", true)).toBe(true);
+    expect(shouldSkipControlUiPairing(strict, "node", true)).toBe(false);
   });
 
   test("trusted-proxy control-ui bypass only applies to operator + trusted-proxy auth", () => {
