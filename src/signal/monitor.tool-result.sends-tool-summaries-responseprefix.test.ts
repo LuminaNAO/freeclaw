@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { peekSystemEvents } from "../infra/system-events.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { normalizeE164 } from "../utils.js";
 import type { SignalDaemonExitEvent } from "./daemon.js";
+import { resolveSignalInboundRoute } from "./inbound-route.js";
 import {
   createMockSignalDaemonHandle,
   config,
@@ -103,11 +103,11 @@ async function receiveSignalPayloads(params: {
 }
 
 function getDirectSignalEventsFor(sender: string) {
-  const route = resolveAgentRoute({
+  const route = resolveSignalInboundRoute({
     cfg: config as OpenClawConfig,
-    channel: "signal",
     accountId: "default",
-    peer: { kind: "direct", id: normalizeE164(sender) },
+    isGroup: false,
+    senderPeerId: normalizeE164(sender),
   });
   return peekSystemEvents(route.sessionKey);
 }

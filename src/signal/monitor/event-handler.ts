@@ -31,11 +31,6 @@ import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { kindFromMime } from "../../media/mime.js";
 import {
-  buildAgentSessionKey,
-  deriveLastRoutePolicy,
-  resolveAgentRoute,
-} from "../../routing/resolve-route.js";
-import {
   DM_GROUP_ACCESS_REASON,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "../../security/dm-policy-shared.js";
@@ -51,6 +46,7 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
+import { resolveSignalInboundRoute } from "../inbound-route.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
@@ -78,42 +74,6 @@ function formatAttachmentSummaryPlaceholder(contentTypes: Array<string | undefin
     formatAttachmentKindCount(kind, count),
   );
   return `[${parts.join(" + ")} attached]`;
-}
-
-function resolveSignalInboundRoute(params: {
-  cfg: SignalEventHandlerDeps["cfg"];
-  accountId: SignalEventHandlerDeps["accountId"];
-  isGroup: boolean;
-  groupId?: string;
-  senderPeerId: string;
-}) {
-  const route = resolveAgentRoute({
-    cfg: params.cfg,
-    channel: "signal",
-    accountId: params.accountId,
-    peer: {
-      kind: params.isGroup ? "group" : "direct",
-      id: params.isGroup ? (params.groupId ?? "unknown") : params.senderPeerId,
-    },
-  });
-  if (params.isGroup) {
-    return route;
-  }
-  const sessionKey = buildAgentSessionKey({
-    agentId: route.agentId,
-    channel: "signal",
-    accountId: route.accountId,
-    peer: { kind: "direct", id: params.senderPeerId },
-    dmScope: "per-channel-peer",
-  }).toLowerCase();
-  return {
-    ...route,
-    sessionKey,
-    lastRoutePolicy: deriveLastRoutePolicy({
-      sessionKey,
-      mainSessionKey: route.mainSessionKey,
-    }),
-  };
 }
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {

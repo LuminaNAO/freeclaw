@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 
 const { writeConfigFile } = vi.hoisted(() => ({
-  writeConfigFile: vi.fn(async () => {}),
+  writeConfigFile: vi.fn(async (_cfg: OpenClawConfig) => {}),
 }));
 
 vi.mock("../config/config.js", () => ({
