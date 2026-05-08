@@ -419,7 +419,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "channels.defaults.groupPolicy": ['"open"', '"disabled"', '"allowlist"'],
   "gateway.mode": ['"local"', '"remote"'],
   "gateway.bind": ['"auto"', '"lan"', '"loopback"', '"custom"', '"tailnet"'],
-  "gateway.auth.mode": ['"none"', '"token"', '"password"', '"trusted-proxy"'],
+  "gateway.auth.mode": ['"none"', '"token"', '"password"', '"token-password"', '"trusted-proxy"'],
   "gateway.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
   "browser.profiles.*.driver": ['"openclaw"', '"clawd"', '"extension"'],
   "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],

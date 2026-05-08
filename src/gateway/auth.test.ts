@@ -275,6 +275,55 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("password_missing_config");
   });
 
+  it("requires token and password for token-password mode on remote clients", async () => {
+    const auth = {
+      mode: "token-password" as const,
+      token: "token-secret",
+      password: "password-secret", // pragma: allowlist secret
+      allowTailscale: false,
+    };
+    const req = {
+      socket: { remoteAddress: "10.10.10.177" },
+      headers: { host: "10.10.10.103:40741" },
+    } as never;
+
+    await expect(
+      authorizeGatewayConnect({ auth, connectAuth: { token: "token-secret" }, req }),
+    ).resolves.toMatchObject({ ok: false, reason: "password_missing" });
+    await expect(
+      authorizeGatewayConnect({
+        auth,
+        connectAuth: { token: "token-secret", password: "wrong" },
+        req,
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: "password_mismatch" });
+    await expect(
+      authorizeGatewayConnect({
+        auth,
+        connectAuth: { token: "token-secret", password: "password-secret" },
+        req,
+      }),
+    ).resolves.toMatchObject({ ok: true, method: "token-password" });
+  });
+
+  it("allows token-only token-password mode on local direct clients", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: {
+        mode: "token-password",
+        token: "token-secret",
+        password: "password-secret", // pragma: allowlist secret
+        allowTailscale: false,
+      },
+      connectAuth: { token: "token-secret" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { host: "127.0.0.1:40741" },
+      } as never,
+    });
+
+    expect(res).toMatchObject({ ok: true, method: "token" });
+  });
+
   it("treats local tailscale serve hostnames as direct", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },

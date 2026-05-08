@@ -86,6 +86,7 @@ const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "none",
   "token",
   "password",
+  "token-password",
   "trusted-proxy",
 ];
 const GATEWAY_TAILSCALE_MODES: readonly GatewayTailscaleMode[] = ["off", "serve", "funnel"];
@@ -363,7 +364,8 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     );
   const hasSharedSecret =
     (resolvedAuthMode === "token" && tokenConfigured) ||
-    (resolvedAuthMode === "password" && passwordConfigured);
+    (resolvedAuthMode === "password" && passwordConfigured) ||
+    (resolvedAuthMode === "token-password" && tokenConfigured && passwordConfigured);
   const canBootstrapToken = resolvedAuthMode === "token" && !tokenConfigured;
   const authHints: string[] = [];
   if (miskeys.hasGatewayToken) {
