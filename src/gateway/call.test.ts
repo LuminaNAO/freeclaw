@@ -5,6 +5,7 @@ import {
   loadConfigMock as loadConfig,
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
+  readSystemdServiceExecStartMock as readSystemdServiceExecStart,
   resolveGatewayPortMock as resolveGatewayPort,
 } from "./gateway-connection.test-mocks.js";
 
@@ -81,6 +82,8 @@ function resetGatewayCallMocks() {
   resolveGatewayPort.mockClear();
   pickPrimaryTailnetIPv4.mockClear();
   pickPrimaryLanIPv4.mockClear();
+  readSystemdServiceExecStart.mockReset();
+  readSystemdServiceExecStart.mockResolvedValue(null);
   lastClientOptions = null;
   lastRequestOptions = null;
   startMode = "hello";
@@ -787,6 +790,36 @@ describe("callGateway password resolution", () => {
     await callGateway({ method: "health" });
 
     expect(lastClientOptions?.password).toBe("resolved-local-ref-password");
+  });
+
+  it("resolves local gateway token SecretRef from the installed systemd service env", async () => {
+    readSystemdServiceExecStart.mockResolvedValue({
+      programArguments: ["/usr/bin/node", "/app/dist/index.js", "gateway"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "service-token",
+      },
+    });
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: {
+          mode: "token-password",
+          token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+          password: "config-password",
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.token).toBe("service-token");
+    expect(lastClientOptions?.password).toBe("config-password");
   });
 
   it("does not resolve local password ref when env password takes precedence", async () => {

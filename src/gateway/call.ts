@@ -7,6 +7,7 @@ import {
   resolveStateDir,
 } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { readSystemdServiceExecStart } from "../daemon/systemd.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
@@ -20,6 +21,8 @@ import { VERSION } from "../version.js";
 import { GatewayClient } from "./client.js";
 import {
   GatewaySecretRefUnavailableError,
+  readGatewayPasswordEnv,
+  readGatewayTokenEnv,
   resolveGatewayCredentialsFromConfig,
   trimToUndefined,
   type GatewayCredentialMode,
@@ -347,7 +350,8 @@ async function resolveGatewayCredentials(context: ResolvedGatewayCallContext): P
   token?: string;
   password?: string;
 }> {
-  return resolveGatewayCredentialsWithEnv(context, process.env);
+  const env = await resolveLocalGatewayCallEnv({ context, env: process.env });
+  return resolveGatewayCredentialsWithEnv(context, env);
 }
 
 async function resolveGatewayCredentialsWithEnv(
@@ -665,6 +669,42 @@ async function resolveGatewayCredentialsFromConfigWithSecretInputs(params: {
   }
 }
 
+async function resolveLocalGatewayCallEnv(params: {
+  context: ResolvedGatewayCallContext;
+  env: NodeJS.ProcessEnv;
+}): Promise<NodeJS.ProcessEnv> {
+  if (params.context.isRemoteMode || params.context.urlOverride || params.context.remoteUrl) {
+    return params.env;
+  }
+  if (readGatewayTokenEnv(params.env) && readGatewayPasswordEnv(params.env)) {
+    return params.env;
+  }
+  const tokenRef = resolveSecretInputRef({
+    value: params.context.config.gateway?.auth?.token,
+    defaults: params.context.config.secrets?.defaults,
+  }).ref;
+  const passwordRef = resolveSecretInputRef({
+    value: params.context.config.gateway?.auth?.password,
+    defaults: params.context.config.secrets?.defaults,
+  }).ref;
+  if (!tokenRef && !passwordRef) {
+    return params.env;
+  }
+  const serviceCommand = await readSystemdServiceExecStart(params.env);
+  const serviceEnv = serviceCommand?.environment;
+  if (!serviceEnv) {
+    return params.env;
+  }
+  const nextEnv = { ...params.env };
+  if (!readGatewayTokenEnv(nextEnv) && serviceEnv.OPENCLAW_GATEWAY_TOKEN) {
+    nextEnv.OPENCLAW_GATEWAY_TOKEN = serviceEnv.OPENCLAW_GATEWAY_TOKEN;
+  }
+  if (!readGatewayPasswordEnv(nextEnv) && serviceEnv.OPENCLAW_GATEWAY_PASSWORD) {
+    nextEnv.OPENCLAW_GATEWAY_PASSWORD = serviceEnv.OPENCLAW_GATEWAY_PASSWORD;
+  }
+  return nextEnv;
+}
+
 export async function resolveGatewayCredentialsWithSecretInputs(params: {
   config: OpenClawConfig;
   explicitAuth?: ExplicitGatewayAuth;
@@ -712,7 +752,11 @@ export async function resolveGatewayCredentialsWithSecretInputs(params: {
     remoteTokenFallback: params.remoteTokenFallback,
     remotePasswordFallback: params.remotePasswordFallback,
   };
-  return resolveGatewayCredentialsWithEnv(context, params.env ?? process.env);
+  const env = await resolveLocalGatewayCallEnv({
+    context,
+    env: params.env ?? process.env,
+  });
+  return resolveGatewayCredentialsWithEnv(context, env);
 }
 
 async function resolveGatewayTlsFingerprint(params: {
