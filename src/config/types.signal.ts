@@ -49,7 +49,10 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   httpEndpointFile?: string;
   /** HTTP host for signal-cli daemon (default 127.0.0.1). */
   httpHost?: string;
-  /** HTTP port for signal-cli daemon (default 8080). */
+  /**
+   * HTTP port for signal-cli daemon.
+   * FreeClaw auto-selects and persists a free loopback port on local auto-start.
+   */
   httpPort?: number;
   /** signal-cli binary path (default: signal-cli). */
   cliPath?: string;

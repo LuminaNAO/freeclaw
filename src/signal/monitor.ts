@@ -23,6 +23,11 @@ import {
 } from "./archive-supervisor.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
+import {
+  isPreferredSignalHttpPort,
+  persistSignalHttpPort,
+  pickSignalHttpPort,
+} from "./http-port.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
 import type {
@@ -402,9 +407,43 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       });
       runtime.log?.(`signal: archive-raw proxy attached at ${baseUrl}`);
     } else {
+      // TODO(signal): add UNIX socket transport support for multi-user hosts.
       const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
       const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
-      const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
+      const managedLocalHttp = Boolean(
+        !opts.baseUrl?.trim() &&
+        !accountInfo.config.httpUrl?.trim() &&
+        !accountInfo.config.httpEndpointFile?.trim(),
+      );
+      const savedHttpPort = accountInfo.config.httpPort;
+      const hasExplicitHttpPort = opts.httpPort !== undefined;
+      const shouldMigrateSavedHttpPort =
+        managedLocalHttp &&
+        !hasExplicitHttpPort &&
+        (savedHttpPort === undefined ||
+          savedHttpPort === 8080 ||
+          !isPreferredSignalHttpPort(savedHttpPort));
+      let httpPort: number;
+      if (hasExplicitHttpPort) {
+        httpPort = opts.httpPort as number;
+      } else if (managedLocalHttp && !shouldMigrateSavedHttpPort && savedHttpPort !== undefined) {
+        httpPort = savedHttpPort;
+      } else if (managedLocalHttp) {
+        httpPort = await pickSignalHttpPort({ host: httpHost });
+      } else {
+        httpPort = savedHttpPort ?? 8080;
+      }
+      baseUrl = `http://${httpHost}:${httpPort}`;
+      if (shouldMigrateSavedHttpPort) {
+        await persistSignalHttpPort({
+          cfg,
+          accountId: accountInfo.accountId,
+          port: httpPort,
+        });
+        runtime.log?.(`signal: auto-started local daemon on ${httpHost}:${httpPort}`);
+      } else if (managedLocalHttp && !hasExplicitHttpPort) {
+        runtime.log?.(`signal: using persisted local daemon port ${httpHost}:${httpPort}`);
+      }
       daemonHandle = spawnSignalDaemon({
         cliPath,
         account,

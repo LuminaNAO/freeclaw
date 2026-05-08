@@ -94,6 +94,7 @@ export function resolveSignalAccount(params: {
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
   const host = merged.httpHost?.trim() || "127.0.0.1";
+  // Legacy placeholder used before local auto-start persists a free port.
   const port = merged.httpPort ?? 8080;
   // Precedence: httpEndpointFile (dynamic, from external supervisor) >
   // httpUrl (static config) > httpHost:httpPort (default).

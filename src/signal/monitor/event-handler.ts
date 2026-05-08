@@ -30,7 +30,11 @@ import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { kindFromMime } from "../../media/mime.js";
-import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import {
+  buildAgentSessionKey,
+  deriveLastRoutePolicy,
+  resolveAgentRoute,
+} from "../../routing/resolve-route.js";
 import {
   DM_GROUP_ACCESS_REASON,
   resolvePinnedMainDmOwnerFromAllowlist,
@@ -83,7 +87,7 @@ function resolveSignalInboundRoute(params: {
   groupId?: string;
   senderPeerId: string;
 }) {
-  return resolveAgentRoute({
+  const route = resolveAgentRoute({
     cfg: params.cfg,
     channel: "signal",
     accountId: params.accountId,
@@ -92,6 +96,24 @@ function resolveSignalInboundRoute(params: {
       id: params.isGroup ? (params.groupId ?? "unknown") : params.senderPeerId,
     },
   });
+  if (params.isGroup) {
+    return route;
+  }
+  const sessionKey = buildAgentSessionKey({
+    agentId: route.agentId,
+    channel: "signal",
+    accountId: route.accountId,
+    peer: { kind: "direct", id: params.senderPeerId },
+    dmScope: "per-channel-peer",
+  }).toLowerCase();
+  return {
+    ...route,
+    sessionKey,
+    lastRoutePolicy: deriveLastRoutePolicy({
+      sessionKey,
+      mainSessionKey: route.mainSessionKey,
+    }),
+  };
 }
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {

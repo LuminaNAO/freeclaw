@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
 ## 2026.3.13
 
 ### Changes

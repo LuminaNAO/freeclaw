@@ -113,6 +113,41 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(context.OriginatingTo).toBe("+15550002222");
   });
 
+  it("isolates direct Signal DMs into sender-specific sessions", async () => {
+    const senderUuid = "123e4567-e89b-12d3-a456-426614174000";
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        accountUuid: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+        blockStreaming: false,
+        historyLimit: 0,
+        groupHistories: new Map(),
+        sendReadReceipts: true,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: null,
+        sourceUuid: senderUuid,
+        sourceName: "Alice",
+        timestamp: 1700000000002,
+        dataMessage: {
+          message: "hello",
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    const context = capture.ctx!;
+    expect(context.ChatType).toBe("direct");
+    expect(context.SessionKey).toBe(`agent:main:signal:direct:uuid:${senderUuid}`);
+  });
+
   it("sends typing + read receipt for allowed DMs", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({

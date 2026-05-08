@@ -56,7 +56,7 @@ Field reference:
 
 - Signal channel via `signal-cli` (not embedded libsignal).
 - Deterministic routing: replies always go back to Signal.
-- DMs share the agent's main session; groups are isolated (`agent:<agentId>:signal:group:<groupId>`).
+- DMs use sender-scoped sessions; groups are isolated (`agent:<agentId>:signal:group:<groupId>`).
 
 ## Config writes
 
@@ -178,6 +178,8 @@ If you want to manage `signal-cli` yourself (slow JVM cold starts, container ini
 ```
 
 This skips auto-spawn and the startup wait inside OpenClaw. For slow starts when auto-spawning, set `channels.signal.startupTimeoutMs`.
+When OpenClaw auto-starts a local HTTP daemon, it picks a free loopback port and writes it back to config instead of reusing `8080`.
+TODO: add UNIX socket transport support for hosts where shared loopback ports are still a concern.
 
 ## Access control (DMs + groups)
 
@@ -303,7 +305,7 @@ Provider options:
 - `channels.signal.account`: E.164 for the bot account.
 - `channels.signal.cliPath`: path to `signal-cli`.
 - `channels.signal.httpUrl`: full daemon URL (overrides host/port).
-- `channels.signal.httpHost`, `channels.signal.httpPort`: daemon bind (default 127.0.0.1:8080).
+- `channels.signal.httpHost`, `channels.signal.httpPort`: daemon bind. Local auto-start picks and saves a free loopback port instead of using `8080`.
 - `channels.signal.autoStart`: auto-spawn daemon (default true if `httpUrl` unset).
 - `channels.signal.startupTimeoutMs`: startup wait timeout in ms (cap 120000).
 - `channels.signal.receiveMode`: `on-start | manual`.
