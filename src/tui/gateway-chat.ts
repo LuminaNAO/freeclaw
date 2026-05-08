@@ -17,6 +17,7 @@ import {
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
@@ -46,6 +47,7 @@ type ResolvedGatewayConnection = {
   url: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
 };
 
 function trimToUndefined(value: unknown): string | undefined {
@@ -152,6 +154,7 @@ export class GatewayChatClient {
       url: connection.url,
       token: connection.token,
       password: connection.password,
+      tlsFingerprint: connection.tlsFingerprint,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
@@ -179,6 +182,9 @@ export class GatewayChatClient {
           this.resolveReady = resolve;
         });
         this.onDisconnected?.(reason);
+      },
+      onConnectError: (err) => {
+        this.onDisconnected?.(err.message);
       },
       onGap: (info) => {
         this.onGap?.(info);
@@ -291,6 +297,14 @@ export async function resolveGatewayConnection(
     config,
     ...(urlOverride ? { url: urlOverride } : {}),
   }).url;
+  const tlsRuntime =
+    config.gateway?.tls?.enabled === true &&
+    !urlOverride &&
+    !isRemoteMode &&
+    url.startsWith("wss://")
+      ? await loadGatewayTlsRuntime(config.gateway?.tls)
+      : undefined;
+  const tlsFingerprint = tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined;
 
   if (urlOverride) {
     return {
@@ -328,7 +342,7 @@ export async function resolveGatewayConnection(
           "Missing gateway auth credentials.",
       );
     }
-    return { url, token, password };
+    return { url, token, password, tlsFingerprint };
   }
 
   if (gatewayAuthMode === "none" || gatewayAuthMode === "trusted-proxy") {
@@ -336,6 +350,7 @@ export async function resolveGatewayConnection(
       url,
       token: explicitAuth.token ?? envToken,
       password: explicitAuth.password ?? envPassword,
+      tlsFingerprint,
     };
   }
 
@@ -368,6 +383,7 @@ export async function resolveGatewayConnection(
       url,
       token: explicitAuth.token ?? envToken,
       password,
+      tlsFingerprint,
     };
   }
 
@@ -395,6 +411,45 @@ export async function resolveGatewayConnection(
       url,
       token,
       password: explicitAuth.password ?? envPassword,
+      tlsFingerprint,
+    };
+  }
+
+  if (gatewayAuthMode === "token-password") {
+    const localToken = explicitAuth.token
+      ? { value: explicitAuth.token }
+      : await resolveConfiguredSecretInputString({
+          value: config.gateway?.auth?.token,
+          path: "gateway.auth.token",
+          env,
+          config,
+        });
+    const localPassword =
+      explicitAuth.password || envPassword
+        ? { value: explicitAuth.password ?? envPassword }
+        : await resolveConfiguredSecretInputString({
+            value: config.gateway?.auth?.password,
+            path: "gateway.auth.password",
+            env,
+            config,
+          });
+    const token = explicitAuth.token ?? localToken.value ?? envToken;
+    const password = explicitAuth.password ?? envPassword ?? localPassword.value;
+    if (!token) {
+      throwGatewayAuthResolutionError(
+        localToken.unresolvedRefReason ?? "Missing gateway auth token.",
+      );
+    }
+    if (!password) {
+      throwGatewayAuthResolutionError(
+        localPassword.unresolvedRefReason ?? "Missing gateway auth password.",
+      );
+    }
+    return {
+      url,
+      token,
+      password,
+      tlsFingerprint,
     };
   }
 
@@ -421,6 +476,7 @@ export async function resolveGatewayConnection(
       url,
       token: explicitAuth.token ?? envToken,
       password,
+      tlsFingerprint,
     };
   }
 
@@ -429,5 +485,6 @@ export async function resolveGatewayConnection(
     url,
     token,
     password: explicitAuth.password ?? envPassword,
+    tlsFingerprint,
   };
 }

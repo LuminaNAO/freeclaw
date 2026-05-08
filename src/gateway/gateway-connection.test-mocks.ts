@@ -6,6 +6,8 @@ export const loadConfigMock: TestMock = vi.fn();
 export const resolveGatewayPortMock: TestMock = vi.fn();
 export const pickPrimaryTailnetIPv4Mock: TestMock = vi.fn();
 export const pickPrimaryLanIPv4Mock: TestMock = vi.fn();
+export const readSystemdServiceExecStartMock: TestMock = vi.fn();
+export const loadGatewayTlsRuntimeMock: TestMock = vi.fn();
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -25,5 +27,21 @@ vi.mock("./net.js", async (importOriginal) => {
   return {
     ...actual,
     pickPrimaryLanIPv4: pickPrimaryLanIPv4Mock,
+  };
+});
+
+vi.mock("../daemon/systemd.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/systemd.js")>();
+  return {
+    ...actual,
+    readSystemdServiceExecStart: readSystemdServiceExecStartMock,
+  };
+});
+
+vi.mock("../infra/tls/gateway.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/tls/gateway.js")>();
+  return {
+    ...actual,
+    loadGatewayTlsRuntime: loadGatewayTlsRuntimeMock,
   };
 });

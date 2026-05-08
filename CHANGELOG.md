@@ -4,6 +4,13 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+## 1.1.0 - 2026-05-08
+
+### Changes
+
+- Gateway: enable HTTPS dashboard URLs and add token-plus-password authentication mode for LAN/VPN Control UI access.
+- Signal: support attaching to external `signal-cli` daemons and auto-spawning `signalcli-archive-raw` via archiveRaw config.
+
 ## 2026.3.13
 
 ### Changes
