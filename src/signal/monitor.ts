@@ -541,7 +541,14 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         });
         runtime.log?.("signal: receive triggered after SSE attached");
       } catch (err) {
-        runtime.error?.(`signal: receive failed after SSE attach: ${String(err)}`);
+        const msg = String(err);
+        // Daemon may already be receiving (auto-started after SSE attach).
+        // This is fine — just ignore it.
+        if (msg.includes("cannot be used if messages are already being received")) {
+          runtime.log?.("signal: daemon already receiving after SSE attach (ok)");
+        } else {
+          runtime.error?.(`signal: receive failed after SSE attach: ${msg}`);
+        }
       }
     }
 
