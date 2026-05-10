@@ -132,7 +132,8 @@ export async function signalCheck(
 }
 
 export async function signalReceive(opts: SignalRpcOptions): Promise<void> {
-  await signalRpcRequest<void>("receive", undefined, opts);
+  // signal-cli's "receive" RPC expects { timeout } in params.
+  await signalRpcRequest<void>("receive", { timeout: 10000 }, opts);
 }
 
 export async function streamSignalEvents(params: {
