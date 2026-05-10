@@ -131,6 +131,10 @@ export async function signalCheck(
   }
 }
 
+export async function signalReceive(opts: SignalRpcOptions): Promise<void> {
+  await signalRpcRequest<void>("receive", undefined, opts);
+}
+
 export async function streamSignalEvents(params: {
   baseUrl: string;
   account?: string;

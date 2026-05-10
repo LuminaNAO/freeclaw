@@ -21,7 +21,7 @@ import {
   spawnArchiveSupervisor,
   waitForEndpointFile,
 } from "./archive-supervisor.js";
-import { signalCheck, signalRpcRequest } from "./client.js";
+import { signalCheck, signalRpcRequest, signalReceive } from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import {
   isPreferredSignalHttpPort,
@@ -392,6 +392,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const readReceiptsViaDaemon = Boolean(autoStart && sendReadReceipts);
   const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
   let daemonHandle: SignalDaemonHandle | null = null;
+  const effectiveReceiveMode = opts.receiveMode ?? accountInfo.config.receiveMode ?? "manual";
 
   if (autoStart) {
     if (archiveRawSettings.enabled) {
@@ -449,7 +450,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         account,
         httpHost,
         httpPort,
-        receiveMode: opts.receiveMode ?? accountInfo.config.receiveMode,
+        receiveMode: effectiveReceiveMode,
         ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
         ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
         sendReadReceipts,
@@ -509,7 +510,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       buildSignalReactionSystemEventText,
     });
 
-    await runSignalSseLoop({
+    // Start SSE listener in background so it is attached before we trigger
+    // receive; this avoids events being consumed by the daemon while no
+    // subscriber is listening (e.g., after channel is re-enabled).
+    const ssePromise = runSignalSseLoop({
       baseUrl,
       account,
       abortSignal: daemonLifecycle.abortSignal,
@@ -521,6 +525,27 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         });
       },
     });
+
+    // Brief pause to let the SSE connection establish.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Now ask the daemon to start receiving events.
+    // If receiveMode is "manual" (default), this causes it to fetch any
+    // queued messages; because SSE is already attached, they flow into
+    // OpenClaw instead of being silently dropped.
+    if (daemonHandle && effectiveReceiveMode === "manual") {
+      try {
+        await signalReceive({
+          baseUrl,
+          timeoutMs: Math.min(60_000, startupTimeoutMs),
+        });
+        runtime.log?.("signal: receive triggered after SSE attached");
+      } catch (err) {
+        runtime.error?.(`signal: receive failed after SSE attach: ${String(err)}`);
+      }
+    }
+
+    await ssePromise;
     const daemonExitError = daemonLifecycle.getExitError();
     if (daemonExitError) {
       throw daemonExitError;
