@@ -4,6 +4,25 @@ packages:
   - packages/*
   - extensions/*
 
+minimumReleaseAge: 2880
+blockExoticSubdeps: false
+
+overrides:
+  openclaw: "workspace:*"
+  hono: 4.12.7
+  "@hono/node-server": 1.19.10
+  fast-xml-parser: 5.3.8
+  request: "npm:@cypress/request@3.0.10"
+  request-promise: "npm:@cypress/request-promise@5.0.0"
+  file-type: 21.3.2
+  form-data: 2.5.4
+  minimatch: 10.2.4
+  qs: 6.14.2
+  node-domexception: "npm:@nolyfill/domexception@^1.0.28"
+  "@sinclair/typebox": 0.34.48
+  tar: 7.5.11
+  tough-cookie: 4.1.3
+
 onlyBuiltDependencies:
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
@@ -15,3 +34,20 @@ onlyBuiltDependencies:
   - node-llama-cpp
   - protobufjs
   - sharp
+
+allowBuilds:
+  "@google/genai": true
+  "@matrix-org/matrix-sdk-crypto-nodejs": true
+  "@tloncorp/api": true
+  "@tloncorp/tlon-skill": true
+  "@whiskeysockets/baileys": true
+  esbuild: true
+  koffi: true
+  node-llama-cpp: true
+  protobufjs: true
+  sharp: true
+
+packageExtensions:
+  "@mariozechner/pi-coding-agent":
+    dependencies:
+      strip-ansi: ^7.2.0
