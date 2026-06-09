@@ -115,6 +115,10 @@ import {
   sanitizeToolsForGoogle,
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import {
+  createOpenClawLlamaHeadersWrapper,
+  shouldInjectOpenClawLlamaHeaders,
+} from "../llama-session-headers.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
 import {
@@ -334,7 +338,7 @@ function stripSessionsYieldArtifacts(activeSession: {
     changed = true;
   }
   if (changed) {
-    sessionManager._rewriteFile?.();
+    sessionManager["_rewriteFile"]?.();
   }
 }
 
@@ -1580,9 +1584,7 @@ export async function runEmbeddedAttempt(
         if (!runtimeCapabilities) {
           runtimeCapabilities = [];
         }
-        if (
-          !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
-        ) {
+        if (!runtimeCapabilities.some((cap) => cap.trim().toLowerCase() === "inlinebuttons")) {
           runtimeCapabilities.push("inlineButtons");
         }
       }
@@ -1958,6 +1960,27 @@ export async function runEmbeddedAttempt(
         params.thinkLevel,
         sessionAgentId,
       );
+
+      if (
+        shouldInjectOpenClawLlamaHeaders({
+          provider: params.provider,
+          model: params.model,
+        })
+      ) {
+        activeSession.agent.streamFn = createOpenClawLlamaHeadersWrapper(
+          activeSession.agent.streamFn,
+          {
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            agentId: sessionAgentId,
+            agentKind: isSubagentSessionKey(params.sessionKey ?? params.sessionId)
+              ? "subagent"
+              : "main",
+            runId: params.runId,
+            trigger: params.trigger,
+          },
+        );
+      }
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
