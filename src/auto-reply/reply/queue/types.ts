@@ -21,6 +21,8 @@ export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
 export type FollowupRun = {
   prompt: string;
+  /** Runtime-generated internal context, such as subagent completion announcements. */
+  internalEvents?: unknown[];
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;

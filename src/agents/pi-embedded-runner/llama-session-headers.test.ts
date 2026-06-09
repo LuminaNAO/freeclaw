@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildOpenClawLlamaHeaders,
   createOpenClawLlamaHeadersWrapper,
+  resolveOpenClawLlamaCachePolicy,
+  resolveOpenClawLlamaHeaderSessionId,
   shouldInjectOpenClawLlamaHeaders,
 } from "./llama-session-headers.js";
 
@@ -35,6 +37,7 @@ describe("OpenClaw llama session headers", () => {
       sessionKey: "agent:main:subagent:planner",
       agentId: "main",
       agentKind: "subagent",
+      cachePolicy: "no-hdd",
       runId: "run-1",
       trigger: "user",
     });
@@ -44,6 +47,7 @@ describe("OpenClaw llama session headers", () => {
       "X-OpenClaw-Session-Key": "agent:main:subagent:planner",
       "X-OpenClaw-Agent-Id": "main",
       "X-OpenClaw-Agent-Kind": "subagent",
+      "X-OpenClaw-Cache-Policy": "no-hdd",
       "X-OpenClaw-Run-Id": "run-1",
       "X-OpenClaw-Trigger": "user",
     });
@@ -57,6 +61,43 @@ describe("OpenClaw llama session headers", () => {
 
     expect(headers["X-OpenClaw-Session-Id"]).toBe("session 1");
     expect(headers["X-OpenClaw-Session-Key"]).toBe("key with control");
+  });
+
+  it("prefers the stable session key over internal session ids", () => {
+    expect(
+      resolveOpenClawLlamaHeaderSessionId({
+        sessionId: "9d46340b-c099-475f-ac20-16e8cbbcd194",
+        sessionKey: "cachetest-C",
+      }),
+    ).toBe("cachetest-C");
+    expect(
+      resolveOpenClawLlamaHeaderSessionId({
+        sessionId: "9d46340b-c099-475f-ac20-16e8cbbcd194",
+        sessionKey: "  ",
+      }),
+    ).toBe("agent:main:9d46340b-c099-475f-ac20-16e8cbbcd194");
+  });
+
+  it("canonicalizes raw CLI session ids to OpenClaw store keys", () => {
+    expect(
+      resolveOpenClawLlamaHeaderSessionId({
+        sessionId: "cachetest-F",
+        agentId: "main",
+      }),
+    ).toBe("agent:main:cachetest-f");
+  });
+
+  it("disables HDD cache for subagents and internal triggers", () => {
+    expect(resolveOpenClawLlamaCachePolicy({ agentKind: "subagent", trigger: "user" })).toBe(
+      "no-hdd",
+    );
+    expect(resolveOpenClawLlamaCachePolicy({ agentKind: "main", trigger: "internal" })).toBe(
+      "no-hdd",
+    );
+    expect(resolveOpenClawLlamaCachePolicy({ agentKind: "main", trigger: "heartbeat" })).toBe(
+      "no-hdd",
+    );
+    expect(resolveOpenClawLlamaCachePolicy({ agentKind: "main", trigger: "user" })).toBe("hdd");
   });
 
   it("injects headers and lets OpenClaw identity override caller headers", () => {

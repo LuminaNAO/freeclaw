@@ -117,6 +117,8 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import {
   createOpenClawLlamaHeadersWrapper,
+  resolveOpenClawLlamaCachePolicy,
+  resolveOpenClawLlamaHeaderSessionId,
   shouldInjectOpenClawLlamaHeaders,
 } from "../llama-session-headers.js";
 import { log } from "../logger.js";
@@ -1967,15 +1969,24 @@ export async function runEmbeddedAttempt(
           model: params.model,
         })
       ) {
+        const agentKind = isSubagentSessionKey(params.sessionKey ?? params.sessionId)
+          ? "subagent"
+          : "main";
         activeSession.agent.streamFn = createOpenClawLlamaHeadersWrapper(
           activeSession.agent.streamFn,
           {
-            sessionId: params.sessionId,
+            sessionId: resolveOpenClawLlamaHeaderSessionId({
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              agentId: sessionAgentId,
+            }),
             sessionKey: params.sessionKey,
             agentId: sessionAgentId,
-            agentKind: isSubagentSessionKey(params.sessionKey ?? params.sessionId)
-              ? "subagent"
-              : "main",
+            agentKind,
+            cachePolicy: resolveOpenClawLlamaCachePolicy({
+              agentKind,
+              trigger: params.trigger,
+            }),
             runId: params.runId,
             trigger: params.trigger,
           },

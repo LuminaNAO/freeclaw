@@ -1,14 +1,45 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../../routing/session-key.js";
 
 export type OpenClawLlamaHeaderInfo = {
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
   agentKind?: "main" | "subagent";
+  cachePolicy?: "hdd" | "no-hdd";
   runId?: string;
   trigger?: string;
 };
+
+export function resolveOpenClawLlamaHeaderSessionId(params: {
+  sessionId: string;
+  sessionKey?: string;
+  agentId?: string;
+}): string {
+  const sessionKey = params.sessionKey?.trim();
+  if (sessionKey) {
+    return sessionKey;
+  }
+  return toAgentStoreSessionKey({
+    agentId: params.agentId ?? DEFAULT_AGENT_ID,
+    requestKey: params.sessionId,
+  });
+}
+
+export function resolveOpenClawLlamaCachePolicy(params: {
+  agentKind?: "main" | "subagent";
+  trigger?: string;
+}): "hdd" | "no-hdd" {
+  if (params.agentKind === "subagent") {
+    return "no-hdd";
+  }
+  const trigger = params.trigger?.trim().toLowerCase();
+  if (trigger && trigger !== "user") {
+    return "no-hdd";
+  }
+  return "hdd";
+}
 
 function cleanHeaderValue(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -28,6 +59,7 @@ export function buildOpenClawLlamaHeaders(info: OpenClawLlamaHeaderInfo): Record
     ["X-OpenClaw-Session-Key", info.sessionKey],
     ["X-OpenClaw-Agent-Id", info.agentId],
     ["X-OpenClaw-Agent-Kind", info.agentKind],
+    ["X-OpenClaw-Cache-Policy", info.cachePolicy],
     ["X-OpenClaw-Run-Id", info.runId],
     ["X-OpenClaw-Trigger", info.trigger],
   ];
