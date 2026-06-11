@@ -14,6 +14,13 @@ import {
 // Keep a conservative input budget to absorb tokenizer variance and provider framing overhead.
 const CONTEXT_INPUT_HEADROOM_RATIO = 0.75;
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
+// When over budget, prune past the target by this share of the budget.
+// Freeing only the exact overage makes the very next turn prune again:
+// the divergence point then moves one tool result per turn and the
+// llama.cpp prompt cache has to re-prefill everything behind it on every
+// turn (~minutes per turn at high context on local hardware). One larger
+// pruning event instead buys many prefix-stable, cache-warm turns.
+const PRUNE_SLACK_RATIO = 0.15;
 
 export const CONTEXT_LIMIT_TRUNCATION_NOTICE = "[truncated: output exceeded context limit]";
 const CONTEXT_LIMIT_TRUNCATION_SUFFIX = `\n${CONTEXT_LIMIT_TRUNCATION_NOTICE}`;
@@ -173,10 +180,12 @@ function enforceToolResultContextBudgetInPlace(params: {
     return;
   }
 
-  // Compact oldest tool outputs first until the context is back under budget.
+  // Compact oldest tool outputs first until the context is back under budget,
+  // plus slack so the pruned shape stays stable for the following turns.
   compactExistingToolResultsInPlace({
     messages,
-    charsNeeded: currentChars - contextBudgetChars,
+    charsNeeded:
+      currentChars - contextBudgetChars + Math.floor(contextBudgetChars * PRUNE_SLACK_RATIO),
     cache: estimateCache,
   });
 }

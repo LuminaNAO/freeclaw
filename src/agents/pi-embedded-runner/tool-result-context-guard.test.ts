@@ -238,6 +238,33 @@ describe("installToolResultContextGuard", () => {
     expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 
+  it("prunes past the budget so following turns stay prefix-stable", async () => {
+    const agent: GuardedAgent = {};
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    // Budget: 1000 tokens * 4 chars * 0.75 = 3000 chars. Slightly exceed it
+    // with many small tool results; the guard must free the overage PLUS
+    // slack, not stop at the first message that clears the budget.
+    const contextForNextCall = [
+      makeUser("u".repeat(1_000)),
+      ...Array.from({ length: 12 }, (_, i) => makeToolResult(`call_${i}`, "x".repeat(200))),
+    ];
+
+    const result = await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+    expect(result).toBeDefined();
+    const totalChars = (result ?? []).reduce(
+      (sum, msg) => sum + JSON.stringify((msg as { content?: unknown }).content ?? "").length,
+      0,
+    );
+    // With exact-overage pruning this lands just under 3000; slack pruning
+    // must land clearly below budget so several turns of growth fit without
+    // re-pruning (and without re-prefilling the whole tail of the prompt).
+    expect(totalChars).toBeLessThan(2_700);
+  });
+
   it("drops oversized read-tool details payloads when compacting tool results", async () => {
     const agent = makeGuardableAgent();
 
