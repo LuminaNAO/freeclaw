@@ -63,17 +63,26 @@ describe("OpenClaw llama session headers", () => {
     expect(headers["X-OpenClaw-Session-Key"]).toBe("key with control");
   });
 
-  it("prefers the stable session key over internal session ids", () => {
+  it("keeps slot ids transcript-unique under a stable session key", () => {
     expect(
       resolveOpenClawLlamaHeaderSessionId({
         sessionId: "9d46340b-c099-475f-ac20-16e8cbbcd194",
         sessionKey: "cachetest-C",
       }),
-    ).toBe("cachetest-C");
+    ).toBe("cachetest-C:9d46340b-c099-475f-ac20-16e8cbbcd194");
     expect(
       resolveOpenClawLlamaHeaderSessionId({
         sessionId: "9d46340b-c099-475f-ac20-16e8cbbcd194",
         sessionKey: "  ",
+      }),
+    ).toBe("agent:main:9d46340b-c099-475f-ac20-16e8cbbcd194");
+  });
+
+  it("does not duplicate a session id already embedded in the key", () => {
+    expect(
+      resolveOpenClawLlamaHeaderSessionId({
+        sessionId: "9d46340b-c099-475f-ac20-16e8cbbcd194",
+        sessionKey: "agent:main:9d46340b-c099-475f-ac20-16e8cbbcd194",
       }),
     ).toBe("agent:main:9d46340b-c099-475f-ac20-16e8cbbcd194");
   });

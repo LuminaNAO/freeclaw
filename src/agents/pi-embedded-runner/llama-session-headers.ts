@@ -18,6 +18,16 @@ export function resolveOpenClawLlamaHeaderSessionId(params: {
   agentId?: string;
 }): string {
   const sessionKey = params.sessionKey?.trim();
+  const sessionId = params.sessionId?.trim();
+  // One slot per transcript: the routing session key alone is stable across
+  // session resets and shared by every explicit CLI session id (it stays
+  // "agent:main:main"), which collapses distinct transcripts into a single
+  // llama.cpp slot file that they then evict from each other. Suffix the
+  // actual session id so slots are transcript-unique while keeping the
+  // readable channel prefix.
+  if (sessionKey && sessionId && !sessionKey.includes(sessionId)) {
+    return `${sessionKey}:${sessionId}`;
+  }
   if (sessionKey) {
     return sessionKey;
   }
