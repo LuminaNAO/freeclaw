@@ -133,7 +133,7 @@ export function isRateLimitAssistantError(msg: AssistantMessage | undefined, pro
 ### Fix 3: Add Timeout Logging
 
 **Implementation:**
-Create a simple logging mechanism that writes to `/home/lumina/timeout.log`
+Create a simple logging mechanism that writes to `/var/log/openclaw/timeout.log`
 
 **Format:**
 ```
@@ -166,12 +166,12 @@ Create a simple logging mechanism that writes to `/home/lumina/timeout.log`
 
 3. **Test logging:**
    - Trigger timeout condition
-   - Verify log entries in `/home/lumina/timeout.log`
+   - Verify log entries in `/var/log/openclaw/timeout.log`
 
 ## Next Steps
 
 1. ✅ Document findings (this file)
-2. ⏳ Add minimal timeout logging to `/home/lumina/timeout.log`
+2. ⏳ Add minimal timeout logging to `/var/log/openclaw/timeout.log`
 3. ⏳ Implement Fix 1 (remove/increase timeout)
 4. ⏳ Implement Fix 2 (exclude local providers from rate-limit detection)
 5. ⏳ Test fixes with long-running inference tasks

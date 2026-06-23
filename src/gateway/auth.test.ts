@@ -283,8 +283,8 @@ describe("gateway auth", () => {
       allowTailscale: false,
     };
     const req = {
-      socket: { remoteAddress: "10.10.10.177" },
-      headers: { host: "10.10.10.103:40741" },
+      socket: { remoteAddress: "192.168.0.10" },
+      headers: { host: "192.168.0.1:40741" },
     } as never;
 
     await expect(
