@@ -294,7 +294,7 @@ jobs:
           submodules: false
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.12"
 
@@ -332,7 +332,7 @@ jobs:
 
       - name: Setup Python
         id: setup-python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.12"
           cache: "pip"
@@ -342,7 +342,7 @@ jobs:
             .github/workflows/ci.yml
 
       - name: Restore pre-commit cache
-        uses: actions/cache@v5
+        uses: actions/cache@v5.0.5
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
@@ -547,7 +547,7 @@ jobs:
           swiftformat --lint apps/macos/Sources --config .swiftformat
 
       - name: Cache SwiftPM
-        uses: actions/cache@v5
+        uses: actions/cache@v5.0.5
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
