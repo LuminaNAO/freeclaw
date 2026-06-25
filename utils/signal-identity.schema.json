@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw-helpers/signal-identity.schema.json",
+  "title": "Signal Identity Dump",
+  "description": "Output shape of signal-identity-dump.sh. The same shape is written to current.json (latest) and <YYYYMMDD-HHMMSS>.json (archives). additionalProperties is permitted at every level because signal-cli is upstream and may add fields between releases.",
+  "type": "object",
+  "required": ["self", "contacts", "contacts_count", "groups", "groups_count", "generated_at"],
+  "properties": {
+    "self": {
+      "description": "Local Signal account identity. Base fields come from accounts.json; contact_record (when present) is the matching entry from listContacts, since signal-cli stores own profile there.",
+      "type": "object",
+      "required": ["number", "uuid", "environment", "path"],
+      "properties": {
+        "number": { "type": "string", "description": "E.164 phone number, e.g. +6283167492405" },
+        "uuid": { "type": "string", "format": "uuid" },
+        "environment": {
+          "type": "string",
+          "description": "signal-cli service environment, e.g. \"production\""
+        },
+        "path": {
+          "type": "string",
+          "description": "Path to this account's data dir under signal-cli storage"
+        },
+        "contact_record": {
+          "description": "Self entry from listContacts — present when a contact with uuid==self.uuid exists. Has the full Contact shape (see $defs.Contact).",
+          "oneOf": [{ "$ref": "#/$defs/Contact" }, { "type": "null" }]
+        }
+      }
+    },
+
+    "contacts": {
+      "type": "array",
+      "description": "All contacts known to the local account, including self.",
+      "items": { "$ref": "#/$defs/Contact" }
+    },
+    "contacts_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Length of contacts. Mirrored at the top level for convenience."
+    },
+
+    "groups": {
+      "type": "array",
+      "description": "All groups the local account is a member of (or has been a member of and not removed).",
+      "items": { "$ref": "#/$defs/Group" }
+    },
+    "groups_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Length of groups."
+    },
+
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp from `now | todateiso8601` at dump time (UTC)."
+    }
+  },
+
+  "$defs": {
+    "Contact": {
+      "type": "object",
+      "description": "One entry from `signal-cli listContacts`. Most string fields are nullable because signal-cli emits explicit nulls for unset values.",
+      "required": ["uuid"],
+      "properties": {
+        "uuid": { "type": "string", "format": "uuid" },
+        "number": {
+          "type": ["string", "null"],
+          "description": "E.164 number; null for contacts known only by UUID/username."
+        },
+        "username": { "type": ["string", "null"] },
+        "name": {
+          "type": ["string", "null"],
+          "description": "Display name as seen by us (may include profile or saved name)."
+        },
+        "givenName": { "type": ["string", "null"] },
+        "familyName": { "type": ["string", "null"] },
+        "nickName": { "type": ["string", "null"] },
+        "nickGivenName": { "type": ["string", "null"] },
+        "nickFamilyName": { "type": ["string", "null"] },
+        "note": { "type": ["string", "null"] },
+        "color": { "type": ["string", "null"] },
+        "isArchived": { "type": "boolean" },
+        "isBlocked": { "type": "boolean" },
+        "isHidden": { "type": "boolean" },
+        "profileSharing": { "type": "boolean" },
+        "unregistered": { "type": "boolean" },
+        "messageExpirationTime": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-contact disappearing-message expiry in seconds (0 = disabled)."
+        },
+        "profile": {
+          "oneOf": [{ "$ref": "#/$defs/Profile" }, { "type": "null" }],
+          "description": "Decrypted profile data, when we have permission to fetch it."
+        }
+      }
+    },
+
+    "Profile": {
+      "type": "object",
+      "description": "Signal profile sub-object on a Contact. Fields populated by upstream profile fetch.",
+      "properties": {
+        "givenName": { "type": ["string", "null"] },
+        "familyName": { "type": ["string", "null"] },
+        "about": { "type": ["string", "null"] },
+        "aboutEmoji": { "type": ["string", "null"] },
+        "hasAvatar": { "type": "boolean" },
+        "mobileCoinAddress": { "type": ["string", "null"] },
+        "lastUpdateTimestamp": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Epoch milliseconds when signal-cli last refreshed this profile."
+        }
+      }
+    },
+
+    "Group": {
+      "type": "object",
+      "description": "A Signal group as projected by signal-identity-dump.sh (renamed from signal-cli's raw shape; see the jq filter in the dumper).",
+      "required": ["id", "name", "active", "member_count", "members"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Base64-encoded group master key (the same id used by openclaw.json's channels.signal.groups map)."
+        },
+        "name": { "type": ["string", "null"] },
+        "description": { "type": ["string", "null"] },
+        "active": {
+          "type": "boolean",
+          "description": "Whether we are still a member of the group (sourced from isMember || active in the raw signal-cli output)."
+        },
+        "blocked": {
+          "type": ["boolean", "null"],
+          "description": "Group-level block state. Null when signal-cli didn't supply it."
+        },
+        "message_expiration_seconds": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Group-wide disappearing-message expiry."
+        },
+        "group_invite_link": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "description": "https://signal.group/... invite link, when one is set."
+        },
+        "member_count": { "type": "integer", "minimum": 0 },
+        "members": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/GroupMember" }
+        },
+        "pending_members": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/GroupMember" },
+          "description": "Invited but not yet joined."
+        },
+        "requesting_members": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/GroupMember" },
+          "description": "Awaiting admin approval (only present in admin-approval groups)."
+        },
+        "banned_members": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/GroupMember" }
+        }
+      }
+    },
+
+    "GroupMember": {
+      "type": "object",
+      "description": "One member entry inside a Group.members / pending_members / etc. array.",
+      "required": ["uuid"],
+      "properties": {
+        "uuid": { "type": "string", "format": "uuid" },
+        "number": {
+          "type": ["string", "null"],
+          "description": "E.164 number when known; null for UUID-only members."
+        },
+        "isAdmin": { "type": "boolean" }
+      }
+    }
+  }
+}
