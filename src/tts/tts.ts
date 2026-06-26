@@ -40,6 +40,7 @@ import {
   resolveOpenAITtsInstructions,
   openaiTTS,
   parseTtsDirectives,
+  qwen3TTS,
   scheduleCleanup,
   summarizeText,
 } from "./tts-core.js";
@@ -132,6 +133,16 @@ export type ResolvedTtsConfig = {
     volume?: string;
     saveSubtitles: boolean;
     proxy?: string;
+    timeoutMs?: number;
+  };
+  qwen3: {
+    enabled: boolean;
+    model: string;
+    instruct: string;
+    language: string;
+    device: string;
+    maxNewTokens: number;
+    scriptPath?: string;
     timeoutMs?: number;
   };
   prefsPath?: string;
@@ -322,6 +333,18 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    qwen3: {
+      enabled: raw.qwen3?.enabled ?? false,
+      model: raw.qwen3?.model?.trim() || "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+      instruct:
+        raw.qwen3?.instruct?.trim() ||
+        "A beautiful, elegant female voice with warmth and sensuality. Rich timbre, smooth delivery, intimate and sultry but refined. Slightly lower register with a velvety texture.",
+      language: raw.qwen3?.language?.trim() || "English",
+      device: raw.qwen3?.device?.trim() || "cuda:0",
+      maxNewTokens: raw.qwen3?.maxNewTokens ?? 2048,
+      scriptPath: raw.qwen3?.scriptPath?.trim() || process.env.QWEN3_TTS_SCRIPT?.trim() || undefined,
+      timeoutMs: raw.qwen3?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -531,7 +554,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "qwen3"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -682,6 +705,51 @@ export async function textToSpeech(params: {
           outputFormat: edgeResult.outputFormat,
           voiceCompatible,
         };
+      }
+
+      // Qwen3-TTS: fully local, no API key needed
+      if (provider === "qwen3") {
+        if (!config.qwen3.enabled) {
+          errors.push("qwen3: disabled");
+          continue;
+        }
+        const qwen3ScriptPath = config.qwen3.scriptPath;
+        if (!qwen3ScriptPath) {
+          errors.push("qwen3: scriptPath not configured");
+          continue;
+        }
+
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}.wav`);
+
+        try {
+          await qwen3TTS({
+            text: params.text,
+            outputPath: audioPath,
+            config: config.qwen3,
+            timeoutMs: config.qwen3.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          });
+          scheduleCleanup(tempDir);
+          const voiceCompatible = isVoiceCompatibleAudio({ fileName: audioPath });
+
+          return {
+            success: true,
+            audioPath,
+            latencyMs: Date.now() - providerStart,
+            provider,
+            outputFormat: "wav",
+            voiceCompatible,
+          };
+        } catch (err) {
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
+          throw err;
+        }
       }
 
       const apiKey = resolveTtsApiKey(config, provider);
