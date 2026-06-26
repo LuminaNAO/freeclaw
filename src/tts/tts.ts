@@ -311,7 +311,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       instructions: raw.openai?.instructions?.trim() || undefined,
     },
     edge: {
-      enabled: raw.edge?.enabled ?? true,
+      enabled: raw.edge?.enabled ?? false,
       voice: raw.edge?.voice?.trim() || DEFAULT_EDGE_VOICE,
       lang: raw.edge?.lang?.trim() || DEFAULT_EDGE_LANG,
       outputFormat: edgeOutputFormat || DEFAULT_EDGE_OUTPUT_FORMAT,
