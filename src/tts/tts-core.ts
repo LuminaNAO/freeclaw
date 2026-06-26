@@ -1,5 +1,5 @@
-import { rmSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
@@ -157,7 +157,12 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge" || rawValue === "qwen3") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "edge" ||
+              rawValue === "qwen3"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -733,16 +738,25 @@ export async function qwen3TTS(params: {
 
   return new Promise<void>((resolve, reject) => {
     const args = [
-      "--text", text,
-      "--output", outputPath,
-      "--instruct", config.instruct ?? "",
-      "--language", config.language ?? "English",
-      "--device", config.device ?? "cuda:0",
-      "--model", config.model ?? "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-      "--max-new-tokens", String(config.maxNewTokens ?? 2048),
+      "--text",
+      text,
+      "--output",
+      outputPath,
+      "--instruct",
+      config.instruct ?? "",
+      "--language",
+      config.language ?? "English",
+      "--device",
+      config.device ?? "cuda:0",
+      "--model",
+      config.model ?? "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+      "--max-new-tokens",
+      String(config.maxNewTokens ?? 2048),
     ];
 
-    const child = spawn("python3", args, {
+    const pythonPath =
+      process.env.QWEN3_TTS_PYTHON?.trim() || process.env.PYTHON?.trim() || "python3";
+    const child = spawn(pythonPath, [scriptPath, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -756,15 +770,24 @@ export async function qwen3TTS(params: {
       stderr += chunk.toString();
     });
 
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill();
       reject(new Error(`Qwen3-TTS timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      if (timedOut) {
+        return;
+      }
       if (code !== 0) {
         reject(new Error(`Qwen3-TTS failed (exit ${code}): ${stderr.trim().slice(-500)}`));
+      } else if (!existsSync(outputPath)) {
+        reject(new Error(`Qwen3-TTS did not create output file: ${outputPath}`));
+      } else if (statSync(outputPath).size <= 0) {
+        reject(new Error(`Qwen3-TTS created an empty output file: ${outputPath}`));
       } else {
         resolve();
       }

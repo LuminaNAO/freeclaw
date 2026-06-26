@@ -94,6 +94,8 @@ export type TtsConfig = {
     device?: string;
     /** Max tokens for generation. */
     maxNewTokens?: number;
+    /** Local Python entrypoint for Qwen3-TTS generation. */
+    scriptPath?: string;
     /** API request timeout (ms). */
     timeoutMs?: number;
   };
