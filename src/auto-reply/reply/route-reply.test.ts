@@ -358,6 +358,24 @@ describe("routeReply", () => {
     );
   });
 
+  it("routes Signal TTS audio as a media attachment", async () => {
+    mocks.sendMessageSignal.mockClear();
+    await routeReply({
+      payload: { mediaUrl: "/tmp/openclaw-qwen-note.mp3" },
+      channel: "signal",
+      to: "signal:+15551234567",
+      cfg: {} as never,
+    });
+    expect(mocks.sendMessageSignal).toHaveBeenCalledWith(
+      "signal:+15551234567",
+      "",
+      expect.objectContaining({
+        mediaUrl: "/tmp/openclaw-qwen-note.mp3",
+      }),
+    );
+    expect(mocks.sendMessageSignal.mock.calls[0]?.[2]).not.toHaveProperty("asVoice");
+  });
+
   it("routes WhatsApp via outbound sender (accountId honored)", async () => {
     mocks.sendMessageWhatsApp.mockClear();
     await routeReply({

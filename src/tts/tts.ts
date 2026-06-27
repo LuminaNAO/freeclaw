@@ -599,6 +599,30 @@ async function convertWavToVoiceCompatibleAudio(params: {
   );
 }
 
+async function convertWavToDefaultAudio(params: {
+  inputPath: string;
+  outputPath: string;
+  timeoutMs: number;
+}): Promise<void> {
+  await runFfmpeg(
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      params.inputPath,
+      "-vn",
+      "-c:a",
+      "libmp3lame",
+      "-b:a",
+      "128k",
+      params.outputPath,
+    ],
+    { timeoutMs: Math.max(1000, Math.min(params.timeoutMs, 120_000)) },
+  );
+}
+
 function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
   const error = err instanceof Error ? err : new Error(String(err));
   if (error.name === "AbortError") {
@@ -757,13 +781,14 @@ export async function textToSpeech(params: {
         const wavPath = path.join(tempDir, `voice-${Date.now()}.wav`);
         let audioPath = wavPath;
         let outputFormat = "wav";
+        const qwenTimeoutMs = config.qwen3.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
         try {
           await qwen3TTS({
             text: params.text,
             outputPath: wavPath,
             config: config.qwen3,
-            timeoutMs: config.qwen3.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+            timeoutMs: qwenTimeoutMs,
           });
 
           if (output.voiceCompatible) {
@@ -771,14 +796,22 @@ export async function textToSpeech(params: {
             await convertWavToVoiceCompatibleAudio({
               inputPath: wavPath,
               outputPath: opusPath,
-              timeoutMs: config.qwen3.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+              timeoutMs: qwenTimeoutMs,
             });
             audioPath = opusPath;
             outputFormat = "opus";
+          } else {
+            const mp3Path = path.join(tempDir, `voice-${Date.now()}.mp3`);
+            await convertWavToDefaultAudio({
+              inputPath: wavPath,
+              outputPath: mp3Path,
+              timeoutMs: qwenTimeoutMs,
+            });
+            audioPath = mp3Path;
+            outputFormat = "mp3";
           }
 
           scheduleCleanup(tempDir);
-          const voiceCompatible = isVoiceCompatibleAudio({ fileName: audioPath });
 
           return {
             success: true,
@@ -786,7 +819,7 @@ export async function textToSpeech(params: {
             latencyMs: Date.now() - providerStart,
             provider,
             outputFormat,
-            voiceCompatible,
+            voiceCompatible: output.voiceCompatible,
           };
         } catch (err) {
           try {

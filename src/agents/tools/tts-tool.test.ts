@@ -49,4 +49,31 @@ describe("createTtsTool", () => {
       provider: "qwen3",
     });
   });
+
+  it("returns plain media markup for Signal audio attachments", async () => {
+    vi.mocked(textToSpeech).mockResolvedValueOnce({
+      success: true,
+      audioPath: "/tmp/openclaw-qwen-note.mp3",
+      provider: "qwen3",
+      latencyMs: 12,
+      outputFormat: "mp3",
+      voiceCompatible: false,
+    });
+
+    const tool = createTtsTool({ agentChannel: "signal" });
+    const result = await tool.execute("call-1", { text: "Make a Signal voice note" });
+
+    expect(textToSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Make a Signal voice note",
+        channel: "signal",
+      }),
+    );
+    expect(result.content[0]?.type).toBe("text");
+    expect(result.content[0]?.text).toBe("MEDIA:/tmp/openclaw-qwen-note.mp3");
+    expect(result.details).toEqual({
+      audioPath: "/tmp/openclaw-qwen-note.mp3",
+      provider: "qwen3",
+    });
+  });
 });

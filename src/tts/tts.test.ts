@@ -798,6 +798,42 @@ sys.exit(7)
         rmSync(fixture.root, { recursive: true, force: true });
       }
     });
+
+    it("converts signal output to a normal MP3 attachment, not a voice-bubble marker", async () => {
+      const fixture = createQwenFixture("");
+      writeFileSync(fixture.scriptPath, createSuccessfulQwenScript(fixture.argvPath), "utf8");
+      try {
+        await withEnvAsync(
+          {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+          },
+          async () => {
+            const result = await tts.textToSpeech({
+              text: "Make this a Signal voice note",
+              cfg: createQwenCfg(fixture),
+              channel: "signal",
+            });
+
+            expect(result.success).toBe(true);
+            if (!result.success) {
+              throw new Error(result.error);
+            }
+            expect(result.provider).toBe("qwen3");
+            expect(result.audioPath).toMatch(/\.mp3$/);
+            expect(result.outputFormat).toBe("mp3");
+            expect(result.voiceCompatible).toBe(false);
+            expect(runFfmpeg).toHaveBeenCalledWith(
+              expect.arrayContaining(["-c:a", "libmp3lame", result.audioPath]),
+              expect.objectContaining({ timeoutMs: 5000 }),
+            );
+          },
+        );
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("maybeApplyTtsToPayload", () => {
