@@ -1,10 +1,14 @@
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { withEnv } from "../test-utils/env.js";
+import { runFfmpeg } from "../media/ffmpeg-exec.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
@@ -50,6 +54,22 @@ vi.mock("../agents/model-auth.js", () => ({
 vi.mock("../agents/custom-api-registry.js", () => ({
   ensureCustomApiRegistered: vi.fn(),
 }));
+
+vi.mock("../media/ffmpeg-exec.js", async () => {
+  const fs = await import("node:fs");
+  return {
+    runFfmpeg: vi.fn(async (args: string[]) => {
+      const inputIndex = args.indexOf("-i");
+      const inputPath = inputIndex >= 0 ? args[inputIndex + 1] : undefined;
+      const outputPath = args.at(-1);
+      if (!inputPath || !outputPath) {
+        throw new Error("invalid ffmpeg args");
+      }
+      fs.copyFileSync(inputPath, outputPath);
+      return "";
+    }),
+  };
+});
 
 const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
 
@@ -105,6 +125,68 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
       },
     },
   };
+}
+
+function createQwenFixture(scriptBody: string): {
+  root: string;
+  scriptPath: string;
+  prefsPath: string;
+  argvPath: string;
+} {
+  const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-qwen3-tts-"));
+  const scriptPath = path.join(root, "fake_qwen.py");
+  const argvPath = path.join(root, "argv.json");
+  writeFileSync(scriptPath, scriptBody, "utf8");
+  chmodSync(scriptPath, 0o755);
+  return {
+    root,
+    scriptPath,
+    prefsPath: path.join(root, "prefs.json"),
+    argvPath,
+  };
+}
+
+function createQwenCfg(fixture: { scriptPath: string; prefsPath: string }): OpenClawConfig {
+  return {
+    agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+    messages: {
+      tts: {
+        provider: "qwen3",
+        prefsPath: fixture.prefsPath,
+        qwen3: {
+          enabled: true,
+          scriptPath: fixture.scriptPath,
+          timeoutMs: 5000,
+          model: "local-qwen-test",
+          instruct: "test voice",
+          language: "English",
+          device: "cpu",
+          maxNewTokens: 32,
+        },
+      },
+    },
+  };
+}
+
+function createSuccessfulQwenScript(argvPath: string): string {
+  return `#!/usr/bin/env python3
+import argparse
+import json
+import pathlib
+import sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--text", required=True)
+parser.add_argument("--output", required=True)
+parser.add_argument("--instruct", required=True)
+parser.add_argument("--language", required=True)
+parser.add_argument("--device", required=True)
+parser.add_argument("--model", required=True)
+parser.add_argument("--max-new-tokens", required=True)
+args = parser.parse_args()
+pathlib.Path(${JSON.stringify(argvPath)}).write_text(json.dumps(sys.argv[1:]))
+pathlib.Path(args.output).write_bytes(b"fake wav bytes")
+`;
 }
 
 describe("tts", () => {
@@ -636,6 +718,124 @@ describe("tts", () => {
     });
   });
 
+  describe("textToSpeech – qwen3", () => {
+    it("runs the configured local script and converts Telegram output to voice-compatible Opus", async () => {
+      const fixture = createQwenFixture("");
+      writeFileSync(fixture.scriptPath, createSuccessfulQwenScript(fixture.argvPath), "utf8");
+      try {
+        await withEnvAsync(
+          {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+          },
+          async () => {
+            const result = await tts.textToSpeech({
+              text: "Make this a voice note",
+              cfg: createQwenCfg(fixture),
+              channel: "telegram",
+            });
+
+            expect(result.success).toBe(true);
+            if (!result.success) {
+              throw new Error(result.error);
+            }
+            expect(result.provider).toBe("qwen3");
+            expect(result.audioPath).toMatch(/\.opus$/);
+            expect(result.outputFormat).toBe("opus");
+            expect(result.voiceCompatible).toBe(true);
+            expect(runFfmpeg).toHaveBeenCalledWith(
+              expect.arrayContaining(["-c:a", "libopus", result.audioPath]),
+              expect.objectContaining({ timeoutMs: 5000 }),
+            );
+
+            const argv = JSON.parse(readFileSync(fixture.argvPath, "utf8")) as string[];
+            expect(argv).toEqual(
+              expect.arrayContaining([
+                "--text",
+                "Make this a voice note",
+                "--output",
+                expect.stringMatching(/\.wav$/),
+                "--model",
+                "local-qwen-test",
+              ]),
+            );
+          },
+        );
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it("returns a normal TTS failure when the local script exits nonzero", async () => {
+      const fixture = createQwenFixture(`#!/usr/bin/env python3
+import sys
+print("local qwen failure", file=sys.stderr)
+sys.exit(7)
+`);
+      try {
+        const result = await withEnvAsync(
+          {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+          },
+          () =>
+            tts.textToSpeech({
+              text: "Make this a voice note",
+              cfg: createQwenCfg(fixture),
+              channel: "telegram",
+            }),
+        );
+
+        expect(result.success).toBe(false);
+        if (result.success) {
+          throw new Error("expected qwen3 failure");
+        }
+        expect(result.error).toContain("qwen3: Qwen3-TTS failed (exit 7)");
+        expect(result.error).toContain("edge: disabled");
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it("converts signal output to a normal MP3 attachment, not a voice-bubble marker", async () => {
+      const fixture = createQwenFixture("");
+      writeFileSync(fixture.scriptPath, createSuccessfulQwenScript(fixture.argvPath), "utf8");
+      try {
+        await withEnvAsync(
+          {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+          },
+          async () => {
+            const result = await tts.textToSpeech({
+              text: "Make this a Signal voice note",
+              cfg: createQwenCfg(fixture),
+              channel: "signal",
+            });
+
+            expect(result.success).toBe(true);
+            if (!result.success) {
+              throw new Error(result.error);
+            }
+            expect(result.provider).toBe("qwen3");
+            expect(result.audioPath).toMatch(/\.mp3$/);
+            expect(result.outputFormat).toBe("mp3");
+            expect(result.voiceCompatible).toBe(false);
+            expect(runFfmpeg).toHaveBeenCalledWith(
+              expect.arrayContaining(["-c:a", "libmp3lame", result.audioPath]),
+              expect.objectContaining({ timeoutMs: 5000 }),
+            );
+          },
+        );
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("maybeApplyTtsToPayload", () => {
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
@@ -743,6 +943,42 @@ describe("tts", () => {
         expect(result.mediaUrl).toBeDefined();
         expect(fetchMock).toHaveBeenCalledTimes(1);
       });
+    });
+
+    it("marks qwen3 Telegram auto-TTS output as a voice note", async () => {
+      const fixture = createQwenFixture("");
+      writeFileSync(fixture.scriptPath, createSuccessfulQwenScript(fixture.argvPath), "utf8");
+      try {
+        const baseQwenCfg = createQwenCfg(fixture);
+        const cfg: OpenClawConfig = {
+          ...baseQwenCfg,
+          messages: {
+            tts: {
+              ...baseQwenCfg.messages!.tts!,
+              auto: "always",
+            },
+          },
+        };
+        const result = await withEnvAsync(
+          {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+          },
+          () =>
+            maybeApplyTtsToPayload({
+              payload: { text: "Please send this as a voice note." },
+              cfg,
+              kind: "final",
+              channel: "telegram",
+            }),
+        );
+
+        expect(result.mediaUrl).toMatch(/\.opus$/);
+        expect(result.audioAsVoice).toBe(true);
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
     });
   });
 });

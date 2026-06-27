@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "qwen3";
 
 export type TtsMode = "final" | "all";
 
@@ -78,6 +78,25 @@ export type TtsConfig = {
     volume?: string;
     saveSubtitles?: boolean;
     proxy?: string;
+    timeoutMs?: number;
+  };
+  /** Qwen3-TTS local configuration (fully on-device, no API key). */
+  qwen3?: {
+    /** Enable Qwen3-TTS local inference. */
+    enabled?: boolean;
+    /** HuggingFace model ID or local path for the VoiceDesign model. */
+    model?: string;
+    /** Natural language voice instruction for voice design. */
+    instruct?: string;
+    /** Output language. */
+    language?: string;
+    /** Device to run on (e.g. "cuda:0"). */
+    device?: string;
+    /** Max tokens for generation. */
+    maxNewTokens?: number;
+    /** Local Python entrypoint for Qwen3-TTS generation. */
+    scriptPath?: string;
+    /** API request timeout (ms). */
     timeoutMs?: number;
   };
   /** Optional path for local TTS user preferences JSON. */

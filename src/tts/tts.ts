@@ -11,8 +11,8 @@ import {
 } from "node:fs";
 import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import { normalizeChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import type {
@@ -26,6 +26,7 @@ import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
@@ -40,6 +41,7 @@ import {
   resolveOpenAITtsInstructions,
   openaiTTS,
   parseTtsDirectives,
+  qwen3TTS,
   scheduleCleanup,
   summarizeText,
 } from "./tts-core.js";
@@ -132,6 +134,16 @@ export type ResolvedTtsConfig = {
     volume?: string;
     saveSubtitles: boolean;
     proxy?: string;
+    timeoutMs?: number;
+  };
+  qwen3: {
+    enabled: boolean;
+    model: string;
+    instruct: string;
+    language: string;
+    device: string;
+    maxNewTokens: number;
+    scriptPath?: string;
     timeoutMs?: number;
   };
   prefsPath?: string;
@@ -322,6 +334,19 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    qwen3: {
+      enabled: raw.qwen3?.enabled ?? false,
+      model: raw.qwen3?.model?.trim() || "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+      instruct:
+        raw.qwen3?.instruct?.trim() ||
+        "A beautiful, elegant female voice with warmth and sensuality. Rich timbre, smooth delivery, intimate and sultry but refined. Slightly lower register with a velvety texture.",
+      language: raw.qwen3?.language?.trim() || "English",
+      device: raw.qwen3?.device?.trim() || "cuda:0",
+      maxNewTokens: raw.qwen3?.maxNewTokens ?? 2048,
+      scriptPath:
+        raw.qwen3?.scriptPath?.trim() || process.env.QWEN3_TTS_SCRIPT?.trim() || undefined,
+      timeoutMs: raw.qwen3?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -531,7 +556,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "qwen3"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -542,6 +567,60 @@ export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: Tts
     return config.edge.enabled;
   }
   return Boolean(resolveTtsApiKey(config, provider));
+}
+
+async function convertWavToVoiceCompatibleAudio(params: {
+  inputPath: string;
+  outputPath: string;
+  timeoutMs: number;
+}): Promise<void> {
+  await runFfmpeg(
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      params.inputPath,
+      "-vn",
+      "-ac",
+      "1",
+      "-ar",
+      "48000",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "64k",
+      "-vbr",
+      "on",
+      params.outputPath,
+    ],
+    { timeoutMs: Math.max(1000, Math.min(params.timeoutMs, 120_000)) },
+  );
+}
+
+async function convertWavToDefaultAudio(params: {
+  inputPath: string;
+  outputPath: string;
+  timeoutMs: number;
+}): Promise<void> {
+  await runFfmpeg(
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      params.inputPath,
+      "-vn",
+      "-c:a",
+      "libmp3lame",
+      "-b:a",
+      "128k",
+      params.outputPath,
+    ],
+    { timeoutMs: Math.max(1000, Math.min(params.timeoutMs, 120_000)) },
+  );
 }
 
 function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
@@ -682,6 +761,74 @@ export async function textToSpeech(params: {
           outputFormat: edgeResult.outputFormat,
           voiceCompatible,
         };
+      }
+
+      // Qwen3-TTS: fully local, no API key needed
+      if (provider === "qwen3") {
+        if (!config.qwen3.enabled) {
+          errors.push("qwen3: disabled");
+          continue;
+        }
+        const qwen3ScriptPath = config.qwen3.scriptPath;
+        if (!qwen3ScriptPath) {
+          errors.push("qwen3: scriptPath not configured");
+          continue;
+        }
+
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const wavPath = path.join(tempDir, `voice-${Date.now()}.wav`);
+        let audioPath = wavPath;
+        let outputFormat = "wav";
+        const qwenTimeoutMs = config.qwen3.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+        try {
+          await qwen3TTS({
+            text: params.text,
+            outputPath: wavPath,
+            config: config.qwen3,
+            timeoutMs: qwenTimeoutMs,
+          });
+
+          if (output.voiceCompatible) {
+            const opusPath = path.join(tempDir, `voice-${Date.now()}.opus`);
+            await convertWavToVoiceCompatibleAudio({
+              inputPath: wavPath,
+              outputPath: opusPath,
+              timeoutMs: qwenTimeoutMs,
+            });
+            audioPath = opusPath;
+            outputFormat = "opus";
+          } else {
+            const mp3Path = path.join(tempDir, `voice-${Date.now()}.mp3`);
+            await convertWavToDefaultAudio({
+              inputPath: wavPath,
+              outputPath: mp3Path,
+              timeoutMs: qwenTimeoutMs,
+            });
+            audioPath = mp3Path;
+            outputFormat = "mp3";
+          }
+
+          scheduleCleanup(tempDir);
+
+          return {
+            success: true,
+            audioPath,
+            latencyMs: Date.now() - providerStart,
+            provider,
+            outputFormat,
+            voiceCompatible: output.voiceCompatible,
+          };
+        } catch (err) {
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
+          throw err;
+        }
       }
 
       const apiKey = resolveTtsApiKey(config, provider);
@@ -988,6 +1135,7 @@ export async function maybeApplyTtsToPayload(params: {
   return nextPayload;
 }
 
+// oxlint-disable-next-line eslint/no-underscore-dangle
 export const _test = {
   isValidVoiceId,
   isValidOpenAIVoice,

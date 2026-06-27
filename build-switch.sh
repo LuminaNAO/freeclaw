@@ -172,6 +172,12 @@ EOF
 # ============================================================================
 
 setup_env() {
+    # Some shells can inherit a stale NVM_DIR from another account. Normalize it
+    # before sourcing nvm so installs and lookups stay inside the current home.
+    if [[ -n "${NVM_DIR:-}" && "$NVM_DIR" != "$HOME/.nvm" && "$NVM_DIR" != "$HOME"/.config/nvm ]]; then
+        export NVM_DIR="$HOME/.nvm"
+    fi
+
     # Source nvm so we can use it in this script
     if [ -f "$HOME/.nvm/nvm.sh" ]; then
         source "$HOME/.nvm/nvm.sh"
@@ -317,7 +323,10 @@ stop_gateway() {
 
 restart_gateway() {
     log "Restarting gateway ($AGENT_SERVICE_NAME)..."
-    systemctl --user daemon-reload
+    if ! systemctl --user daemon-reload 2>/dev/null; then
+        warn "systemd user bus is unavailable; installed shims and service file, skipped gateway restart."
+        return 0
+    fi
     systemctl --user restart "$AGENT_SERVICE_NAME"
     sleep 3
     if systemctl --user is-active --quiet "$AGENT_SERVICE_NAME"; then
