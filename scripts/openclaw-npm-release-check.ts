@@ -18,6 +18,8 @@ type PackageJson = {
 export type ParsedReleaseVersion = {
   version: string;
   channel: "stable" | "beta";
+  scheme: "integer" | "calver";
+  major?: number;
   year: number;
   month: number;
   day: number;
@@ -25,6 +27,10 @@ export type ParsedReleaseVersion = {
   date: Date;
 };
 
+const INTEGER_STABLE_VERSION_REGEX = /^(?<major>[1-9]\d*)\.0\.0$/;
+const INTEGER_BETA_VERSION_REGEX = /^(?<major>[1-9]\d*)\.0\.0-beta\.(?<beta>[1-9]\d*)$/;
+const INTEGER_STABLE_TAG_REGEX = /^v(?<major>[1-9]\d*)$/;
+const INTEGER_BETA_TAG_REGEX = /^v(?<major>[1-9]\d*)-beta\.(?<beta>[1-9]\d*)$/;
 const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)$/;
 const BETA_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
@@ -80,6 +86,7 @@ function parseDateParts(
   return {
     version,
     channel,
+    scheme: "calver",
     year,
     month,
     day,
@@ -88,10 +95,48 @@ function parseDateParts(
   };
 }
 
+function parseIntegerParts(
+  version: string,
+  groups: Record<string, string | undefined>,
+  channel: "stable" | "beta",
+): ParsedReleaseVersion | null {
+  const major = Number.parseInt(groups.major ?? "", 10);
+  const betaNumber = channel === "beta" ? Number.parseInt(groups.beta ?? "", 10) : undefined;
+
+  if (!Number.isInteger(major) || major < 1) {
+    return null;
+  }
+  if (channel === "beta" && (!Number.isInteger(betaNumber) || (betaNumber ?? 0) < 1)) {
+    return null;
+  }
+
+  return {
+    version,
+    channel,
+    scheme: "integer",
+    major,
+    year: 1970,
+    month: 1,
+    day: 1,
+    betaNumber,
+    date: new Date(Date.UTC(1970, 0, 1)),
+  };
+}
+
 export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
   const trimmed = version.trim();
   if (!trimmed) {
     return null;
+  }
+
+  const integerStableMatch = INTEGER_STABLE_VERSION_REGEX.exec(trimmed);
+  if (integerStableMatch?.groups) {
+    return parseIntegerParts(trimmed, integerStableMatch.groups, "stable");
+  }
+
+  const integerBetaMatch = INTEGER_BETA_VERSION_REGEX.exec(trimmed);
+  if (integerBetaMatch?.groups) {
+    return parseIntegerParts(trimmed, integerBetaMatch.groups, "beta");
   }
 
   const stableMatch = STABLE_VERSION_REGEX.exec(trimmed);
@@ -113,6 +158,33 @@ function startOfUtcDay(date: Date): number {
 
 export function utcCalendarDayDistance(left: Date, right: Date): number {
   return Math.round(Math.abs(startOfUtcDay(left) - startOfUtcDay(right)) / 86_400_000);
+}
+
+function parseReleaseTag(tag: string): ParsedReleaseVersion | null {
+  const trimmed = tag.trim();
+
+  const integerStableMatch = INTEGER_STABLE_TAG_REGEX.exec(trimmed);
+  if (integerStableMatch?.groups) {
+    return parseIntegerParts(trimmed, integerStableMatch.groups, "stable");
+  }
+
+  const integerBetaMatch = INTEGER_BETA_TAG_REGEX.exec(trimmed);
+  if (integerBetaMatch?.groups) {
+    return parseIntegerParts(trimmed, integerBetaMatch.groups, "beta");
+  }
+
+  const tagVersion = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
+  return parseReleaseVersion(tagVersion);
+}
+
+function expectedReleaseTag(packageVersion: string): string {
+  const parsedVersion = parseReleaseVersion(packageVersion);
+  if (parsedVersion?.scheme === "integer" && parsedVersion.major !== undefined) {
+    return parsedVersion.channel === "beta"
+      ? `v${parsedVersion.major}-beta.${parsedVersion.betaNumber}`
+      : `v${parsedVersion.major}`;
+  }
+  return packageVersion ? `v${packageVersion}` : "";
 }
 
 export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] {
@@ -171,7 +243,7 @@ export function collectReleaseTagErrors(params: {
   const parsedVersion = parseReleaseVersion(packageVersion);
   if (parsedVersion === null) {
     errors.push(
-      `package.json version must match YYYY.M.D or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
+      `package.json version must match N.0.0, N.0.0-beta.N, YYYY.M.D, or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
     );
   }
 
@@ -179,15 +251,14 @@ export function collectReleaseTagErrors(params: {
     errors.push(`Release tag must start with "v"; found "${releaseTag || "<missing>"}".`);
   }
 
-  const tagVersion = releaseTag.startsWith("v") ? releaseTag.slice(1) : releaseTag;
-  const parsedTag = parseReleaseVersion(tagVersion);
+  const parsedTag = parseReleaseTag(releaseTag);
   if (parsedTag === null) {
     errors.push(
-      `Release tag must match vYYYY.M.D or vYYYY.M.D-beta.N; found "${releaseTag || "<missing>"}".`,
+      `Release tag must match vN, vN-beta.N, vYYYY.M.D, or vYYYY.M.D-beta.N; found "${releaseTag || "<missing>"}".`,
     );
   }
 
-  const expectedTag = packageVersion ? `v${packageVersion}` : "";
+  const expectedTag = expectedReleaseTag(packageVersion);
   if (releaseTag !== expectedTag) {
     errors.push(
       `Release tag ${releaseTag || "<missing>"} does not match package.json version ${
@@ -196,7 +267,7 @@ export function collectReleaseTagErrors(params: {
     );
   }
 
-  if (parsedVersion !== null) {
+  if (parsedVersion?.scheme === "calver") {
     const dayDistance = utcCalendarDayDistance(parsedVersion.date, now);
     if (dayDistance > MAX_CALVER_DISTANCE_DAYS) {
       const nowLabel = now.toISOString().slice(0, 10);
@@ -248,13 +319,17 @@ function main(): number {
 
   const parsedVersion = parseReleaseVersion(pkg.version ?? "");
   const channel = parsedVersion?.channel ?? "unknown";
-  const dayDistance =
-    parsedVersion === null
-      ? "unknown"
-      : String(utcCalendarDayDistance(parsedVersion.date, new Date()));
-  console.log(
-    `openclaw-npm-release-check: validated ${channel} release ${pkg.version} (${dayDistance} day UTC delta).`,
-  );
+  if (parsedVersion?.scheme === "integer") {
+    console.log(`openclaw-npm-release-check: validated ${channel} release ${pkg.version}.`);
+  } else {
+    const dayDistance =
+      parsedVersion === null
+        ? "unknown"
+        : String(utcCalendarDayDistance(parsedVersion.date, new Date()));
+    console.log(
+      `openclaw-npm-release-check: validated ${channel} release ${pkg.version} (${dayDistance} day UTC delta).`,
+    );
+  }
   return 0;
 }
 
