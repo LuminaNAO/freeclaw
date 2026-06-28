@@ -6,7 +6,6 @@ import {
   isSummarizationEnabled,
   isTtsEnabled,
   isTtsProviderConfigured,
-  resolveTtsApiKey,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setLastTtsAttempt,
@@ -54,9 +53,6 @@ function ttsUsage(): ReplyPayload {
       `• /tts summary [on|off] — View/change auto-summary\n` +
       `• /tts audio <text> — Generate audio from text\n\n` +
       `**Providers:**\n` +
-      `• edge — Free, fast (default)\n` +
-      `• openai — High quality (requires API key)\n` +
-      `• elevenlabs — Premium voices (requires API key)\n` +
       `• qwen3 — Local Qwen3 TTS (requires script path)\n\n` +
       `**Text Limit (default: 1500, max: 4096):**\n` +
       `When text exceeds the limit:\n` +
@@ -160,9 +156,6 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "provider") {
     const currentProvider = getTtsProvider(config, prefsPath);
     if (!args.trim()) {
-      const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
-      const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
-      const hasEdge = isTtsProviderConfigured(config, "edge");
       const hasQwen3 = isTtsProviderConfigured(config, "qwen3");
       return {
         shouldContinue: false,
@@ -170,22 +163,14 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
           text:
             `🎙️ TTS provider\n` +
             `Primary: ${currentProvider}\n` +
-            `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
-            `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
-            `Edge enabled: ${hasEdge ? "✅" : "❌"}\n` +
             `Qwen3 local: ${hasQwen3 ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs | edge | qwen3`,
+            `Usage: /tts provider qwen3`,
         },
       };
     }
 
     const requested = args.trim().toLowerCase();
-    if (
-      requested !== "openai" &&
-      requested !== "elevenlabs" &&
-      requested !== "edge" &&
-      requested !== "qwen3"
-    ) {
+    if (requested !== "qwen3") {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 

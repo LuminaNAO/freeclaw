@@ -1,15 +1,11 @@
 import { loadConfig } from "../../config/config.js";
 import {
-  OPENAI_TTS_MODELS,
-  OPENAI_TTS_VOICES,
   getTtsProvider,
   isTtsEnabled,
   isTtsProviderConfigured,
   resolveTtsAutoMode,
-  resolveTtsApiKey,
   resolveTtsConfig,
   resolveTtsPrefsPath,
-  resolveTtsProviderOrder,
   setTtsEnabled,
   setTtsProvider,
   textToSpeech,
@@ -26,19 +22,14 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const prefsPath = resolveTtsPrefsPath(config);
       const provider = getTtsProvider(config, prefsPath);
       const autoMode = resolveTtsAutoMode({ config, prefsPath });
-      const fallbackProviders = resolveTtsProviderOrder(provider)
-        .slice(1)
-        .filter((candidate) => isTtsProviderConfigured(config, candidate));
       respond(true, {
         enabled: isTtsEnabled(config, prefsPath),
         auto: autoMode,
         provider,
-        fallbackProvider: fallbackProviders[0] ?? null,
-        fallbackProviders,
+        fallbackProvider: null,
+        fallbackProviders: [],
         prefsPath,
-        hasOpenAIKey: Boolean(resolveTtsApiKey(config, "openai")),
-        hasElevenLabsKey: Boolean(resolveTtsApiKey(config, "elevenlabs")),
-        edgeEnabled: isTtsProviderConfigured(config, "edge"),
+        qwen3Configured: isTtsProviderConfigured(config, "qwen3"),
       });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
@@ -100,19 +91,11 @@ export const ttsHandlers: GatewayRequestHandlers = {
   },
   "tts.setProvider": async ({ params, respond }) => {
     const provider = typeof params.provider === "string" ? params.provider.trim() : "";
-    if (
-      provider !== "openai" &&
-      provider !== "elevenlabs" &&
-      provider !== "edge" &&
-      provider !== "qwen3"
-    ) {
+    if (provider !== "qwen3") {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Invalid provider. Use openai, elevenlabs, edge, or qwen3.",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "Invalid provider. Use qwen3."),
       );
       return;
     }
@@ -133,25 +116,6 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const prefsPath = resolveTtsPrefsPath(config);
       respond(true, {
         providers: [
-          {
-            id: "openai",
-            name: "OpenAI",
-            configured: Boolean(resolveTtsApiKey(config, "openai")),
-            models: [...OPENAI_TTS_MODELS],
-            voices: [...OPENAI_TTS_VOICES],
-          },
-          {
-            id: "elevenlabs",
-            name: "ElevenLabs",
-            configured: Boolean(resolveTtsApiKey(config, "elevenlabs")),
-            models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_monolingual_v1"],
-          },
-          {
-            id: "edge",
-            name: "Edge TTS",
-            configured: isTtsProviderConfigured(config, "edge"),
-            models: [],
-          },
           {
             id: "qwen3",
             name: "Qwen3 TTS",

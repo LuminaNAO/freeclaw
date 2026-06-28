@@ -157,12 +157,7 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (
-              rawValue === "openai" ||
-              rawValue === "elevenlabs" ||
-              rawValue === "edge" ||
-              rawValue === "qwen3"
-            ) {
+            if (rawValue === "qwen3") {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);

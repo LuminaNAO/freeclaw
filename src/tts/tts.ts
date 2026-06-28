@@ -473,23 +473,20 @@ export function setTtsEnabled(prefsPath: string, enabled: boolean): void {
 
 export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): TtsProvider {
   const prefs = readPrefs(prefsPath);
-  if (prefs.tts?.provider) {
+  if (prefs.tts?.provider === "qwen3") {
     return prefs.tts.provider;
   }
-  if (config.providerSource === "config") {
+  if (config.providerSource === "config" && config.provider === "qwen3") {
     return config.provider;
   }
 
-  if (resolveTtsApiKey(config, "openai")) {
-    return "openai";
-  }
-  if (resolveTtsApiKey(config, "elevenlabs")) {
-    return "elevenlabs";
-  }
-  return "edge";
+  return "qwen3";
 }
 
 export function setTtsProvider(prefsPath: string, provider: TtsProvider): void {
+  if (provider !== "qwen3") {
+    throw new Error("Only qwen3 is supported as a TTS provider");
+  }
   updatePrefs(prefsPath, (prefs) => {
     prefs.tts = { ...prefs.tts, provider };
   });
@@ -556,20 +553,17 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "qwen3"] as const;
+export const TTS_PROVIDERS = ["qwen3"] as const;
 
-export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
-  return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
+export function resolveTtsProviderOrder(_primary: TtsProvider): TtsProvider[] {
+  return [...TTS_PROVIDERS];
 }
 
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
-  if (provider === "edge") {
-    return config.edge.enabled;
-  }
   if (provider === "qwen3") {
     return config.qwen3.enabled && Boolean(config.qwen3.scriptPath);
   }
-  return Boolean(resolveTtsApiKey(config, provider));
+  return false;
 }
 
 async function convertWavToVoiceCompatibleAudio(params: {
@@ -928,6 +922,10 @@ export async function textToSpeechTelephony(params: {
     try {
       if (provider === "edge") {
         errors.push("edge: unsupported for telephony");
+        continue;
+      }
+      if (provider === "qwen3") {
+        errors.push("qwen3: unsupported for telephony");
         continue;
       }
 

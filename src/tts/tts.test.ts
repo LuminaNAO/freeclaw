@@ -71,8 +71,14 @@ vi.mock("../media/ffmpeg-exec.js", async () => {
   };
 });
 
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider, isTtsProviderConfigured } =
-  tts;
+const {
+  _test,
+  resolveTtsConfig,
+  maybeApplyTtsToPayload,
+  getTtsProvider,
+  setTtsProvider,
+  isTtsProviderConfigured,
+} = tts;
 
 const {
   isValidVoiceId,
@@ -379,18 +385,28 @@ describe("tts", () => {
 
       expect(result.cleanedText).not.toContain("[[tts:");
       expect(result.ttsText).toBe("(laughs) Read the song once more.");
-      expect(result.overrides.provider).toBe("elevenlabs");
+      expect(result.overrides.provider).toBeUndefined();
       expect(result.overrides.elevenlabs?.voiceId).toBe("pMsXgVXv3BLzUgSXRplE");
       expect(result.overrides.elevenlabs?.voiceSettings?.stability).toBe(0.4);
       expect(result.overrides.elevenlabs?.voiceSettings?.speed).toBe(1.1);
+      expect(result.warnings).toContain('unsupported provider "elevenlabs"');
     });
 
-    it("accepts edge as provider override", () => {
+    it("accepts qwen3 as the only provider override", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:provider=qwen3]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("qwen3");
+    });
+
+    it("rejects legacy cloud provider overrides", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input = "Hello [[tts:provider=edge]] world";
       const result = parseTtsDirectives(input, policy);
 
-      expect(result.overrides.provider).toBe("edge");
+      expect(result.overrides.provider).toBeUndefined();
+      expect(result.warnings).toContain('unsupported provider "edge"');
     });
 
     it("rejects provider override by default while keeping voice overrides enabled", () => {
@@ -581,7 +597,7 @@ describe("tts", () => {
       messages: { tts: {} },
     };
 
-    it("selects provider based on available API keys", () => {
+    it("always selects qwen3 instead of legacy cloud providers", () => {
       const cases = [
         {
           env: {
@@ -590,7 +606,6 @@ describe("tts", () => {
             XI_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-openai.json",
-          expected: "openai",
         },
         {
           env: {
@@ -599,7 +614,6 @@ describe("tts", () => {
             XI_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-elevenlabs.json",
-          expected: "elevenlabs",
         },
         {
           env: {
@@ -608,7 +622,6 @@ describe("tts", () => {
             XI_API_KEY: undefined,
           },
           prefsPath: "/tmp/tts-prefs-edge.json",
-          expected: "edge",
         },
       ] as const;
 
@@ -616,9 +629,18 @@ describe("tts", () => {
         withEnv(testCase.env, () => {
           const config = resolveTtsConfig(baseCfg);
           const provider = getTtsProvider(config, testCase.prefsPath);
-          expect(provider).toBe(testCase.expected);
+          expect(provider).toBe("qwen3");
         });
       }
+    });
+  });
+
+  describe("setTtsProvider", () => {
+    it("rejects legacy providers", () => {
+      const prefsPath = path.join(os.tmpdir(), `tts-prefs-${Date.now()}.json`);
+      expect(() => setTtsProvider(prefsPath, "edge")).toThrow(
+        "Only qwen3 is supported as a TTS provider",
+      );
     });
   });
 
@@ -707,48 +729,18 @@ describe("tts", () => {
     });
   });
 
-  describe("textToSpeechTelephony – openai instructions", () => {
-    const withMockedTelephonyFetch = async (
-      run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
-    ) => {
-      const originalFetch = globalThis.fetch;
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(2),
-      }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
-      try {
-        await run(fetchMock);
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-    };
-
-    async function expectTelephonyInstructions(
-      model: "tts-1" | "gpt-4o-mini-tts",
-      expectedInstructions: string | undefined,
-    ) {
-      await withMockedTelephonyFetch(async (fetchMock) => {
-        const result = await tts.textToSpeechTelephony({
-          text: "Hello there, friendly caller.",
-          cfg: createOpenAiTelephonyCfg(model),
-        });
-
-        expect(result.success).toBe(true);
-        expect(fetchMock).toHaveBeenCalledTimes(1);
-        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-        expect(typeof init.body).toBe("string");
-        const body = JSON.parse(init.body as string) as Record<string, unknown>;
-        expect(body.instructions).toBe(expectedInstructions);
+  describe("textToSpeechTelephony", () => {
+    it("does not fall back to legacy cloud providers", async () => {
+      const result = await tts.textToSpeechTelephony({
+        text: "Hello there, friendly caller.",
+        cfg: createOpenAiTelephonyCfg("gpt-4o-mini-tts"),
       });
-    }
 
-    it("omits instructions for unsupported speech models", async () => {
-      await expectTelephonyInstructions("tts-1", undefined);
-    });
-
-    it("includes instructions for gpt-4o-mini-tts", async () => {
-      await expectTelephonyInstructions("gpt-4o-mini-tts", "Speak warmly");
+      expect(result.success).toBe(false);
+      if (result.success) {
+        throw new Error("expected telephony TTS failure");
+      }
+      expect(result.error).toContain("qwen3: unsupported for telephony");
     });
   });
 
@@ -827,7 +819,7 @@ sys.exit(7)
           throw new Error("expected qwen3 failure");
         }
         expect(result.error).toContain("qwen3: Qwen3-TTS failed (exit 7)");
-        expect(result.error).toContain("edge: disabled");
+        expect(result.error).not.toContain("edge:");
       } finally {
         rmSync(fixture.root, { recursive: true, force: true });
       }
@@ -871,42 +863,14 @@ sys.exit(7)
   });
 
   describe("maybeApplyTtsToPayload", () => {
-    const baseCfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-      messages: {
-        tts: {
-          auto: "inbound",
-          provider: "openai",
-          openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
-        },
-      },
-    };
-
-    const withMockedAutoTtsFetch = async (
-      run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
-    ) => {
+    const withTempPrefs = async (run: () => Promise<void>) => {
       const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
       process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      const originalFetch = globalThis.fetch;
-      const fetchMock = vi.fn(async () => ({
-        ok: true,
-        arrayBuffer: async () => new ArrayBuffer(1),
-      }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
       try {
-        await run(fetchMock);
+        await run();
       } finally {
-        globalThis.fetch = originalFetch;
         process.env.OPENCLAW_TTS_PREFS = prevPrefs;
       }
-    };
-
-    const taggedCfg: OpenClawConfig = {
-      ...baseCfg,
-      messages: {
-        ...baseCfg.messages!,
-        tts: { ...baseCfg.messages!.tts, auto: "tagged" },
-      },
     };
 
     it("applies inbound auto-TTS gating by audio status and cleaned text length", async () => {
@@ -915,45 +879,66 @@ sys.exit(7)
           name: "inbound gating blocks non-audio",
           payload: { text: "Hello world" },
           inboundAudio: false,
-          expectedFetchCalls: 0,
           expectSamePayload: true,
         },
         {
           name: "inbound gating blocks too-short cleaned text",
           payload: { text: "### **bold**" },
           inboundAudio: true,
-          expectedFetchCalls: 0,
           expectSamePayload: true,
         },
         {
           name: "inbound gating allows audio with real text",
           payload: { text: "Hello world" },
           inboundAudio: true,
-          expectedFetchCalls: 1,
           expectSamePayload: false,
         },
       ] as const;
 
       for (const testCase of cases) {
-        await withMockedAutoTtsFetch(async (fetchMock) => {
-          const result = await maybeApplyTtsToPayload({
-            payload: testCase.payload,
-            cfg: baseCfg,
-            kind: "final",
-            inboundAudio: testCase.inboundAudio,
+        const fixture = createQwenFixture("");
+        writeFileSync(fixture.scriptPath, createSuccessfulQwenScript(fixture.argvPath), "utf8");
+        try {
+          const baseQwenCfg = createQwenCfg(fixture);
+          const cfg: OpenClawConfig = {
+            ...baseQwenCfg,
+            messages: {
+              tts: {
+                ...baseQwenCfg.messages!.tts!,
+                auto: "inbound",
+              },
+            },
+          };
+          await withTempPrefs(async () => {
+            const result = await maybeApplyTtsToPayload({
+              payload: testCase.payload,
+              cfg,
+              kind: "final",
+              inboundAudio: testCase.inboundAudio,
+            });
+            if (testCase.expectSamePayload) {
+              expect(result, testCase.name).toBe(testCase.payload);
+            } else {
+              expect(result.mediaUrl, testCase.name).toBeDefined();
+            }
           });
-          expect(fetchMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedFetchCalls);
-          if (testCase.expectSamePayload) {
-            expect(result, testCase.name).toBe(testCase.payload);
-          } else {
-            expect(result.mediaUrl, testCase.name).toBeDefined();
-          }
-        });
+        } finally {
+          rmSync(fixture.root, { recursive: true, force: true });
+        }
       }
     });
 
     it("skips auto-TTS in tagged mode unless a tts tag is present", async () => {
-      await withMockedAutoTtsFetch(async (fetchMock) => {
+      const fixture = createQwenFixture("");
+      writeFileSync(fixture.scriptPath, createSuccessfulQwenScript(fixture.argvPath), "utf8");
+      try {
+        const baseQwenCfg = createQwenCfg(fixture);
+        const taggedCfg: OpenClawConfig = {
+          ...baseQwenCfg,
+          messages: {
+            tts: { ...baseQwenCfg.messages!.tts!, auto: "tagged" },
+          },
+        };
         const payload = { text: "Hello world" };
         const result = await maybeApplyTtsToPayload({
           payload,
@@ -962,12 +947,22 @@ sys.exit(7)
         });
 
         expect(result).toBe(payload);
-        expect(fetchMock).not.toHaveBeenCalled();
-      });
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
     });
 
     it("runs auto-TTS in tagged mode when tags are present", async () => {
-      await withMockedAutoTtsFetch(async (fetchMock) => {
+      const fixture = createQwenFixture("");
+      writeFileSync(fixture.scriptPath, createSuccessfulQwenScript(fixture.argvPath), "utf8");
+      try {
+        const baseQwenCfg = createQwenCfg(fixture);
+        const taggedCfg: OpenClawConfig = {
+          ...baseQwenCfg,
+          messages: {
+            tts: { ...baseQwenCfg.messages!.tts!, auto: "tagged" },
+          },
+        };
         const result = await maybeApplyTtsToPayload({
           payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
           cfg: taggedCfg,
@@ -975,8 +970,9 @@ sys.exit(7)
         });
 
         expect(result.mediaUrl).toBeDefined();
-        expect(fetchMock).toHaveBeenCalledTimes(1);
-      });
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
     });
 
     it("marks qwen3 Telegram auto-TTS output as a voice note", async () => {

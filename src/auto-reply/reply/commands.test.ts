@@ -2017,4 +2017,19 @@ describe("handleCommands /tts", () => {
       tts: { provider: "qwen3" },
     });
   });
+
+  it("rejects legacy TTS providers", async () => {
+    const prefsPath = path.join(testWorkspaceDir, "tts-legacy-provider.json");
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: { tts: { prefsPath } },
+    } as OpenClawConfig;
+
+    const result = await handleCommands(buildParams("/tts provider edge", cfg));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("qwen3");
+    await expect(fs.access(prefsPath)).rejects.toThrow();
+  });
 });
