@@ -2000,4 +2000,21 @@ describe("handleCommands /tts", () => {
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("TTS status");
   });
+
+  it("allows qwen3 as a TTS provider", async () => {
+    const prefsPath = path.join(testWorkspaceDir, "tts-qwen3.json");
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: { tts: { prefsPath } },
+    } as OpenClawConfig;
+
+    const result = await handleCommands(buildParams("/tts provider qwen3", cfg));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("TTS provider set to qwen3");
+    await expect(readJsonFile<{ tts?: { provider?: string } }>(prefsPath)).resolves.toMatchObject({
+      tts: { provider: "qwen3" },
+    });
+  });
 });

@@ -71,7 +71,8 @@ vi.mock("../media/ffmpeg-exec.js", async () => {
   };
 });
 
-const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
+const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider, isTtsProviderConfigured } =
+  tts;
 
 const {
   isValidVoiceId,
@@ -617,6 +618,39 @@ describe("tts", () => {
           const provider = getTtsProvider(config, testCase.prefsPath);
           expect(provider).toBe(testCase.expected);
         });
+      }
+    });
+  });
+
+  describe("isTtsProviderConfigured", () => {
+    it("treats qwen3 as configured only when enabled with a script path", () => {
+      const cases = [
+        {
+          cfg: {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: { qwen3: { enabled: true, scriptPath: "/opt/qwen3-tts.py" } } },
+          },
+          expected: true,
+        },
+        {
+          cfg: {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: { qwen3: { enabled: true } } },
+          },
+          expected: false,
+        },
+        {
+          cfg: {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: { qwen3: { enabled: false, scriptPath: "/opt/qwen3-tts.py" } } },
+          },
+          expected: false,
+        },
+      ] satisfies Array<{ cfg: OpenClawConfig; expected: boolean }>;
+
+      for (const testCase of cases) {
+        const config = resolveTtsConfig(testCase.cfg);
+        expect(isTtsProviderConfigured(config, "qwen3")).toBe(testCase.expected);
       }
     });
   });

@@ -56,13 +56,14 @@ function ttsUsage(): ReplyPayload {
       `**Providers:**\n` +
       `• edge — Free, fast (default)\n` +
       `• openai — High quality (requires API key)\n` +
-      `• elevenlabs — Premium voices (requires API key)\n\n` +
+      `• elevenlabs — Premium voices (requires API key)\n` +
+      `• qwen3 — Local Qwen3 TTS (requires script path)\n\n` +
       `**Text Limit (default: 1500, max: 4096):**\n` +
       `When text exceeds the limit:\n` +
       `• Summary ON: AI summarizes, then generates audio\n` +
       `• Summary OFF: Truncates text, then generates audio\n\n` +
       `**Examples:**\n` +
-      `/tts provider edge\n` +
+      `/tts provider qwen3\n` +
       `/tts limit 2000\n` +
       `/tts audio Hello, this is a test!`,
   };
@@ -162,6 +163,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
       const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
       const hasEdge = isTtsProviderConfigured(config, "edge");
+      const hasQwen3 = isTtsProviderConfigured(config, "qwen3");
       return {
         shouldContinue: false,
         reply: {
@@ -171,13 +173,19 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
             `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
             `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
             `Edge enabled: ${hasEdge ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs | edge`,
+            `Qwen3 local: ${hasQwen3 ? "✅" : "❌"}\n` +
+            `Usage: /tts provider openai | elevenlabs | edge | qwen3`,
         },
       };
     }
 
     const requested = args.trim().toLowerCase();
-    if (requested !== "openai" && requested !== "elevenlabs" && requested !== "edge") {
+    if (
+      requested !== "openai" &&
+      requested !== "elevenlabs" &&
+      requested !== "edge" &&
+      requested !== "qwen3"
+    ) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 

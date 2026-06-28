@@ -566,6 +566,9 @@ export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: Tts
   if (provider === "edge") {
     return config.edge.enabled;
   }
+  if (provider === "qwen3") {
+    return config.qwen3.enabled && Boolean(config.qwen3.scriptPath);
+  }
   return Boolean(resolveTtsApiKey(config, provider));
 }
 
