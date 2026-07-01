@@ -1790,6 +1790,30 @@ npm_global_bin_dir() {
     return 1
 }
 
+pnpm_global_bin_dir() {
+    local bin_dir=""
+    if command -v pnpm >/dev/null 2>&1; then
+        bin_dir="$(pnpm bin -g 2>/dev/null || true)"
+    fi
+    if [[ -z "$bin_dir" ]] && command -v corepack >/dev/null 2>&1; then
+        bin_dir="$(corepack pnpm bin -g 2>/dev/null || true)"
+    fi
+    if [[ -n "$bin_dir" && "$bin_dir" == /* ]]; then
+        echo "${bin_dir%/}"
+        return 0
+    fi
+    if [[ -n "${PNPM_HOME:-}" && "${PNPM_HOME}" == /* ]]; then
+        echo "${PNPM_HOME%/}"
+        return 0
+    fi
+    if [[ -d "$HOME/.local/share/pnpm" ]]; then
+        echo "$HOME/.local/share/pnpm"
+        return 0
+    fi
+    echo ""
+    return 1
+}
+
 refresh_shell_command_cache() {
     hash -r 2>/dev/null || true
 }
@@ -1831,6 +1855,14 @@ ensure_npm_global_bin_on_path() {
     fi
 }
 
+ensure_pnpm_global_bin_on_path() {
+    local bin_dir=""
+    bin_dir="$(pnpm_global_bin_dir || true)"
+    if [[ -n "$bin_dir" ]]; then
+        export PATH="${bin_dir}:$PATH"
+    fi
+}
+
 maybe_nodenv_rehash() {
     if command -v nodenv &> /dev/null; then
         nodenv rehash >/dev/null 2>&1 || true
@@ -1860,6 +1892,12 @@ warn_openclaw_not_found() {
         echo -e "npm bin -g: ${INFO}${npm_bin}${NC}"
         echo -e "If needed: ${INFO}export PATH=\"${npm_bin}:\\$PATH\"${NC}"
     fi
+    local pnpm_bin=""
+    pnpm_bin="$(pnpm_global_bin_dir 2>/dev/null || true)"
+    if [[ -n "$pnpm_bin" ]]; then
+        echo -e "pnpm bin -g: ${INFO}${pnpm_bin}${NC}"
+        echo -e "If needed: ${INFO}export PATH=\"${pnpm_bin}:\\$PATH\"${NC}"
+    fi
 }
 
 resolve_openclaw_bin() {
@@ -1872,6 +1910,7 @@ resolve_openclaw_bin() {
     fi
 
     ensure_npm_global_bin_on_path
+    ensure_pnpm_global_bin_on_path
     refresh_shell_command_cache
     resolved="$(type -P openclaw 2>/dev/null || true)"
     if [[ -n "$resolved" && -x "$resolved" ]]; then
@@ -1886,6 +1925,13 @@ resolve_openclaw_bin() {
         return 0
     fi
 
+    local pnpm_bin=""
+    pnpm_bin="$(pnpm_global_bin_dir || true)"
+    if [[ -n "$pnpm_bin" && -x "${pnpm_bin}/openclaw" ]]; then
+        echo "${pnpm_bin}/openclaw"
+        return 0
+    fi
+
     maybe_nodenv_rehash
     refresh_shell_command_cache
     resolved="$(type -P openclaw 2>/dev/null || true)"
@@ -1896,6 +1942,11 @@ resolve_openclaw_bin() {
 
     if [[ -n "$npm_bin" && -x "${npm_bin}/openclaw" ]]; then
         echo "${npm_bin}/openclaw"
+        return 0
+    fi
+
+    if [[ -n "$pnpm_bin" && -x "${pnpm_bin}/openclaw" ]]; then
+        echo "${pnpm_bin}/openclaw"
         return 0
     fi
 

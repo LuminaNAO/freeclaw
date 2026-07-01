@@ -61,6 +61,30 @@ resolve_openclaw_version
   return output.trim();
 }
 
+function resolveOpenClawBinFromInstaller(home: string, pathValue: string): string {
+  const installerPath = path.join(process.cwd(), "scripts", "install.sh");
+  const output = execFileSync(
+    "bash",
+    [
+      "-lc",
+      `source "${installerPath}" >/dev/null 2>&1
+resolve_openclaw_bin`,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: pathValue,
+        PNPM_HOME: "",
+        OPENCLAW_INSTALL_SH_NO_RUN: "1",
+      },
+    },
+  );
+  return output.trim();
+}
+
 describe("install.sh version resolution", () => {
   const tempRoots: string[] = [];
 
@@ -116,6 +140,28 @@ extract_openclaw_semver() {
       );
 
       expect(resolveVersionFromInstallerViaStdin(fixture.cliPath, hostileCwd)).toBe("2026.3.10");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "finds openclaw installed in pnpm's default global bin directory",
+    () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-pnpm-home-"));
+      tempRoots.push(home);
+
+      const pnpmBin = path.join(home, ".local", "share", "pnpm");
+      const openclawBin = path.join(pnpmBin, "openclaw");
+      fs.mkdirSync(pnpmBin, { recursive: true });
+      fs.writeFileSync(
+        openclawBin,
+        `#!/usr/bin/env bash
+printf 'OpenClaw test\\n'
+`,
+        "utf-8",
+      );
+      fs.chmodSync(openclawBin, 0o755);
+
+      expect(resolveOpenClawBinFromInstaller(home, "/usr/bin:/bin")).toBe(openclawBin);
     },
   );
 });
