@@ -85,6 +85,35 @@ resolve_openclaw_bin`,
   return output.trim();
 }
 
+function addDirToDetectedShellPath(params: {
+  home: string;
+  shell: string;
+  dir: string;
+  displayDir: string;
+}): void {
+  const installerPath = path.join(process.cwd(), "scripts", "install.sh");
+  execFileSync(
+    "bash",
+    [
+      "-lc",
+      `source "${installerPath}" >/dev/null 2>&1
+add_dir_to_detected_shell_path "$TEST_DIR" "$TEST_DISPLAY_DIR"`,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        HOME: params.home,
+        SHELL: params.shell,
+        TEST_DIR: params.dir,
+        TEST_DISPLAY_DIR: params.displayDir,
+        OPENCLAW_INSTALL_SH_NO_RUN: "1",
+      },
+    },
+  );
+}
+
 describe("install.sh version resolution", () => {
   const tempRoots: string[] = [];
 
@@ -164,4 +193,36 @@ printf 'OpenClaw test\\n'
       expect(resolveOpenClawBinFromInstaller(home, "/usr/bin:/bin")).toBe(openclawBin);
     },
   );
+
+  it.runIf(process.platform !== "win32")("updates the detected zsh rc file", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-zsh-home-"));
+    tempRoots.push(home);
+
+    addDirToDetectedShellPath({
+      home,
+      shell: "/usr/bin/zsh",
+      dir: path.join(home, ".local", "share", "pnpm"),
+      displayDir: "$HOME/.local/share/pnpm",
+    });
+
+    expect(fs.readFileSync(path.join(home, ".zshrc"), "utf-8")).toContain(
+      'export PATH="$HOME/.local/share/pnpm:$PATH"',
+    );
+  });
+
+  it.runIf(process.platform !== "win32")("updates the detected fish config", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-fish-home-"));
+    tempRoots.push(home);
+
+    addDirToDetectedShellPath({
+      home,
+      shell: "/usr/bin/fish",
+      dir: path.join(home, ".local", "share", "pnpm"),
+      displayDir: "$HOME/.local/share/pnpm",
+    });
+
+    expect(fs.readFileSync(path.join(home, ".config", "fish", "config.fish"), "utf-8")).toContain(
+      "fish_add_path -m $HOME/.local/share/pnpm",
+    );
+  });
 });

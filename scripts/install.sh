@@ -1600,12 +1600,7 @@ fix_npm_permissions() {
     npm config set prefix "$HOME/.npm-global"
 
     # shellcheck disable=SC2016
-    local path_line='export PATH="$HOME/.npm-global/bin:$PATH"'
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-        if [[ -f "$rc" ]] && ! grep -q ".npm-global" "$rc"; then
-            echo "$path_line" >> "$rc"
-        fi
-    done
+    add_dir_to_detected_shell_path "$HOME/.npm-global/bin" '$HOME/.npm-global/bin'
 
     export PATH="$HOME/.npm-global/bin:$PATH"
     ui_success "npm configured for user installs"
@@ -1753,19 +1748,72 @@ run_pnpm() {
     "${PNPM_CMD[@]}" "$@"
 }
 
+detected_shell_name() {
+    local shell_path="${SHELL:-}"
+    if [[ -z "$shell_path" && -r /proc/$$/comm ]]; then
+        shell_path="$(cat /proc/$$/comm 2>/dev/null || true)"
+    fi
+    shell_path="${shell_path##*/}"
+    case "$shell_path" in
+        bash|zsh|fish|ksh|mksh|dash|sh) echo "$shell_path" ;;
+        *) echo "" ;;
+    esac
+}
+
+detected_shell_path_file() {
+    local shell_name
+    shell_name="$(detected_shell_name)"
+    case "$shell_name" in
+        zsh) echo "$HOME/.zshrc" ;;
+        bash) echo "$HOME/.bashrc" ;;
+        fish) echo "$HOME/.config/fish/config.fish" ;;
+        ksh|mksh) echo "$HOME/.kshrc" ;;
+        dash|sh) echo "$HOME/.profile" ;;
+        *) echo "$HOME/.profile" ;;
+    esac
+}
+
+add_dir_to_detected_shell_path() {
+    local dir="${1%/}"
+    local display_dir="${2:-$dir}"
+    if [[ -z "$dir" ]]; then
+        return 0
+    fi
+
+    local rc shell_name grep_needle path_line
+    rc="$(detected_shell_path_file)"
+    shell_name="$(detected_shell_name)"
+    grep_needle="$dir"
+    if [[ "$display_dir" == '$HOME/'* ]]; then
+        grep_needle="${display_dir#'$HOME/'}"
+    fi
+
+    mkdir -p "$(dirname "$rc")"
+    touch "$rc"
+    if grep -Fq "$grep_needle" "$rc"; then
+        return 0
+    fi
+
+    if [[ "$shell_name" == "fish" || "$rc" == */config.fish ]]; then
+        path_line="fish_add_path -m ${display_dir}"
+    else
+        path_line="export PATH=\"${display_dir}:\$PATH\""
+    fi
+
+    {
+        printf '\n# Added by OpenClaw installer\n'
+        printf '%s\n' "$path_line"
+    } >> "$rc"
+    ui_info "Added ${display_dir} to PATH in ${rc}"
+}
+
 ensure_user_local_bin_on_path() {
     local target="$HOME/.local/bin"
     mkdir -p "$target"
 
     export PATH="$target:$PATH"
-
     # shellcheck disable=SC2016
-    local path_line='export PATH="$HOME/.local/bin:$PATH"'
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-        if [[ -f "$rc" ]] && ! grep -q ".local/bin" "$rc"; then
-            echo "$path_line" >> "$rc"
-        fi
-    done
+    add_dir_to_detected_shell_path "$target" '$HOME/.local/bin'
 }
 
 npm_global_bin_dir() {
@@ -1843,7 +1891,8 @@ warn_shell_path_missing_dir() {
     echo ""
     ui_warn "PATH missing ${label}: ${dir}"
     echo "  This can make openclaw show as \"command not found\" in new terminals."
-    echo "  Fix (zsh: ~/.zshrc, bash: ~/.bashrc):"
+    echo "  The installer attempted to update: $(detected_shell_path_file)"
+    echo "  Current shell can use now:"
     echo "    export PATH=\"${dir}:\$PATH\""
 }
 
@@ -1852,6 +1901,7 @@ ensure_npm_global_bin_on_path() {
     bin_dir="$(npm_global_bin_dir || true)"
     if [[ -n "$bin_dir" ]]; then
         export PATH="${bin_dir}:$PATH"
+        add_dir_to_detected_shell_path "$bin_dir" "$bin_dir" >/dev/null
     fi
 }
 
@@ -1860,6 +1910,7 @@ ensure_pnpm_global_bin_on_path() {
     bin_dir="$(pnpm_global_bin_dir || true)"
     if [[ -n "$bin_dir" ]]; then
         export PATH="${bin_dir}:$PATH"
+        add_dir_to_detected_shell_path "$bin_dir" "$bin_dir" >/dev/null
     fi
 }
 
