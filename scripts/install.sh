@@ -999,6 +999,8 @@ VERIFY_INSTALL="${OPENCLAW_VERIFY_INSTALL:-0}"
 OPENCLAW_BIN=""
 PNPM_CMD=()
 HELP=0
+OPENCLAW_MANAGED_PATH_DIRS=()
+OPENCLAW_MANAGED_PATH_DISPLAY_DIRS=()
 
 print_usage() {
     cat <<EOF
@@ -1773,6 +1775,66 @@ detected_shell_path_file() {
     esac
 }
 
+escape_shell_double_quotes() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//\$/\\\$}"
+    value="${value//\`/\\\`}"
+    printf '%s' "$value"
+}
+
+remove_openclaw_managed_block() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    local tmp
+    tmp="$(mktemp)"
+    awk '
+        /^# >>> openclaw >>>$/ { skip=1; next }
+        /^# <<< openclaw <<<$/{ skip=0; next }
+        !skip { print }
+    ' "$file" > "$tmp"
+    mv "$tmp" "$file"
+}
+
+remember_openclaw_path_dir() {
+    local dir="${1%/}"
+    local display_dir="${2:-$dir}"
+    local existing
+    for existing in "${OPENCLAW_MANAGED_PATH_DIRS[@]:-}"; do
+        [[ "$existing" == "$dir" ]] && return 0
+    done
+    OPENCLAW_MANAGED_PATH_DIRS+=("$dir")
+    OPENCLAW_MANAGED_PATH_DISPLAY_DIRS+=("$display_dir")
+}
+
+write_openclaw_shell_binding() {
+    local rc shell_name display_dir escaped
+    rc="$(detected_shell_path_file)"
+    shell_name="$(detected_shell_name)"
+
+    mkdir -p "$(dirname "$rc")"
+    touch "$rc"
+    remove_openclaw_managed_block "$rc"
+
+    {
+        printf '\n# >>> openclaw >>>\n'
+        if [[ "$shell_name" == "fish" || "$rc" == */config.fish ]]; then
+            for display_dir in "${OPENCLAW_MANAGED_PATH_DISPLAY_DIRS[@]:-}"; do
+                printf 'fish_add_path -m %s\n' "$display_dir"
+            done
+        else
+            for display_dir in "${OPENCLAW_MANAGED_PATH_DISPLAY_DIRS[@]:-}"; do
+                escaped="$(escape_shell_double_quotes "$display_dir")"
+                printf '__openclaw_bin="%s"\n' "$escaped"
+                printf 'case ":$PATH:" in *":$__openclaw_bin:"*) ;; *) export PATH="$__openclaw_bin:$PATH" ;; esac\n'
+            done
+            printf 'unset __openclaw_bin\n'
+        fi
+        printf '# <<< openclaw <<<\n'
+    } >> "$rc"
+}
+
 add_dir_to_detected_shell_path() {
     local dir="${1%/}"
     local display_dir="${2:-$dir}"
@@ -1780,31 +1842,9 @@ add_dir_to_detected_shell_path() {
         return 0
     fi
 
-    local rc shell_name grep_needle path_line
-    rc="$(detected_shell_path_file)"
-    shell_name="$(detected_shell_name)"
-    grep_needle="$dir"
-    if [[ "$display_dir" == '$HOME/'* ]]; then
-        grep_needle="${display_dir#'$HOME/'}"
-    fi
-
-    mkdir -p "$(dirname "$rc")"
-    touch "$rc"
-    if grep -Fq "$grep_needle" "$rc"; then
-        return 0
-    fi
-
-    if [[ "$shell_name" == "fish" || "$rc" == */config.fish ]]; then
-        path_line="fish_add_path -m ${display_dir}"
-    else
-        path_line="export PATH=\"${display_dir}:\$PATH\""
-    fi
-
-    {
-        printf '\n# Added by OpenClaw installer\n'
-        printf '%s\n' "$path_line"
-    } >> "$rc"
-    ui_info "Added ${display_dir} to PATH in ${rc}"
+    remember_openclaw_path_dir "$dir" "$display_dir"
+    write_openclaw_shell_binding
+    ui_info "Updated OpenClaw PATH block in $(detected_shell_path_file)"
 }
 
 ensure_user_local_bin_on_path() {
@@ -1901,7 +1941,9 @@ ensure_npm_global_bin_on_path() {
     bin_dir="$(npm_global_bin_dir || true)"
     if [[ -n "$bin_dir" ]]; then
         export PATH="${bin_dir}:$PATH"
-        add_dir_to_detected_shell_path "$bin_dir" "$bin_dir" >/dev/null
+        if ! path_has_dir "$ORIGINAL_PATH" "$bin_dir"; then
+            add_dir_to_detected_shell_path "$bin_dir" "$bin_dir" >/dev/null
+        fi
     fi
 }
 
@@ -1910,7 +1952,9 @@ ensure_pnpm_global_bin_on_path() {
     bin_dir="$(pnpm_global_bin_dir || true)"
     if [[ -n "$bin_dir" ]]; then
         export PATH="${bin_dir}:$PATH"
-        add_dir_to_detected_shell_path "$bin_dir" "$bin_dir" >/dev/null
+        if ! path_has_dir "$ORIGINAL_PATH" "$bin_dir"; then
+            add_dir_to_detected_shell_path "$bin_dir" "$bin_dir" >/dev/null
+        fi
     fi
 }
 

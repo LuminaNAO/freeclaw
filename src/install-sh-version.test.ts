@@ -90,6 +90,8 @@ function addDirToDetectedShellPath(params: {
   shell: string;
   dir: string;
   displayDir: string;
+  secondDir?: string;
+  secondDisplayDir?: string;
 }): void {
   const installerPath = path.join(process.cwd(), "scripts", "install.sh");
   execFileSync(
@@ -97,7 +99,10 @@ function addDirToDetectedShellPath(params: {
     [
       "-lc",
       `source "${installerPath}" >/dev/null 2>&1
-add_dir_to_detected_shell_path "$TEST_DIR" "$TEST_DISPLAY_DIR"`,
+add_dir_to_detected_shell_path "$TEST_DIR" "$TEST_DISPLAY_DIR"
+if [[ -n "\${TEST_SECOND_DIR:-}" ]]; then
+  add_dir_to_detected_shell_path "$TEST_SECOND_DIR" "$TEST_SECOND_DISPLAY_DIR"
+fi`,
     ],
     {
       cwd: process.cwd(),
@@ -108,6 +113,8 @@ add_dir_to_detected_shell_path "$TEST_DIR" "$TEST_DISPLAY_DIR"`,
         SHELL: params.shell,
         TEST_DIR: params.dir,
         TEST_DISPLAY_DIR: params.displayDir,
+        TEST_SECOND_DIR: params.secondDir ?? "",
+        TEST_SECOND_DISPLAY_DIR: params.secondDisplayDir ?? "",
         OPENCLAW_INSTALL_SH_NO_RUN: "1",
       },
     },
@@ -205,9 +212,11 @@ printf 'OpenClaw test\\n'
       displayDir: "$HOME/.local/share/pnpm",
     });
 
-    expect(fs.readFileSync(path.join(home, ".zshrc"), "utf-8")).toContain(
-      'export PATH="$HOME/.local/share/pnpm:$PATH"',
-    );
+    const zshrc = fs.readFileSync(path.join(home, ".zshrc"), "utf-8");
+    expect(zshrc).toContain("# >>> openclaw >>>");
+    expect(zshrc).toContain('__openclaw_bin="\\$HOME/.local/share/pnpm"');
+    expect(zshrc).toContain('export PATH="$__openclaw_bin:$PATH"');
+    expect(zshrc).toContain("# <<< openclaw <<<");
   });
 
   it.runIf(process.platform !== "win32")("updates the detected fish config", () => {
@@ -224,5 +233,40 @@ printf 'OpenClaw test\\n'
     expect(fs.readFileSync(path.join(home, ".config", "fish", "config.fish"), "utf-8")).toContain(
       "fish_add_path -m $HOME/.local/share/pnpm",
     );
+  });
+
+  it.runIf(process.platform !== "win32")("rewrites one managed shell block", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-block-home-"));
+    tempRoots.push(home);
+    const zshrc = path.join(home, ".zshrc");
+    fs.writeFileSync(
+      zshrc,
+      [
+        "before",
+        "# >>> openclaw >>>",
+        'export PATH="$HOME/old:$PATH"',
+        "# <<< openclaw <<<",
+        "after",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    addDirToDetectedShellPath({
+      home,
+      shell: "/usr/bin/zsh",
+      dir: path.join(home, ".local", "bin"),
+      displayDir: "$HOME/.local/bin",
+      secondDir: path.join(home, ".local", "share", "pnpm"),
+      secondDisplayDir: "$HOME/.local/share/pnpm",
+    });
+
+    const content = fs.readFileSync(zshrc, "utf-8");
+    expect(content).toContain("before");
+    expect(content).toContain("after");
+    expect(content).not.toContain("$HOME/old");
+    expect((content.match(/# >>> openclaw >>>/g) ?? []).length).toBe(1);
+    expect(content).toContain('__openclaw_bin="\\$HOME/.local/bin"');
+    expect(content).toContain('__openclaw_bin="\\$HOME/.local/share/pnpm"');
   });
 });
