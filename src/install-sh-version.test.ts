@@ -214,9 +214,28 @@ printf 'OpenClaw test\\n'
 
     const zshrc = fs.readFileSync(path.join(home, ".zshrc"), "utf-8");
     expect(zshrc).toContain("# >>> openclaw >>>");
-    expect(zshrc).toContain('__openclaw_bin="\\$HOME/.local/share/pnpm"');
+    expect(zshrc).toContain('__openclaw_bin="$HOME/.local/share/pnpm"');
     expect(zshrc).toContain('export PATH="$__openclaw_bin:$PATH"');
     expect(zshrc).toContain("# <<< openclaw <<<");
+  });
+
+  it.runIf(process.platform !== "win32")("writes a block that expands $HOME when sourced", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-source-home-"));
+    tempRoots.push(home);
+
+    addDirToDetectedShellPath({
+      home,
+      shell: "/usr/bin/zsh",
+      dir: path.join(home, ".local", "share", "pnpm"),
+      displayDir: "$HOME/.local/share/pnpm",
+    });
+
+    const sourcedPath = execFileSync("bash", ["-c", `source "$HOME/.zshrc"; printf '%s' "$PATH"`], {
+      encoding: "utf-8",
+      env: { HOME: home, PATH: "/usr/bin:/bin" },
+    });
+    expect(sourcedPath.startsWith(`${path.join(home, ".local", "share", "pnpm")}:`)).toBe(true);
+    expect(sourcedPath).not.toContain("$HOME");
   });
 
   it.runIf(process.platform !== "win32")("updates the detected fish config", () => {
@@ -231,7 +250,7 @@ printf 'OpenClaw test\\n'
     });
 
     expect(fs.readFileSync(path.join(home, ".config", "fish", "config.fish"), "utf-8")).toContain(
-      "fish_add_path -m $HOME/.local/share/pnpm",
+      'fish_add_path -m "$HOME/.local/share/pnpm"',
     );
   });
 
@@ -266,7 +285,64 @@ printf 'OpenClaw test\\n'
     expect(content).toContain("after");
     expect(content).not.toContain("$HOME/old");
     expect((content.match(/# >>> openclaw >>>/g) ?? []).length).toBe(1);
-    expect(content).toContain('__openclaw_bin="\\$HOME/.local/bin"');
-    expect(content).toContain('__openclaw_bin="\\$HOME/.local/share/pnpm"');
+    expect(content).toContain('__openclaw_bin="$HOME/.local/bin"');
+    expect(content).toContain('__openclaw_bin="$HOME/.local/share/pnpm"');
   });
+
+  it.runIf(process.platform !== "win32")("keeps dirs added by earlier installer runs", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-rerun-home-"));
+    tempRoots.push(home);
+
+    addDirToDetectedShellPath({
+      home,
+      shell: "/usr/bin/zsh",
+      dir: path.join(home, ".local", "share", "pnpm"),
+      displayDir: "$HOME/.local/share/pnpm",
+    });
+    addDirToDetectedShellPath({
+      home,
+      shell: "/usr/bin/zsh",
+      dir: path.join(home, ".local", "bin"),
+      displayDir: "$HOME/.local/bin",
+    });
+
+    const content = fs.readFileSync(path.join(home, ".zshrc"), "utf-8");
+    expect((content.match(/# >>> openclaw >>>/g) ?? []).length).toBe(1);
+    expect(content).toContain('__openclaw_bin="$HOME/.local/share/pnpm"');
+    expect(content).toContain('__openclaw_bin="$HOME/.local/bin"');
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "repairs over-escaped entries from earlier installers",
+    () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-repair-home-"));
+      tempRoots.push(home);
+      const zshrc = path.join(home, ".zshrc");
+      fs.writeFileSync(
+        zshrc,
+        [
+          "# >>> openclaw >>>",
+          '__openclaw_bin="\\$HOME/.local/share/pnpm"',
+          'case ":$PATH:" in *":$__openclaw_bin:"*) ;; *) export PATH="$__openclaw_bin:$PATH" ;; esac',
+          "unset __openclaw_bin",
+          "# <<< openclaw <<<",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      addDirToDetectedShellPath({
+        home,
+        shell: "/usr/bin/zsh",
+        dir: path.join(home, ".local", "share", "pnpm"),
+        displayDir: "$HOME/.local/share/pnpm",
+      });
+
+      const content = fs.readFileSync(zshrc, "utf-8");
+      expect(content).not.toContain('"\\$HOME');
+      expect((content.match(/__openclaw_bin="\$HOME\/\.local\/share\/pnpm"/g) ?? []).length).toBe(
+        1,
+      );
+    },
+  );
 });

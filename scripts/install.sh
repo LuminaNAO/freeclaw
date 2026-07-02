@@ -1784,22 +1784,81 @@ escape_shell_double_quotes() {
     printf '%s' "$value"
 }
 
+escape_fish_double_quotes() {
+    # fish only recognizes \\ \" \$ inside double quotes; a \` would stay literal
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//\$/\\\$}"
+    printf '%s' "$value"
+}
+
+openclaw_rc_path_value() {
+    # Format a display dir as the double-quoted value written to the rc file.
+    # A leading $HOME must stay unescaped so the shell expands it on source.
+    local display_dir="$1" flavor="$2" prefix="" rest
+    rest="$display_dir"
+    if [[ "$display_dir" == '$HOME' || "$display_dir" == '$HOME/'* ]]; then
+        prefix='$HOME'
+        rest="${display_dir#\$HOME}"
+    fi
+    if [[ "$flavor" == "fish" ]]; then
+        rest="$(escape_fish_double_quotes "$rest")"
+    else
+        rest="$(escape_shell_double_quotes "$rest")"
+    fi
+    printf '"%s%s"' "$prefix" "$rest"
+}
+
+normalize_openclaw_rc_value() {
+    local value="$1"
+    # repair entries written by installers that over-escaped the leading $HOME
+    local broken_prefix='"\$HOME'
+    if [[ "$value" == "$broken_prefix"* ]]; then
+        value='"$HOME'"${value#"$broken_prefix"}"
+    fi
+    # quote entries written by installers that emitted bare fish paths
+    if [[ "$value" != \"*\" ]]; then
+        value="\"$value\""
+    fi
+    printf '%s' "$value"
+}
+
+existing_openclaw_block_values() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    awk '
+        /^# >>> openclaw >>>$/ { inblock=1; next }
+        /^# <<< openclaw <<<$/ { inblock=0; next }
+        inblock && sub(/^__openclaw_bin=/, "") { print; next }
+        inblock && sub(/^fish_add_path -m /, "") { print }
+    ' "$file"
+}
+
 remove_openclaw_managed_block() {
     local file="$1"
     [[ -f "$file" ]] || return 0
     local tmp
     tmp="$(mktemp)"
+    # also drop blank lines directly above the block so reruns do not pile them up
     awk '
-        /^# >>> openclaw >>>$/ { skip=1; next }
-        /^# <<< openclaw <<<$/{ skip=0; next }
-        !skip { print }
+        /^# >>> openclaw >>>$/ { skip=1; pending=0; next }
+        /^# <<< openclaw <<<$/ { skip=0; next }
+        skip { next }
+        /^$/ { pending++; next }
+        { while (pending > 0) { print ""; pending-- } print }
+        END { while (pending > 0) { print ""; pending-- } }
     ' "$file" > "$tmp"
-    mv "$tmp" "$file"
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
 }
 
 remember_openclaw_path_dir() {
     local dir="${1%/}"
     local display_dir="${2:-$dir}"
+    if [[ "$display_dir" == "$dir" && -n "${HOME:-}" && "$dir" == "$HOME"/* ]]; then
+        display_dir='$HOME'"${dir#"$HOME"}"
+    fi
     local existing
     for existing in "${OPENCLAW_MANAGED_PATH_DIRS[@]:-}"; do
         [[ "$existing" == "$dir" ]] && return 0
@@ -1809,27 +1868,56 @@ remember_openclaw_path_dir() {
 }
 
 write_openclaw_shell_binding() {
-    local rc shell_name display_dir escaped
+    local rc shell_name flavor
     rc="$(detected_shell_path_file)"
     shell_name="$(detected_shell_name)"
+    flavor="posix"
+    if [[ "$shell_name" == "fish" || "$rc" == */config.fish ]]; then
+        flavor="fish"
+    fi
 
     mkdir -p "$(dirname "$rc")"
     touch "$rc"
+
+    local new_values=() display_dir value
+    for display_dir in "${OPENCLAW_MANAGED_PATH_DISPLAY_DIRS[@]:-}"; do
+        [[ -n "$display_dir" ]] || continue
+        new_values+=("$(openclaw_rc_path_value "$display_dir" "$flavor")")
+    done
+
+    # Keep dirs added by earlier installer runs: this run only remembers the
+    # dirs it touched, so a plain rewrite would drop the rest of the block.
+    local carried_values=() existing seen
+    while IFS= read -r existing; do
+        [[ -n "$existing" ]] || continue
+        existing="$(normalize_openclaw_rc_value "$existing")"
+        seen=0
+        for value in "${new_values[@]:-}" "${carried_values[@]:-}"; do
+            [[ "$value" == "$existing" ]] && { seen=1; break; }
+        done
+        [[ "$seen" == 1 ]] || carried_values+=("$existing")
+    done < <(existing_openclaw_block_values "$rc")
+
     remove_openclaw_managed_block "$rc"
 
     {
         printf '\n# >>> openclaw >>>\n'
-        if [[ "$shell_name" == "fish" || "$rc" == */config.fish ]]; then
-            for display_dir in "${OPENCLAW_MANAGED_PATH_DISPLAY_DIRS[@]:-}"; do
-                printf 'fish_add_path -m %s\n' "$display_dir"
+        if [[ "$flavor" == "fish" ]]; then
+            for value in "${carried_values[@]:-}" "${new_values[@]:-}"; do
+                [[ -n "$value" ]] || continue
+                printf 'fish_add_path -m %s\n' "$value"
             done
         else
-            for display_dir in "${OPENCLAW_MANAGED_PATH_DISPLAY_DIRS[@]:-}"; do
-                escaped="$(escape_shell_double_quotes "$display_dir")"
-                printf '__openclaw_bin="%s"\n' "$escaped"
+            local emitted=0
+            for value in "${carried_values[@]:-}" "${new_values[@]:-}"; do
+                [[ -n "$value" ]] || continue
+                printf '__openclaw_bin=%s\n' "$value"
                 printf 'case ":$PATH:" in *":$__openclaw_bin:"*) ;; *) export PATH="$__openclaw_bin:$PATH" ;; esac\n'
+                emitted=1
             done
-            printf 'unset __openclaw_bin\n'
+            if [[ "$emitted" == 1 ]]; then
+                printf 'unset __openclaw_bin\n'
+            fi
         fi
         printf '# <<< openclaw <<<\n'
     } >> "$rc"
