@@ -42,8 +42,13 @@ usage() {
     sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
 }
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_DUMP="$SCRIPT_DIR/signal-identity-dumps/current.json"
+# readlink -f: resolve /usr/bin symlinks from packaged installs
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+if [[ -w "$SCRIPT_DIR" ]]; then
+    DEFAULT_DUMP="$SCRIPT_DIR/signal-identity-dumps/current.json"
+else
+    DEFAULT_DUMP="${XDG_STATE_HOME:-$HOME/.local/state}/freeclaw/signal-identity-dumps/current.json"
+fi
 DIFF_SCRIPT="$SCRIPT_DIR/signal-identity-diff.sh"
 
 WORKSPACE=""

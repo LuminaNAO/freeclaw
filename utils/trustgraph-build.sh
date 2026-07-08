@@ -10,7 +10,8 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f: resolve /usr/bin symlinks from packaged installs
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/trustgraph.py"
 
 if [[ ! -f "$PYTHON_SCRIPT" ]]; then

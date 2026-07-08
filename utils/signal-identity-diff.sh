@@ -28,9 +28,18 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f: resolve /usr/bin symlinks from packaged installs
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 DUMPER="$SCRIPT_DIR/signal-identity-dump.sh"
-DUMP_DIR="${SIGNAL_DUMP_DIR:-$SCRIPT_DIR/signal-identity-dumps}"
+# Packaged installs live under read-only /usr/lib; default dumps to the
+# user's state dir there. Dev checkouts keep the script-local default.
+if [[ -w "$SCRIPT_DIR" ]]; then
+    _default_dump_dir="$SCRIPT_DIR/signal-identity-dumps"
+else
+    _default_dump_dir="${XDG_STATE_HOME:-$HOME/.local/state}/freeclaw/signal-identity-dumps"
+fi
+DUMP_DIR="${SIGNAL_DUMP_DIR:-$_default_dump_dir}"
+unset _default_dump_dir
 
 [[ -x "$DUMPER" ]] || { echo "❌ cannot exec $DUMPER" >&2; exit 1; }
 command -v jq >/dev/null || { echo "❌ jq is required" >&2; exit 1; }
