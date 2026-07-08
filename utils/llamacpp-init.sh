@@ -306,11 +306,19 @@ fi
 
 # Resolve the openclaw entrypoint — call node directly instead of relying on
 # the pnpm shim which can break (self-referencing wrapper on pnpm v10+).
-FREECLAW_DIR="${FREECLAW_DIR:-$HOME/code/freeclaw}"
-OPENCLAW_ENTRYPOINT="$FREECLAW_DIR/dist/index.js"
+# Supports dev checkouts and the packaged install (/usr/lib/freeclaw), in
+# that order; FREECLAW_DIR overrides.
+OPENCLAW_ENTRYPOINT=""
+for _freeclaw_dir in "${FREECLAW_DIR:-}" "$HOME/code/freeclaw" /usr/lib/freeclaw; do
+    [[ -n "$_freeclaw_dir" && -f "$_freeclaw_dir/dist/index.js" ]] || continue
+    FREECLAW_DIR="$_freeclaw_dir"
+    OPENCLAW_ENTRYPOINT="$_freeclaw_dir/dist/index.js"
+    break
+done
+unset _freeclaw_dir
 OPENCLAW_NODE=$(which node)
-if [[ ! -f "$OPENCLAW_ENTRYPOINT" ]]; then
-    error "Freeclaw entrypoint not found: $OPENCLAW_ENTRYPOINT (run build-switch.sh first)"
+if [[ -z "$OPENCLAW_ENTRYPOINT" ]]; then
+    error "Freeclaw entrypoint not found. Looked in: ${FREECLAW_DIR:-\$FREECLAW_DIR unset}, $HOME/code/freeclaw, /usr/lib/freeclaw. Install the freeclaw package, or run build-switch.sh for a dev checkout."
 fi
 openclaw_cmd() { OPENCLAW_STATE_DIR="$OPENCLAW_STATE_DIR" "$OPENCLAW_NODE" "$OPENCLAW_ENTRYPOINT" "$@"; }
 
