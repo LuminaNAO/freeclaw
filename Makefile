@@ -66,7 +66,15 @@ install: build
 		package.json \
 		pnpm-lock.yaml \
 		skills \
+		utils \
 		"$(DESTDIR)$(LIBDIR)/"
 	$(MAKE) DESTDIR="$(DESTDIR)" PREFIX="$(PREFIX)" prune-packaged-node-modules
 	chmod 755 "$(DESTDIR)$(LIBDIR)/openclaw.mjs"
 	ln -sfn "../lib/freeclaw/openclaw.mjs" "$(DESTDIR)$(BINDIR)/openclaw"
+	set -e; for f in "$(DESTDIR)$(LIBDIR)"/utils/*.sh "$(DESTDIR)$(LIBDIR)"/utils/*.py; do \
+		[ -f "$$f" ] || continue; \
+		chmod 755 "$$f"; \
+		base="$$(basename "$$f")"; \
+		name="$$(printf '%s' "$${base%.*}" | tr '_' '-')"; \
+		ln -sfn "../lib/freeclaw/utils/$$base" "$(DESTDIR)$(BINDIR)/$$name"; \
+	done
