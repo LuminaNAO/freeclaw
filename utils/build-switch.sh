@@ -257,6 +257,7 @@ check_pnpm() {
 # Ensure pnpm shim dirs are on the user's interactive-shell PATH.
 # build-switch exports them within its own process, so without this
 # the freshly-installed `openclaw` shim isn't found in a new terminal.
+# Supports bash, zsh, fish.
 ensure_pnpm_on_path() {
     local rc_files=("$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile" "$HOME/.bash_profile")
     local found=false
@@ -282,6 +283,29 @@ ensure_pnpm_on_path() {
         echo "case \":\$PATH:\" in *\":\$PNPM_HOME:\"*) ;; *) export PATH=\"\$PNPM_HOME:\$PATH\" ;; esac"
     } >> "$target_rc"
     log "pnpm shim paths added — open a new shell (or 'source ~/.bashrc') before running $AGENT_CMD_NAME"
+
+    # Also bind to fish if it is installed
+    if command -v fish &>/dev/null; then
+        local fish_conf="$HOME/.config/fish/config.fish"
+        mkdir -p "$HOME/.config/fish"
+        if grep -q 'PNPM_HOME' "$fish_conf" 2>/dev/null && grep -q 'PNPM_HOME/bin' "$fish_conf" 2>/dev/null; then
+            log "fish config already has pnpm shim paths"
+        else
+            log "Adding pnpm shim paths to fish config: $fish_conf"
+            {
+                echo ""
+                echo "# pnpm shims for OpenClaw/FreeClaw (added by build-switch)"
+                echo "set -gx PNPM_HOME \"$PNPM_HOME\""
+                echo "set -gx PNPM_BIN_DIR \"\$PNPM_HOME/bin\""
+                echo "if not string match -q -- \"\$PNPM_BIN_DIR\" \$PATH"
+                echo "  set -gx PATH \"\$PNPM_BIN_DIR\" \$PATH"
+                echo "end"
+                echo "if not string match -q -- \"\$PNPM_HOME\" \$PATH"
+                echo "  set -gx PATH \"\$PNPM_HOME\" \$PATH"
+                echo "end"
+            } >> "$fish_conf"
+        fi
+    fi
 }
 
 # ============================================================================
