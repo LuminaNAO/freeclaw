@@ -65,19 +65,14 @@ prune-packaged-node-modules:
 			-name '@typescript+native-preview*' -o \
 			-name 'vitest@*' -o \
 			-name '@vitest+*' -o \
-			-name 'typescript@*' \
+			-name 'typescript@*' -o \
+			-name 'tsx@*' \
 		\) -prune -exec rm -rf {} +; \
-		rm -f "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/tsgolint \
-		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/oxlint \
-		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/oxfmt \
-		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/esbuild \
-		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/rolldown \
-		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/tsdown \
-		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/tsc \
-		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/tsserver \
-		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/tsgo \
-		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/vitest \
-		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/lightningcss; \
+		for shimdir in "$(DESTDIR)$(LIBDIR)/node_modules/.bin" "$(DESTDIR)$(LIBDIR)/node_modules/.pnpm/node_modules/.bin"; do \
+			for shim in tsgolint oxlint oxfmt esbuild rolldown tsdown tsc tsserver tsgo vitest lightningcss tsx; do \
+				rm -f "$$shimdir/$$shim"; \
+			done; \
+		done; \
 		for _pass in 1 2; do \
 			find "$(DESTDIR)$(LIBDIR)/node_modules" -maxdepth 4 -xtype l -delete; \
 			find "$(DESTDIR)$(LIBDIR)/node_modules" -mindepth 1 -maxdepth 4 -type d -empty -delete; \
