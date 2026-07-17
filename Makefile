@@ -49,6 +49,25 @@ prune-packaged-node-modules:
 			! -name 'linux-x64' \
 			! -name 'linux-x64-gnu' \
 			-prune -exec rm -rf {} +; \
+		find "$$pnpm_store" -maxdepth 1 -type d \( \
+			-name 'oxlint*' -o \
+			-name '@oxlint*' -o \
+			-name 'oxfmt*' -o \
+			-name '@oxfmt*' -o \
+			-name 'oxlint-tsgolint*' -o \
+			-name '@oxlint-tsgolint*' -o \
+			-name 'esbuild@*' -o \
+			-name '@esbuild+*' -o \
+			-name 'rolldown@*' -o \
+			-name '@rolldown+*' -o \
+			-name 'tsdown@*' -o \
+			-name 'lightningcss*' -o \
+			-name '@typescript+native-preview*' -o \
+			-name 'vitest@*' -o \
+			-name '@vitest+*' -o \
+			-name 'typescript@*' \
+		\) -prune -exec rm -rf {} +; \
+		find "$(DESTDIR)$(LIBDIR)/node_modules" -maxdepth 2 -xtype l -delete; \
 	fi
 
 install: build
