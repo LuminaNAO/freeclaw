@@ -67,6 +67,17 @@ prune-packaged-node-modules:
 			-name '@vitest+*' -o \
 			-name 'typescript@*' \
 		\) -prune -exec rm -rf {} +; \
+		rm -f "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/tsgolint \
+		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/oxlint \
+		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/oxfmt \
+		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/esbuild \
+		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/rolldown \
+		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/tsdown \
+		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/tsc \
+		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/tsserver \
+		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/tsgo \
+		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/vitest \
+		      "$(DESTDIR)$(LIBDIR)/node_modules/.bin"/lightningcss; \
 		for _pass in 1 2; do \
 			find "$(DESTDIR)$(LIBDIR)/node_modules" -maxdepth 4 -xtype l -delete; \
 			find "$(DESTDIR)$(LIBDIR)/node_modules" -mindepth 1 -maxdepth 4 -type d -empty -delete; \
