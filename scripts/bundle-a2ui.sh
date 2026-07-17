@@ -86,10 +86,14 @@ if [[ -f "$HASH_FILE" ]]; then
 fi
 
 pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
-if command -v rolldown >/dev/null 2>&1 && rolldown --version >/dev/null 2>&1; then
+# Pin the bundler: the a2ui bundle is hash-guarded, and an unpinned rolldown
+# (whatever is on PATH, or dlx fetching npm latest) drifts the output with
+# whatever npm ships that day.
+ROLLDOWN_VERSION="1.2.0"
+if command -v rolldown >/dev/null 2>&1 && [[ "$(rolldown --version 2>/dev/null)" == *"$ROLLDOWN_VERSION"* ]]; then
   rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
 else
-  pnpm -s dlx rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
+  pnpm -s dlx "rolldown@$ROLLDOWN_VERSION" -c "$A2UI_APP_DIR/rolldown.config.mjs"
 fi
 
 echo "$current_hash" > "$HASH_FILE"
