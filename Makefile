@@ -67,8 +67,10 @@ prune-packaged-node-modules:
 			-name '@vitest+*' -o \
 			-name 'typescript@*' \
 		\) -prune -exec rm -rf {} +; \
-		find "$(DESTDIR)$(LIBDIR)/node_modules" -maxdepth 2 -xtype l -delete; \
-		find "$(DESTDIR)$(LIBDIR)/node_modules" -mindepth 1 -maxdepth 2 -type d -empty -delete; \
+		for _pass in 1 2; do \
+			find "$(DESTDIR)$(LIBDIR)/node_modules" -maxdepth 4 -xtype l -delete; \
+			find "$(DESTDIR)$(LIBDIR)/node_modules" -mindepth 1 -maxdepth 4 -type d -empty -delete; \
+		done; \
 	fi
 
 install: build
