@@ -68,6 +68,7 @@ prune-packaged-node-modules:
 			-name 'typescript@*' \
 		\) -prune -exec rm -rf {} +; \
 		find "$(DESTDIR)$(LIBDIR)/node_modules" -maxdepth 2 -xtype l -delete; \
+		find "$(DESTDIR)$(LIBDIR)/node_modules" -mindepth 1 -maxdepth 2 -type d -empty -delete; \
 	fi
 
 install: build
