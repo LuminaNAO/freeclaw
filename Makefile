@@ -59,6 +59,7 @@ prune-packaged-node-modules:
 			-name 'esbuild@*' -o \
 			-name '@esbuild+*' -o \
 			-name 'rolldown@*' -o \
+			-name 'rolldown-plugin-dts@*' -o \
 			-name '@rolldown+*' -o \
 			-name 'tsdown@*' -o \
 			-name 'lightningcss*' -o \
