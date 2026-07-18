@@ -27,6 +27,15 @@ node_modules/.modules.yaml: pnpm-lock.yaml package.json pnpm-workspace.yaml | en
 build: node_modules/.modules.yaml
 	$(PNPM) build
 	$(PNPM) ui:build
+	$(MAKE) apply-node-modules-patches
+
+# Local-inference patches (scripts/patch-*.sh) are idempotent and must be
+# baked in at build time so packaged installs ship patched; llamacpp-init
+# no longer reapplies them.
+apply-node-modules-patches:
+	@for patch in scripts/patch-*.sh; do \
+		[ -x "$$patch" ] && bash "$$patch"; \
+	done
 
 prune-packaged-node-modules:
 	@if [ -d "$(DESTDIR)$(LIBDIR)/node_modules/.pnpm" ]; then \

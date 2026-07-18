@@ -1120,22 +1120,11 @@ if [[ "$SUBAGENT_SAME_SERVER" -eq 0 ]]; then
        "$MODELS_JSON" > "$MODELS_JSON.tmp" && mv "$MODELS_JSON.tmp" "$MODELS_JSON"
 fi
 
-# ─── Step 5b: Apply node_modules patches ──────────────────────────────────────
-# Run all patch-*.sh scripts from the freeclaw repo. These patch node_modules
-# for local inference (SDK timeouts, thinking budgets, etc).
-# build-switch.sh also runs these during build, but re-running here ensures
-# patches survive a standalone pnpm install.
-PATCH_COUNT=0
-for patch in "$FREECLAW_DIR"/scripts/patch-*.sh; do
-    if [[ -x "$patch" ]]; then
-        info "Applying patch: $(basename "$patch")"
-        bash "$patch"
-        PATCH_COUNT=$((PATCH_COUNT + 1))
-    fi
-done
-if [[ $PATCH_COUNT -eq 0 ]]; then
-    warn "No patch scripts found in $FREECLAW_DIR/scripts/ — node_modules may need manual patching"
-fi
+# Note: node_modules patches (scripts/patch-*.sh) are applied at build time
+# (Makefile apply-node-modules-patches, also run by build-switch.sh) and ship
+# inside the package. This script only swaps inference endpoints/models and
+# must not touch node_modules - on packaged installs that tree is root-owned
+# and pacman-managed.
 
 # ─── Step 5c: Clean up orphaned agents and stale locks ───────────────────────
 ORPHANS=$(pgrep -f "openclaw-agent" 2>/dev/null || true)
