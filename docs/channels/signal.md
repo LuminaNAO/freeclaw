@@ -308,7 +308,7 @@ Provider options:
 - `channels.signal.httpHost`, `channels.signal.httpPort`: daemon bind. Local auto-start picks and saves a free loopback port instead of using `8080`.
 - `channels.signal.autoStart`: auto-spawn daemon (default true if `httpUrl` unset).
 - `channels.signal.startupTimeoutMs`: startup wait timeout in ms (cap 120000).
-- `channels.signal.receiveMode`: `on-start | manual`.
+- `channels.signal.receiveMode`: deprecated and ignored — the daemon always runs in `manual` receive mode. `on-start` made signal-cli drain the server-side message queue at daemon boot, before the gateway's event listener attached, permanently dropping messages sent while the channel was disabled.
 - `channels.signal.ignoreAttachments`: skip attachment downloads.
 - `channels.signal.ignoreStories`: ignore stories from the daemon.
 - `channels.signal.sendReadReceipts`: forward read receipts.

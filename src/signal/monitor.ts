@@ -21,7 +21,7 @@ import {
   spawnArchiveSupervisor,
   waitForEndpointFile,
 } from "./archive-supervisor.js";
-import { signalCheck, signalRpcRequest, signalReceive } from "./client.js";
+import { signalCheck, signalRpcRequest } from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import {
   isPreferredSignalHttpPort,
@@ -389,10 +389,20 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     120_000,
     Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
   );
-  const readReceiptsViaDaemon = Boolean(autoStart && sendReadReceipts);
+  const readReceiptsViaDaemon = autoStart && sendReadReceipts;
   const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
   let daemonHandle: SignalDaemonHandle | null = null;
-  const effectiveReceiveMode = opts.receiveMode ?? accountInfo.config.receiveMode ?? "manual";
+  // Auto-started daemons must always receive in "manual" mode: with
+  // "on-start" signal-cli drains the server-side queue the moment the JVM
+  // boots — before our SSE listener attaches — and --no-receive-stdout sends
+  // those messages nowhere, permanently losing anything queued while the
+  // channel was disabled. Receiving starts when the SSE subscriber attaches.
+  const configuredReceiveMode = opts.receiveMode ?? accountInfo.config.receiveMode;
+  if (configuredReceiveMode === "on-start") {
+    runtime.error?.(
+      'signal: ignoring receiveMode "on-start" — it drops messages queued while the channel was down; using "manual" (remove channels.signal.receiveMode from config to silence this)',
+    );
+  }
 
   if (autoStart) {
     if (archiveRawSettings.enabled) {
@@ -411,11 +421,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       // TODO(signal): add UNIX socket transport support for multi-user hosts.
       const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
       const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
-      const managedLocalHttp = Boolean(
+      const managedLocalHttp =
         !opts.baseUrl?.trim() &&
         !accountInfo.config.httpUrl?.trim() &&
-        !accountInfo.config.httpEndpointFile?.trim(),
-      );
+        !accountInfo.config.httpEndpointFile?.trim();
       const savedHttpPort = accountInfo.config.httpPort;
       const hasExplicitHttpPort = opts.httpPort !== undefined;
       const shouldMigrateSavedHttpPort =
@@ -450,7 +459,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         account,
         httpHost,
         httpPort,
-        receiveMode: effectiveReceiveMode,
+        receiveMode: "manual",
         ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
         ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
         sendReadReceipts,
@@ -510,10 +519,14 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       buildSignalReactionSystemEventText,
     });
 
-    // Start SSE listener in background so it is attached before we trigger
-    // receive; this avoids events being consumed by the daemon while no
-    // subscriber is listening (e.g., after channel is re-enabled).
-    const ssePromise = runSignalSseLoop({
+    // Attaching to the daemon's SSE events endpoint is what starts message
+    // receiving in manual mode (signal-cli adds a receive handler per
+    // subscriber), which also flushes messages queued server-side while the
+    // channel was down. Never trigger the `receive` RPC here: it races the
+    // SSE subscription ("already being received" errors), and its response —
+    // which would contain the queued messages — is not consumed, so winning
+    // the race would silently drop them.
+    await runSignalSseLoop({
       baseUrl,
       account,
       abortSignal: daemonLifecycle.abortSignal,
@@ -525,34 +538,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         });
       },
     });
-
-    // Brief pause to let the SSE connection establish.
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    // Now ask the daemon to start receiving events.
-    // If receiveMode is "manual" (default), this causes it to fetch any
-    // queued messages; because SSE is already attached, they flow into
-    // OpenClaw instead of being silently dropped.
-    if (daemonHandle && effectiveReceiveMode === "manual") {
-      try {
-        await signalReceive({
-          baseUrl,
-          timeoutMs: Math.min(60_000, startupTimeoutMs),
-        });
-        runtime.log?.("signal: receive triggered after SSE attached");
-      } catch (err) {
-        const msg = String(err);
-        // Daemon may already be receiving (auto-started after SSE attach).
-        // This is fine — just ignore it.
-        if (msg.includes("cannot be used if messages are already being received")) {
-          runtime.log?.("signal: daemon already receiving after SSE attach (ok)");
-        } else {
-          runtime.error?.(`signal: receive failed after SSE attach: ${msg}`);
-        }
-      }
-    }
-
-    await ssePromise;
     const daemonExitError = daemonLifecycle.getExitError();
     if (daemonExitError) {
       throw daemonExitError;
