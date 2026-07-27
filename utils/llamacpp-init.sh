@@ -47,6 +47,7 @@ MODEL_REASONING="${MODEL_REASONING:-}"         # auto: /slots[0].reasoning_forma
 THINKING_DEFAULT="high"  # off | minimal | low | medium | high | xhigh | adaptive
 GATEWAY_BIND="${GATEWAY_BIND:-}"   # loopback | lan
 GATEWAY_PASSWORD="${GATEWAY_PASSWORD:-}" # optional fixed password for LAN/VPN gateway auth
+LLAMACPP_INIT_HISTORY="${LLAMACPP_INIT_HISTORY:-$HOME/.llamacpp-init-history}" # past runs, offered as presets
 SESSION_IDLE_MINUTES="${SESSION_IDLE_MINUTES:-129600}" # 90 days; avoids daily session reset
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -229,6 +230,53 @@ unset _freeclaw_dir
 OPENCLAW_NODE=$(which node)
 if [[ -z "$OPENCLAW_ENTRYPOINT" ]]; then
     error "Freeclaw entrypoint not found. Looked in: ${FREECLAW_DIR:-\$FREECLAW_DIR unset}, $HOME/code/freeclaw, /usr/lib/freeclaw. Install the freeclaw package, or run build-switch.sh for a dev checkout."
+fi
+
+# ─── Launch history: quick re-setup ─────────────────────────────────────────
+# Mirrors llama-launcher's .launch-history: successful runs record their
+# ports, context size, subagent endpoint, and gateway bind, and are offered
+# here as presets before the interactive prompts. Selecting one pre-seeds
+# the prompt variables (which the prompts below then skip); the agent /
+# state dir always comes from the CLI argument, never from history.
+if [[ -t 0 && -z "$LLAMA_CPP_BASE_URL" && -s "$LLAMACPP_INIT_HISTORY" ]]; then
+    hist_key=(); hist_agent=(); hist_host=(); hist_port=(); hist_ctx=()
+    hist_sub_host=(); hist_sub_port=(); hist_gw=()
+    while IFS=$'\t' read -r h_ts h_agent h_host h_port h_ctx h_sub_host h_sub_port h_gw; do
+        [[ -n "$h_host" && -n "$h_port" ]] || continue
+        entry="${h_host}:${h_port}|${h_ctx}|${h_sub_host}:${h_sub_port}|${h_gw}"
+        dup=0
+        for k in "${hist_key[@]}"; do [[ "$k" == "$entry" ]] && { dup=1; break; }; done
+        [[ "$dup" -eq 1 ]] && continue
+        hist_key+=("$entry"); hist_agent+=("${h_agent:--}")
+        hist_host+=("$h_host"); hist_port+=("$h_port"); hist_ctx+=("$h_ctx")
+        hist_sub_host+=("$h_sub_host"); hist_sub_port+=("$h_sub_port"); hist_gw+=("$h_gw")
+        [[ ${#hist_key[@]} -ge 5 ]] && break
+    done < <(tac "$LLAMACPP_INIT_HISTORY")
+
+    if [[ ${#hist_key[@]} -gt 0 ]]; then
+        echo "🕐 Recent setups:"
+        for i in "${!hist_key[@]}"; do
+            printf '  %d) %-10s  %s:%s  ctx=%s  sub=%s:%s  gw=%s\n' $((i+1)) \
+                "${hist_agent[$i]}" "${hist_host[$i]}" "${hist_port[$i]}" "${hist_ctx[$i]:-?}" \
+                "${hist_sub_host[$i]}" "${hist_sub_port[$i]}" "${hist_gw[$i]:-?}"
+        done
+        echo "  0) New setup"
+        printf '\e[36m[INPUT]\e[0m Reuse a recent setup? [0=new, default=1]: '
+        read -r hist_sel
+        hist_sel="${hist_sel:-1}"
+        if [[ "$hist_sel" =~ ^[1-9]$ ]] && [[ "$hist_sel" -le ${#hist_key[@]} ]]; then
+            idx=$((hist_sel - 1))
+            LLAMA_CPP_HOST="${hist_host[$idx]}"
+            LLAMA_CPP_PORT="${hist_port[$idx]}"
+            LLAMA_CPP_BASE_URL="http://${LLAMA_CPP_HOST}:${LLAMA_CPP_PORT}"
+            [[ -n "${hist_ctx[$idx]}" ]] && MODEL_CONTEXT_WINDOW="${hist_ctx[$idx]}"
+            SUBAGENT_HOST="${hist_sub_host[$idx]}"
+            SUBAGENT_PORT="${hist_sub_port[$idx]}"
+            SUBAGENT_BASE_URL="http://${SUBAGENT_HOST}:${SUBAGENT_PORT}"
+            [[ -z "$GATEWAY_BIND" && -n "${hist_gw[$idx]}" ]] && GATEWAY_BIND="${hist_gw[$idx]}"
+            info "Using recent setup: ${LLAMA_CPP_BASE_URL}  ctx=${MODEL_CONTEXT_WINDOW:-auto}  sub=${SUBAGENT_BASE_URL}  gw=${GATEWAY_BIND:-prompt}"
+        fi
+    fi
 fi
 
 # ─── Interactive prompts ────────────────────────────────────────────────────
@@ -1195,3 +1243,9 @@ info "Subagent endpoint : ${SUBAGENT_BASE_URL}"
 info "Subagent ref      : ${SUBAGENT_MODEL_REF}"
 info ""
 info "Run '$AGENT_CMD_NAME tui' to start chatting."
+
+# ─── Record launch history ───────────────────────────────────────────────────
+# Only reached on success (set -e). Read back by the preset menu up top.
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -Iseconds)" "${AGENT_NAME:--}" \
+    "$LLAMA_CPP_HOST" "$LLAMA_CPP_PORT" "${MODEL_CONTEXT_WINDOW:-}" \
+    "$SUBAGENT_HOST" "$SUBAGENT_PORT" "$GATEWAY_BIND" >> "$LLAMACPP_INIT_HISTORY"
