@@ -1,0 +1,14 @@
+# .publishing_protocol — per-repo publishing config, read by nao-aur-publish
+# and by agents before any release work. Generic rules: PUBLISHING_PROTOCOL.md
+# in the nao-aur-publish repo.
+PUBLISH_BRANCH=supermaster
+PKGBUILD_PATH=aur/PKGBUILD
+AUR_PACKAGE=freeclaw
+VERSION_FILE=package.json
+# NOTES:
+# - supermaster ONLY. master is a stale fork branch; main is upstream
+#   OpenClaw — ignore both entirely.
+# - package.json version must align with pkgver (e.g. 9.0.0 <-> 9).
+# - AUR is published ONLY via: nao-aur-publish freeclaw vN
+#   Never push this repo's git history to AUR.
+# - .SRCINFO is never committed here — generated at publish time.
