@@ -10,7 +10,64 @@
 #
 # Flags:
 #   --force    Overwrite existing config even if it has non-llama.cpp providers
+#
+# Non-interactive use (stdin not a TTY): prompts are skipped. Required env:
+#   LLAMA_CPP_HOST + LLAMA_CPP_PORT (or LLAMA_CPP_BASE_URL)
+#   MODEL_CONTEXT_WINDOW
+#   GATEWAY_BIND (loopback|lan)
+# Optional: SUBAGENT_HOST/SUBAGENT_PORT (default: same server as main agent).
+#
+# All openclaw.json edits are staged on a private copy and committed with a
+# single atomic rename before the gateway (re)install/restart phase. A failure
+# at any point before the commit leaves the previous config fully intact, and
+# any failure prints exactly which state was applied and how to recover.
 set -euo pipefail
+set -E  # ERR trap fires inside functions/subshells too
+
+# ─── Failure reporting ──────────────────────────────────────────────────────
+# State flags consumed by the exit trap so a mid-run death says precisely what
+# was and wasn't applied instead of leaving the operator guessing.
+CONFIG_COMMITTED=0
+GATEWAY_RESTARTED=0
+CONFIG_STAGING=""
+FAIL_LINE=""
+FAIL_CMD=""
+
+on_error() {
+    FAIL_LINE="$1"
+    FAIL_CMD="$2"
+}
+trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
+
+on_exit() {
+    local code=$?
+    # NOTE: plain `if` statements only in here — a failing `cond && cmd` list
+    # would trip errexit inside the trap and silently skip the report.
+    # Remove staging litter regardless of outcome; commit uses mv, so a
+    # surviving staging file is always garbage.
+    if [[ -n "$CONFIG_STAGING" && -f "$CONFIG_STAGING" ]]; then
+        rm -f "$CONFIG_STAGING" "$CONFIG_STAGING.tmp" 2>/dev/null || true
+    fi
+    if [[ $code -eq 0 ]]; then
+        return 0
+    fi
+    printf '\e[31m[ERROR]\e[0m llamacpp-init FAILED (exit %s)%s\n' "$code" \
+        "${FAIL_LINE:+ at line $FAIL_LINE: $FAIL_CMD}" >&2
+    if [[ "$CONFIG_COMMITTED" -eq 1 ]]; then
+        printf '\e[31m[ERROR]\e[0m Config committed: YES — %s was updated with the new provider settings.\n' "${OPENCLAW_CONFIG:-openclaw.json}" >&2
+    else
+        printf '\e[31m[ERROR]\e[0m Config committed: NO — %s is UNCHANGED; the previous provider settings (endpoint/context window) are still in place.\n' "${OPENCLAW_CONFIG:-openclaw.json}" >&2
+    fi
+    if [[ "$GATEWAY_RESTARTED" -eq 1 ]]; then
+        printf '\e[31m[ERROR]\e[0m Gateway restarted: YES — but verification did not complete; check: journalctl --user -u %s.service -n 30\n' "${AGENT_SERVICE_NAME:-openclaw-gateway}" >&2
+    else
+        printf '\e[31m[ERROR]\e[0m Gateway restarted: NO — any running gateway still uses the OLD config. After fixing the error re-run this script, or restart manually: systemctl --user restart %s.service\n' "${AGENT_SERVICE_NAME:-openclaw-gateway}" >&2
+    fi
+    printf '\e[31m[ERROR]\e[0m Fix the cause above, then re-run: bash %s %s\n' "${BASH_SOURCE[0]}" "${SCRIPT_ARGS:-}" >&2
+}
+trap on_exit EXIT
+
+SCRIPT_ARGS="$*"
 
 FORCE=0
 AGENT_NAME=""
@@ -29,6 +86,12 @@ for arg in "$@"; do
 done
 
 # ─── Configuration ──────────────────────────────────────────────────────────
+
+# Record which endpoint values were explicitly provided BEFORE defaults apply —
+# the non-interactive guard below must distinguish "user chose localhost:40801"
+# from "nothing was provided and the default silently won".
+ENV_HOST_SET="${LLAMA_CPP_HOST+yes}"
+ENV_PORT_SET="${LLAMA_CPP_PORT+yes}"
 
 LLAMA_CPP_HOST="${LLAMA_CPP_HOST:-localhost}"
 LLAMA_CPP_PORT="${LLAMA_CPP_PORT:-40801}"
@@ -213,6 +276,9 @@ else
     AGENT_CMD_NAME="openclaw"
 fi
 export OPENCLAW_STATE_DIR
+# Resolved here (not at first use) so failure reports can always name the file.
+OPENCLAW_CONFIG="$OPENCLAW_STATE_DIR/openclaw.json"
+AGENT_DIR="$OPENCLAW_STATE_DIR/agents/main/agent"
 
 # Resolve the openclaw entrypoint BEFORE any prompts so a missing install
 # fails immediately, not after the user answered everything. Call node
@@ -230,6 +296,55 @@ unset _freeclaw_dir
 OPENCLAW_NODE=$(which node)
 if [[ -z "$OPENCLAW_ENTRYPOINT" ]]; then
     error "Freeclaw entrypoint not found. Looked in: ${FREECLAW_DIR:-\$FREECLAW_DIR unset}, $HOME/code/freeclaw, /usr/lib/freeclaw. Install the freeclaw package, or run build-switch.sh for a dev checkout."
+fi
+
+# ─── Non-interactive guard ──────────────────────────────────────────────────
+# Without a TTY, `read` dies on EOF partway through the run (set -e), leaving
+# whatever was applied so far. Decide everything up front instead: required
+# values must come from env, optional ones get announced defaults, and ALL
+# missing values are reported in one prescriptive message before anything runs.
+NONINTERACTIVE=0
+if [[ ! -t 0 ]]; then
+    NONINTERACTIVE=1
+    missing=()
+    if [[ -z "$LLAMA_CPP_BASE_URL" && -z "$ENV_HOST_SET" && -z "$ENV_PORT_SET" ]]; then
+        missing+=("LLAMA_CPP_HOST and LLAMA_CPP_PORT (or LLAMA_CPP_BASE_URL)")
+    fi
+    [[ -z "$MODEL_CONTEXT_WINDOW" ]] && missing+=("MODEL_CONTEXT_WINDOW (tokens, e.g. 262144)")
+    [[ -z "$GATEWAY_BIND" ]] && missing+=("GATEWAY_BIND (loopback|lan)")
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        printf '\e[31m[ERROR]\e[0m Non-interactive run (stdin is not a TTY) and required values are missing:\n' >&2
+        printf '\e[31m[ERROR]\e[0m   - %s\n' "${missing[@]}" >&2
+        printf '\e[31m[ERROR]\e[0m Set them as environment variables and re-run, e.g.:\n' >&2
+        printf '\e[31m[ERROR]\e[0m   LLAMA_CPP_HOST=127.0.0.1 LLAMA_CPP_PORT=40800 MODEL_CONTEXT_WINDOW=262144 GATEWAY_BIND=lan bash %s %s\n' "${BASH_SOURCE[0]}" "$SCRIPT_ARGS" >&2
+        exit 1
+    fi
+    if [[ -z "$LLAMA_CPP_BASE_URL" ]]; then
+        LLAMA_CPP_BASE_URL="http://${LLAMA_CPP_HOST}:${LLAMA_CPP_PORT}"
+    fi
+    if [[ -z "${SUBAGENT_BASE_URL:-}" && -z "${SUBAGENT_HOST:-}" && -z "${SUBAGENT_PORT:-}" ]]; then
+        info "Non-interactive: subagent server defaults to the main server."
+    fi
+fi
+
+# When only LLAMA_CPP_BASE_URL was provided, derive host/port from it so the
+# provider JSON, the summary, and the launch-history record stay consistent
+# (otherwise history would record the localhost:40801 defaults).
+if [[ -n "$LLAMA_CPP_BASE_URL" ]]; then
+    _url_hostport="${LLAMA_CPP_BASE_URL#*://}"; _url_hostport="${_url_hostport%%/*}"
+    if [[ "$_url_hostport" == *:* ]]; then
+        LLAMA_CPP_HOST="${_url_hostport%:*}"
+        LLAMA_CPP_PORT="${_url_hostport##*:}"
+    else
+        LLAMA_CPP_HOST="$_url_hostport"
+    fi
+    unset _url_hostport
+fi
+
+# Context window must be a positive integer wherever it came from — a typo here
+# otherwise only explodes hundreds of lines later inside a jq --argjson.
+if [[ -n "$MODEL_CONTEXT_WINDOW" ]] && ! [[ "$MODEL_CONTEXT_WINDOW" =~ ^[1-9][0-9]*$ ]]; then
+    error "MODEL_CONTEXT_WINDOW must be a positive integer, got: '$MODEL_CONTEXT_WINDOW'"
 fi
 
 # ─── Launch history: quick re-setup ─────────────────────────────────────────
@@ -298,6 +413,8 @@ if [[ -z "$MODEL_CONTEXT_WINDOW" ]]; then
     printf '\e[36m[INPUT]\e[0m Max context window in tokens [%s]: ' "$DEFAULT_CONTEXT"
     read -r user_ctx
     if [[ -n "$user_ctx" ]]; then
+        [[ "$user_ctx" =~ ^[1-9][0-9]*$ ]] \
+            || error "Context window must be a positive integer, got: '$user_ctx'"
         MODEL_CONTEXT_WINDOW="$user_ctx"
         info "Context window set to: ${MODEL_CONTEXT_WINDOW}"
     else
@@ -320,19 +437,26 @@ SUBAGENT_MAX_TOKENS="${SUBAGENT_MAX_TOKENS:-}"
 SUBAGENT_PROVIDER="llama.cpp-subagent"
 
 if [[ -z "$SUBAGENT_BASE_URL" ]]; then
-    printf '\n'
-    info "── Subagent inference server ──"
-    info "Subagents can use a separate llama-server. Press Enter to use the same server."
-    printf '\e[36m[INPUT]\e[0m Subagent server address [%s]: ' "$SUBAGENT_HOST"
-    read -r user_sub_host
-    [[ -n "$user_sub_host" ]] && SUBAGENT_HOST="$user_sub_host"
+    if [[ "$NONINTERACTIVE" -eq 1 ]]; then
+        # No TTY: never prompt — SUBAGENT_HOST/PORT env or the main-server
+        # defaults above decide, deterministically.
+        SUBAGENT_BASE_URL="http://${SUBAGENT_HOST}:${SUBAGENT_PORT}"
+        info "Subagent inference URL: ${SUBAGENT_BASE_URL} (non-interactive)"
+    else
+        printf '\n'
+        info "── Subagent inference server ──"
+        info "Subagents can use a separate llama-server. Press Enter to use the same server."
+        printf '\e[36m[INPUT]\e[0m Subagent server address [%s]: ' "$SUBAGENT_HOST"
+        read -r user_sub_host
+        [[ -n "$user_sub_host" ]] && SUBAGENT_HOST="$user_sub_host"
 
-    printf '\e[36m[INPUT]\e[0m Subagent server port [%s]: ' "$SUBAGENT_PORT"
-    read -r user_sub_port
-    [[ -n "$user_sub_port" ]] && SUBAGENT_PORT="$user_sub_port"
+        printf '\e[36m[INPUT]\e[0m Subagent server port [%s]: ' "$SUBAGENT_PORT"
+        read -r user_sub_port
+        [[ -n "$user_sub_port" ]] && SUBAGENT_PORT="$user_sub_port"
 
-    SUBAGENT_BASE_URL="http://${SUBAGENT_HOST}:${SUBAGENT_PORT}"
-    info "Subagent inference URL: ${SUBAGENT_BASE_URL}"
+        SUBAGENT_BASE_URL="http://${SUBAGENT_HOST}:${SUBAGENT_PORT}"
+        info "Subagent inference URL: ${SUBAGENT_BASE_URL}"
+    fi
 fi
 
 # If subagent points to same endpoint as main, reuse provider name to avoid duplication
@@ -344,8 +468,33 @@ else
     info "Subagent uses separate server: ${SUBAGENT_BASE_URL}"
 fi
 
-OPENCLAW_CONFIG="$OPENCLAW_STATE_DIR/openclaw.json"
-AGENT_DIR="$OPENCLAW_STATE_DIR/agents/main/agent"
+# Clean up litter from previously interrupted runs. Real files are only ever
+# produced by atomic rename, so anything matching these patterns is garbage.
+rm -f "$OPENCLAW_CONFIG".tmp "$OPENCLAW_CONFIG".tmp.* "$OPENCLAW_CONFIG".staging.* \
+      "$AGENT_DIR"/models.json.tmp "$AGENT_DIR"/models.json.*.tmp \
+      "$AGENT_DIR"/models.json.tmp.* "$AGENT_DIR"/auth-profiles.json.tmp.* \
+      "$OPENCLAW_STATE_DIR"/agents/main/subagent/auth-profiles.json.tmp.* 2>/dev/null || true
+
+# ─── Staged config editing ──────────────────────────────────────────────────
+# Every openclaw.json edit below goes through cfg() against a private staging
+# copy; commit_staged_config() publishes it with a single atomic rename. Any
+# failure before the commit leaves the real config byte-identical.
+stage_config() {
+    CONFIG_STAGING="${OPENCLAW_CONFIG}.staging.$$"
+    cp "$OPENCLAW_CONFIG" "$CONFIG_STAGING"
+}
+
+cfg() {  # cfg <jq args...> — apply a jq program to the staged config
+    local tmp="${CONFIG_STAGING}.tmp"
+    jq "$@" "$CONFIG_STAGING" > "$tmp" && mv "$tmp" "$CONFIG_STAGING"
+}
+
+commit_staged_config() {
+    mv "$CONFIG_STAGING" "$OPENCLAW_CONFIG"
+    CONFIG_STAGING=""
+    CONFIG_COMMITTED=1
+    info "Config committed atomically to $OPENCLAW_CONFIG"
+}
 
 # ─── Environment setup ───────────────────────────────────────────────────────
 # Source nvm so node/openclaw are on PATH regardless of how this script is run
@@ -676,6 +825,7 @@ fi
 # each of which spawns a full Node.js process (~2-3s each).
 mkdir -p "$OPENCLAW_STATE_DIR"
 [[ -f "$OPENCLAW_CONFIG" ]] || echo '{}' > "$OPENCLAW_CONFIG"
+stage_config
 info "Configuring gateway (mode=local, bind=${GATEWAY_BIND}, port=${GATEWAY_PORT}, tls=enabled)..."
 if [[ "$GATEWAY_BIND" == "lan" ]]; then
     GATEWAY_ORIGIN_HOSTS_JSON=$(detect_gateway_origin_hosts \
@@ -690,7 +840,7 @@ CONTROL_UI_ALLOWED_ORIGINS=$(jq -c -n \
         "https://localhost:\($port)",
         "https://127.0.0.1:\($port)"
     ] + ($hosts | map("https://\(.)" + ":\($port)") )')
-jq --arg mode "local" \
+cfg --arg mode "local" \
    --arg bind "$GATEWAY_BIND" \
    --argjson port "$GATEWAY_PORT" \
    --arg thinkDefault "$THINKING_DEFAULT" \
@@ -712,8 +862,7 @@ jq --arg mode "local" \
     .gateway.controlUi.allowInsecureAuth = false |
     .session.reset.mode = "idle" |
     .session.reset.idleMinutes = $sessionIdleMinutes |
-    .agents.defaults.thinkingDefault = $thinkDefault' \
-   "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp" && mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"
+    .agents.defaults.thinkingDefault = $thinkDefault'
 info "Control UI origins: $(echo "$CONTROL_UI_ALLOWED_ORIGINS" | jq -r 'join(", ")')"
 if [[ "$GATEWAY_BIND" == "lan" ]]; then
     info "LAN Control UI device pairing is disabled; remote clients must provide both gateway token and password."
@@ -721,12 +870,11 @@ fi
 info "Default thinking level: ${THINKING_DEFAULT}"
 info "Session reset: idle after ${SESSION_IDLE_MINUTES} minutes (~90 days)"
 
-GATEWAY_TOKEN=$(config_string_or_empty '.gateway.auth.token // empty' "$OPENCLAW_CONFIG")
-GATEWAY_AUTH_PASSWORD=$(config_string_or_empty '.gateway.auth.password // empty' "$OPENCLAW_CONFIG")
+GATEWAY_TOKEN=$(config_string_or_empty '.gateway.auth.token // empty' "$CONFIG_STAGING")
+GATEWAY_AUTH_PASSWORD=$(config_string_or_empty '.gateway.auth.password // empty' "$CONFIG_STAGING")
 if [[ -z "$GATEWAY_TOKEN" ]]; then
     GATEWAY_TOKEN=$(openssl rand -hex 24)
-    jq --arg token "$GATEWAY_TOKEN" '.gateway.auth.token = $token' \
-        "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp" && mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"
+    cfg --arg token "$GATEWAY_TOKEN" '.gateway.auth.token = $token'
     info "Generated gateway auth token."
 fi
 if [[ "$GATEWAY_BIND" == "lan" ]]; then
@@ -737,8 +885,7 @@ if [[ "$GATEWAY_BIND" == "lan" ]]; then
         GATEWAY_AUTH_PASSWORD=$(openssl rand -hex 24)
         info "Generated gateway auth password."
     fi
-    jq --arg password "$GATEWAY_AUTH_PASSWORD" '.gateway.auth.password = $password' \
-        "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp" && mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"
+    cfg --arg password "$GATEWAY_AUTH_PASSWORD" '.gateway.auth.password = $password'
 fi
 
 # ─── Step 2: Register llama.cpp provider ─────────────────────────────────────
@@ -774,16 +921,15 @@ PROVIDER_JSON=$(jq -n \
         }]
     }')
 
-jq --arg provider "$MODEL_PROVIDER" \
+cfg --arg provider "$MODEL_PROVIDER" \
    --argjson entry "$PROVIDER_JSON" \
-   '.models.providers[$provider] = $entry' \
-   "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp" && mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"
+   '.models.providers[$provider] = $entry'
 
 # Set the selected local model as the primary agent model. Preserve existing
 # model fallbacks and allowlist entries, but make this init run authoritative
 # for the default model selection.
 info "Setting primary default model: ${MODEL_REF}"
-jq --arg modelRef "$MODEL_REF" \
+cfg --arg modelRef "$MODEL_REF" \
    '.agents.defaults.model = (
         (if (.agents.defaults.model | type) == "object" then .agents.defaults.model else {} end)
         + { primary: $modelRef }
@@ -791,8 +937,7 @@ jq --arg modelRef "$MODEL_REF" \
     .agents.defaults.models = (
         (if (.agents.defaults.models | type) == "object" then .agents.defaults.models else {} end)
         + { ($modelRef): ((.agents.defaults.models[$modelRef] // {}) | if type == "object" then . else {} end) }
-    )' \
-   "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp" && mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"
+    )'
 
 # Register subagent provider (separate entry when using a different server)
 if [[ "$SUBAGENT_SAME_SERVER" -eq 0 ]]; then
@@ -824,18 +969,16 @@ if [[ "$SUBAGENT_SAME_SERVER" -eq 0 ]]; then
             }]
         }')
 
-    jq --arg provider "$SUBAGENT_PROVIDER" \
+    cfg --arg provider "$SUBAGENT_PROVIDER" \
        --argjson entry "$SUBAGENT_PROVIDER_JSON" \
-       '.models.providers[$provider] = $entry' \
-       "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp" && mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"
+       '.models.providers[$provider] = $entry'
 fi
 
 # Set the global subagent default model
 info "Setting subagent default model: ${SUBAGENT_MODEL_REF}"
-jq --arg subModel "$SUBAGENT_MODEL_REF" \
+cfg --arg subModel "$SUBAGENT_MODEL_REF" \
    '.agents.defaults.subagents.model = $subModel |
-    .agents.defaults.models[$subModel] = {}' \
-   "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp" && mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"
+    .agents.defaults.models[$subModel] = {}'
 
 # ─── Step 2b: Isolate signal-cli HTTP daemon ──────────────────────────────────
 # A local httpUrl (especially the signal-cli default 127.0.0.1:8080) can attach
@@ -847,7 +990,7 @@ SIGNAL_CONFIGURED=$(jq -r '
     else
         "no"
     end
-' "$OPENCLAW_CONFIG" 2>/dev/null || echo "no")
+' "$CONFIG_STAGING" 2>/dev/null || echo "no")
 
 if [[ "$SIGNAL_CONFIGURED" == "yes" ]]; then
     SIGNAL_EXTERNAL=$(jq -r '
@@ -860,7 +1003,7 @@ if [[ "$SIGNAL_CONFIGURED" == "yes" ]]; then
         else
             "no"
         end
-    ' "$OPENCLAW_CONFIG" 2>/dev/null || echo "no")
+    ' "$CONFIG_STAGING" 2>/dev/null || echo "no")
 
     SIGNAL_LOCAL_HTTP=$(jq -r '
         def local_url:
@@ -874,9 +1017,9 @@ if [[ "$SIGNAL_CONFIGURED" == "yes" ]]; then
         else
             "no"
         end
-    ' "$OPENCLAW_CONFIG" 2>/dev/null || echo "no")
+    ' "$CONFIG_STAGING" 2>/dev/null || echo "no")
 
-    SIGNAL_CLI_PATH=$(jq -r '.channels.signal.cliPath // "signal-cli"' "$OPENCLAW_CONFIG" 2>/dev/null || echo "signal-cli")
+    SIGNAL_CLI_PATH=$(jq -r '.channels.signal.cliPath // "signal-cli"' "$CONFIG_STAGING" 2>/dev/null || echo "signal-cli")
     if [[ "$SIGNAL_EXTERNAL" == "yes" ]]; then
         info "Signal uses an external endpoint/supervisor; leaving Signal daemon config unchanged."
     elif [[ "$SIGNAL_LOCAL_HTTP" == "yes" ]] && command -v "$SIGNAL_CLI_PATH" &>/dev/null; then
@@ -884,7 +1027,7 @@ if [[ "$SIGNAL_CONFIGURED" == "yes" ]]; then
             .channels.signal.httpPort //
             (.channels.signal.httpUrl // "" | try capture(":(?<port>[0-9]+)(/)?$").port? catch null | tonumber?) //
             8080
-        ' "$OPENCLAW_CONFIG" 2>/dev/null || echo "8080")
+        ' "$CONFIG_STAGING" 2>/dev/null || echo "8080")
         SIGNAL_HTTP_PORT=$(find_free_port "$EXISTING_SIGNAL_PORT" 18080 18180) \
             || error "No free signal-cli HTTP port found in 18080-18180"
         SIGNAL_HTTP_HOST="127.0.0.1"
@@ -895,7 +1038,7 @@ if [[ "$SIGNAL_CONFIGURED" == "yes" ]]; then
             info "Signal HTTP port: ${SIGNAL_HTTP_PORT}"
         fi
 
-        jq --arg host "$SIGNAL_HTTP_HOST" --argjson port "$SIGNAL_HTTP_PORT" '
+        cfg --arg host "$SIGNAL_HTTP_HOST" --argjson port "$SIGNAL_HTTP_PORT" '
             def local_url:
                 type == "string" and test("^http://(127\\.0\\.0\\.1|localhost|\\[::1\\])(:[0-9]+)?/?$");
             def should_patch:
@@ -919,12 +1062,30 @@ if [[ "$SIGNAL_CONFIGURED" == "yes" ]]; then
                     .
                 end
             )
-        ' "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp" && mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"
+        '
         info "Configured Signal to auto-start its own signal-cli daemon at ${SIGNAL_HTTP_HOST}:${SIGNAL_HTTP_PORT}"
     elif [[ "$SIGNAL_LOCAL_HTTP" == "yes" ]]; then
         warn "Signal is configured locally but '$SIGNAL_CLI_PATH' was not found; leaving Signal daemon config unchanged."
     fi
 fi
+
+# ─── Step 2c: Configure local embedding provider ─────────────────────────────
+# node-llama-cpp is installed as an optionalDependency. Point memory search at
+# it so semantic recall works without any cloud API keys. (Staged here so it
+# rides the same atomic commit as the rest of the config.)
+CURRENT_MEM_PROVIDER=$(jq -r '.agents.defaults.memorySearch.provider // empty' "$CONFIG_STAGING" 2>/dev/null || true)
+if [[ -z "$CURRENT_MEM_PROVIDER" ]] || [[ "$FORCE" -eq 1 ]]; then
+    cfg '.agents.defaults.memorySearch.provider = "local"'
+    info "Memory search provider set to: local (node-llama-cpp)"
+    info "Embedding model will be downloaded on first use (~600MB)"
+else
+    info "Memory search provider already set to: $CURRENT_MEM_PROVIDER (skipping — use --force to override)"
+fi
+
+# ─── Commit point ────────────────────────────────────────────────────────────
+# Everything config-content-related is staged; publish it in one rename. The
+# steps below (service install, token embedding, restart) need the real file.
+commit_staged_config
 
 # ─── Step 3: Gateway service & auth token ────────────────────────────────────
 # For named agents, build-switch.sh already wrote the systemd service file.
@@ -948,7 +1109,7 @@ if [[ -n "$AGENT_NAME" ]]; then
     if [[ -z "$GATEWAY_TOKEN" ]]; then
         GATEWAY_TOKEN=$(openssl rand -hex 32)
         jq --arg token "$GATEWAY_TOKEN" '.gateway.auth.token = $token' \
-            "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp" && mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"
+            "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp.$$" && mv "$OPENCLAW_CONFIG.tmp.$$" "$OPENCLAW_CONFIG"
         info "Generated gateway auth token."
     fi
     # Embed token in the service file
@@ -965,7 +1126,7 @@ else
     if [[ -z "$GATEWAY_TOKEN" ]]; then
         GATEWAY_TOKEN=$(openssl rand -hex 32)
         jq --arg token "$GATEWAY_TOKEN" '.gateway.auth.token = $token' \
-            "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp" && mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"
+            "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp.$$" && mv "$OPENCLAW_CONFIG.tmp.$$" "$OPENCLAW_CONFIG"
         info "Replaced unresolved gateway auth token SecretRef with a generated local token."
     fi
     if [[ -f "$GATEWAY_SERVICE_FILE" ]]; then
@@ -1048,7 +1209,7 @@ if [[ "$SUBAGENT_SAME_SERVER" -eq 0 ]]; then
                     key:      $subKey
                 }
             }
-        }' > "$AGENT_DIR/auth-profiles.json"
+        }' > "$AGENT_DIR/auth-profiles.json.tmp.$$" && mv "$AGENT_DIR/auth-profiles.json.tmp.$$" "$AGENT_DIR/auth-profiles.json"
 
     # Subagent needs its own auth-profiles.json with the subagent provider
     mkdir -p "$SUBAGENT_DIR"
@@ -1072,7 +1233,7 @@ if [[ "$SUBAGENT_SAME_SERVER" -eq 0 ]]; then
                     key:      $subKey
                 }
             }
-        }' > "$SUBAGENT_DIR/auth-profiles.json"
+        }' > "$SUBAGENT_DIR/auth-profiles.json.tmp.$$" && mv "$SUBAGENT_DIR/auth-profiles.json.tmp.$$" "$SUBAGENT_DIR/auth-profiles.json"
 else
     jq -n \
         --arg provider "$MODEL_PROVIDER" \
@@ -1086,7 +1247,7 @@ else
                     key:      $key
                 }
             }
-        }' > "$AGENT_DIR/auth-profiles.json"
+        }' > "$AGENT_DIR/auth-profiles.json.tmp.$$" && mv "$AGENT_DIR/auth-profiles.json.tmp.$$" "$AGENT_DIR/auth-profiles.json"
 fi
 
 # ─── Step 5: Merge llama.cpp into agent models.json ──────────────────────────
@@ -1120,19 +1281,10 @@ MODEL_ENTRY=$(jq -n \
         }]
     }')
 
-if [[ -f "$MODELS_JSON" ]]; then
-    jq --arg provider "$MODEL_PROVIDER" \
-       --argjson entry "$MODEL_ENTRY" \
-       '.providers[$provider] = $entry' \
-       "$MODELS_JSON" > "$MODELS_JSON.tmp" && mv "$MODELS_JSON.tmp" "$MODELS_JSON"
-else
-    jq -n \
-       --arg provider "$MODEL_PROVIDER" \
-       --argjson entry "$MODEL_ENTRY" \
-       '{ providers: { ($provider): $entry } }' > "$MODELS_JSON"
-fi
-
-# Add subagent provider to agent models.json (when using a separate server)
+# Build the optional subagent entry first so both providers land in ONE atomic
+# write — the old two-pass update could die between passes and leave the file
+# with only half the providers.
+SUBAGENT_MODEL_ENTRY="null"
 if [[ "$SUBAGENT_SAME_SERVER" -eq 0 ]]; then
     info "Adding subagent provider to agent models.json..."
     SUBAGENT_MODEL_ENTRY=$(jq -n \
@@ -1161,12 +1313,19 @@ if [[ "$SUBAGENT_SAME_SERVER" -eq 0 ]]; then
                 )
             }]
         }')
-
-    jq --arg provider "$SUBAGENT_PROVIDER" \
-       --argjson entry "$SUBAGENT_MODEL_ENTRY" \
-       '.providers[$provider] = $entry' \
-       "$MODELS_JSON" > "$MODELS_JSON.tmp" && mv "$MODELS_JSON.tmp" "$MODELS_JSON"
 fi
+
+# Single-pass atomic update: merge into the existing file when present.
+MODELS_BASE='{}'
+[[ -f "$MODELS_JSON" ]] && MODELS_BASE=$(cat "$MODELS_JSON")
+printf '%s' "$MODELS_BASE" | jq \
+    --arg provider    "$MODEL_PROVIDER" \
+    --argjson entry   "$MODEL_ENTRY" \
+    --arg subProvider "$SUBAGENT_PROVIDER" \
+    --argjson subEntry "$SUBAGENT_MODEL_ENTRY" \
+    '.providers[$provider] = $entry
+     | (if $subEntry != null then .providers[$subProvider] = $subEntry else . end)' \
+    > "$MODELS_JSON.tmp.$$" && mv "$MODELS_JSON.tmp.$$" "$MODELS_JSON"
 
 # Note: node_modules patches (scripts/patch-*.sh) are applied at build time
 # (Makefile apply-node-modules-patches, also run by build-switch.sh) and ship
@@ -1187,23 +1346,11 @@ if [[ -n "$STALE_LOCKS" ]]; then
     rm -f $STALE_LOCKS
 fi
 
-# ─── Step 5e: Configure local embedding provider ─────────────────────────────
-# node-llama-cpp is installed as an optionalDependency. Point memory search at
-# it so semantic recall works without any cloud API keys.
-CURRENT_MEM_PROVIDER=$(jq -r '.agents.defaults.memorySearch.provider // empty' "$OPENCLAW_CONFIG" 2>/dev/null || true)
-if [[ -z "$CURRENT_MEM_PROVIDER" ]] || [[ "$FORCE" -eq 1 ]]; then
-    jq '.agents.defaults.memorySearch.provider = "local"' \
-        "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp" && mv "$OPENCLAW_CONFIG.tmp" "$OPENCLAW_CONFIG"
-    info "Memory search provider set to: local (node-llama-cpp)"
-    info "Embedding model will be downloaded on first use (~600MB)"
-else
-    info "Memory search provider already set to: $CURRENT_MEM_PROVIDER (skipping — use --force to override)"
-fi
-
 # ─── Step 6: Start gateway ───────────────────────────────────────────────────
 info "Starting gateway service..."
 systemctl --user daemon-reload
 systemctl --user restart "${AGENT_SERVICE_NAME}.service"
+GATEWAY_RESTARTED=1
 
 # ─── Step 7: Verify ──────────────────────────────────────────────────────────
 info "Waiting for gateway to come up..."
@@ -1219,6 +1366,30 @@ if [[ -n "$AGENT_NAME" ]]; then
 else
     openclaw_cmd gateway status --deep 2>&1 | grep -E "RPC probe|Runtime:|Gateway:" || true
 fi
+
+# ─── Step 7b: Verify the active config matches what was requested ────────────
+# The gateway loads openclaw.json at startup, so after the restart above the
+# on-disk values ARE the active values. Assert them so a silently-lost setting
+# (the historical failure mode) becomes a loud error instead.
+verify_config_value() {
+    local label="$1" expected="$2" actual="$3"
+    if [[ "$actual" != "$expected" ]]; then
+        error "VERIFY FAILED: ${label} is '${actual}' but this run requested '${expected}'. The gateway is running with WRONG settings — re-run this script and watch for earlier errors."
+    fi
+}
+ACTIVE_BASE_URL=$(jq -r --arg p "$MODEL_PROVIDER" '.models.providers[$p].baseUrl // empty' "$OPENCLAW_CONFIG")
+ACTIVE_CTX=$(jq -r --arg p "$MODEL_PROVIDER" --arg id "$MODEL_ID" \
+    '.models.providers[$p].models[]? | select(.id == $id) | .contextWindow // empty' "$OPENCLAW_CONFIG")
+ACTIVE_PRIMARY=$(jq -r '.agents.defaults.model.primary // empty' "$OPENCLAW_CONFIG")
+verify_config_value "provider baseUrl"        "$LLAMA_CPP_BASE_URL"    "$ACTIVE_BASE_URL"
+verify_config_value "model contextWindow"     "$MODEL_CONTEXT_WINDOW"  "$ACTIVE_CTX"
+verify_config_value "primary model"           "$MODEL_REF"             "$ACTIVE_PRIMARY"
+if [[ "$SUBAGENT_SAME_SERVER" -eq 0 ]]; then
+    ACTIVE_SUB_CTX=$(jq -r --arg p "$SUBAGENT_PROVIDER" --arg id "$SUBAGENT_MODEL_ID" \
+        '.models.providers[$p].models[]? | select(.id == $id) | .contextWindow // empty' "$OPENCLAW_CONFIG")
+    verify_config_value "subagent contextWindow" "$SUBAGENT_CONTEXT_WINDOW" "$ACTIVE_SUB_CTX"
+fi
+info "VERIFIED: contextWindow=${ACTIVE_CTX} active on ${ACTIVE_BASE_URL} (${MODEL_PROVIDER}), primary=${ACTIVE_PRIMARY}"
 
 info ""
 info "=== Setup complete ==="
