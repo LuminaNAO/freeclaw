@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # llamacpp-init.sh
 # Configures a fresh OpenClaw install to use a local llama.cpp server.
-# Run this after: build-switch.sh <branch>
+# Run this after: build-switch.sh <branch> --no-restart
+# (--no-restart skips build-switch's gateway restart; this script restarts the
+# gateway itself after committing the config, so the extra boot is wasted.)
 #
 # Usage: llamacpp-init.sh [agent-name] [--force]
 #
@@ -97,8 +99,7 @@ LLAMA_CPP_HOST="${LLAMA_CPP_HOST:-localhost}"
 LLAMA_CPP_PORT="${LLAMA_CPP_PORT:-40801}"
 LLAMA_CPP_API_KEY="${LLAMA_CPP_API_KEY:-ollama-local}"
 LLAMA_CPP_BASE_URL="${LLAMA_CPP_BASE_URL:-}"  # constructed after interactive prompts
-GATEWAY_PORT_START=40701
-GATEWAY_PORT_END=40798
+# Gateway port range constants come from lib-gateway.sh (sourced below).
 
 MODEL_PROVIDER="llama.cpp"
 # All of these are auto-detected from the running server. Set env vars to override.
@@ -118,47 +119,13 @@ info()  { printf '\e[32m[INFO]\e[0m  %s\n' "$*"; }
 warn()  { printf '\e[33m[WARN]\e[0m  %s\n' "$*"; }
 error() { printf '\e[31m[ERROR]\e[0m %s\n' "$*" >&2; exit 1; }
 
-port_in_use() {
-    local port="$1"
-    ss -H -ltn "sport = :${port}" 2>/dev/null | grep -q .
-}
-
-find_free_port() {
-    local preferred="$1"
-    local start="$2"
-    local end="$3"
-
-    if ! port_in_use "$preferred"; then
-        echo "$preferred"
-        return 0
-    fi
-
-    local p
-    for p in $(seq "$start" "$end"); do
-        if ! port_in_use "$p"; then
-            echo "$p"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-is_gateway_port_range() {
-    local port="$1"
-    [[ "$port" =~ ^[0-9]+$ ]] && [[ "$port" -ge "$GATEWAY_PORT_START" ]] && [[ "$port" -le "$GATEWAY_PORT_END" ]]
-}
-
-generate_gateway_port() {
-    local port
-    while true; do
-        port=$(shuf -i "${GATEWAY_PORT_START}-${GATEWAY_PORT_END}" -n 1)
-        if ! port_in_use "$port"; then
-            echo "$port"
-            return
-        fi
-    done
-}
+# Shared gateway/service helpers (port policy, systemd unit generator,
+# process/lock cleanup) — single source of truth, also used by build-switch.sh.
+LIB_GATEWAY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-gateway.sh"
+if [[ ! -f "$LIB_GATEWAY" ]]; then
+    error "Missing $LIB_GATEWAY — this script ships with lib-gateway.sh; restore it from the repo."
+fi
+source "$LIB_GATEWAY"
 
 normalize_gateway_bind() {
     local value
@@ -224,45 +191,7 @@ config_string_or_empty() {
     jq -r "${path} | strings" "$file" 2>/dev/null || true
 }
 
-systemd_set_env() {
-    local file="$1"
-    local key="$2"
-    local value="$3"
-    local after_key="${4:-}"
-    local tmp="${file}.tmp"
-
-    if grep -q "^Environment=${key}=" "$file"; then
-        awk -v key="$key" -v value="$value" '
-            $0 ~ "^Environment=" key "=" {
-                print "Environment=" key "=" value
-                next
-            }
-            { print }
-        ' "$file" > "$tmp" && mv "$tmp" "$file"
-        return
-    fi
-
-    if [[ -n "$after_key" ]] && grep -q "^Environment=${after_key}=" "$file"; then
-        awk -v key="$key" -v value="$value" -v after_key="$after_key" '
-            { print }
-            $0 ~ "^Environment=" after_key "=" {
-                print "Environment=" key "=" value
-            }
-        ' "$file" > "$tmp" && mv "$tmp" "$file"
-        return
-    fi
-
-    awk -v key="$key" -v value="$value" '
-        /^\[Install\]/ && !inserted {
-            print "Environment=" key "=" value
-            inserted = 1
-        }
-        { print }
-        END {
-            if (!inserted) print "Environment=" key "=" value
-        }
-    ' "$file" > "$tmp" && mv "$tmp" "$file"
-}
+# systemd_set_env comes from lib-gateway.sh.
 
 # Derive state dir from agent name
 if [[ -n "$AGENT_NAME" ]]; then
@@ -771,44 +700,22 @@ info "Subagent model ref: ${SUBAGENT_MODEL_REF}"
 # Use that as the source of truth to avoid config/service port mismatches.
 # If the chosen port is held by another user's process, pick a free one instead.
 GATEWAY_SERVICE_FILE="$HOME/.config/systemd/user/${AGENT_SERVICE_NAME}.service"
-SERVICE_PORT=""
-if [[ -f "$GATEWAY_SERVICE_FILE" ]]; then
-    SERVICE_PORT=$(grep -oP 'OPENCLAW_GATEWAY_PORT=\K[0-9]+' "$GATEWAY_SERVICE_FILE" 2>/dev/null || echo "")
-fi
-if [[ -n "$SERVICE_PORT" ]] && is_gateway_port_range "$SERVICE_PORT"; then
-    GATEWAY_PORT="$SERVICE_PORT"
-    info "Using gateway port from service file: ${GATEWAY_PORT}"
-elif [[ -n "$SERVICE_PORT" ]]; then
-    warn "Service gateway port ${SERVICE_PORT} is outside ${GATEWAY_PORT_START}-${GATEWAY_PORT_END}; assigning a new port"
-elif [[ -f "$OPENCLAW_CONFIG" ]]; then
-    EXISTING_PORT=$(jq -r '.gateway.port // empty' "$OPENCLAW_CONFIG" 2>/dev/null || echo "")
-    if [[ -n "$EXISTING_PORT" ]] && is_gateway_port_range "$EXISTING_PORT"; then
-        GATEWAY_PORT="$EXISTING_PORT"
-        info "Reusing existing config port: ${GATEWAY_PORT}"
-    elif [[ -n "$EXISTING_PORT" ]]; then
-        warn "Config gateway port ${EXISTING_PORT} is outside ${GATEWAY_PORT_START}-${GATEWAY_PORT_END}; assigning a new port"
-    fi
-fi
-GATEWAY_PORT="${GATEWAY_PORT:-$(generate_gateway_port)}"
+GATEWAY_PORT=$(gw_resolve_port "$GATEWAY_SERVICE_FILE" "$OPENCLAW_CONFIG")
+info "Gateway port: ${GATEWAY_PORT}"
 
 # Verify chosen port isn't held by another user's process
-if port_in_use "$GATEWAY_PORT"; then
+if gw_port_in_use "$GATEWAY_PORT"; then
     # Port is in use — check if it's ours (our systemd service) or someone else's
     systemctl --user stop "$AGENT_SERVICE_NAME" 2>/dev/null || true
     sleep 1
-    if port_in_use "$GATEWAY_PORT"; then
+    if gw_port_in_use "$GATEWAY_PORT"; then
         # Still in use after stopping our service — another user holds it
         OLD_PORT="$GATEWAY_PORT"
-        for p in $(seq "$GATEWAY_PORT_START" "$GATEWAY_PORT_END"); do
-            if ! port_in_use "$p"; then
-                GATEWAY_PORT="$p"
-                break
-            fi
-        done
-        if [[ "$GATEWAY_PORT" == "$OLD_PORT" ]]; then
-            error "No free gateway port found in ${GATEWAY_PORT_START}-${GATEWAY_PORT_END}"
+        GATEWAY_PORT=$(gw_find_free_port "$GATEWAY_PORT" "$GATEWAY_PORT_START" "$GATEWAY_PORT_END") \
+            || error "No free gateway port found in ${GATEWAY_PORT_START}-${GATEWAY_PORT_END}"
+        if [[ "$GATEWAY_PORT" != "$OLD_PORT" ]]; then
+            warn "Port ${OLD_PORT} held by another process — switching to ${GATEWAY_PORT}"
         fi
-        warn "Port ${OLD_PORT} held by another process — switching to ${GATEWAY_PORT}"
     fi
 fi
 
@@ -1028,7 +935,7 @@ if [[ "$SIGNAL_CONFIGURED" == "yes" ]]; then
             (.channels.signal.httpUrl // "" | try capture(":(?<port>[0-9]+)(/)?$").port? catch null | tonumber?) //
             8080
         ' "$CONFIG_STAGING" 2>/dev/null || echo "8080")
-        SIGNAL_HTTP_PORT=$(find_free_port "$EXISTING_SIGNAL_PORT" 18080 18180) \
+        SIGNAL_HTTP_PORT=$(gw_find_free_port "$EXISTING_SIGNAL_PORT" 18080 18180) \
             || error "No free signal-cli HTTP port found in 18080-18180"
         SIGNAL_HTTP_HOST="127.0.0.1"
 
@@ -1088,51 +995,49 @@ fi
 commit_staged_config
 
 # ─── Step 3: Gateway service & auth token ────────────────────────────────────
-# For named agents, build-switch.sh already wrote the systemd service file.
-# We just need to ensure an auth token exists and is embedded in the service.
-# For the default (no agent name), fall back to `openclaw gateway install`.
+# build-switch.sh owns the systemd unit; this script only patches env values
+# (token, port, NODE_COMPILE_CACHE) into it. If no unit exists (an install
+# that never ran build-switch), generate one with the shared lib generator —
+# the SAME generator build-switch uses, so default and named agents get
+# identical units. `openclaw gateway install --force` is intentionally gone:
+# it overwrote build-switch's unit with a third-party variant (different node
+# binary, no compile cache) on every init run.
 info "Setting up gateway service..."
-systemctl --user stop "$AGENT_SERVICE_NAME" 2>/dev/null || true
-# Kill ALL stale gateway processes — orphans from previous installs hold the port
-# and cause the new gateway to crash-loop. Must happen before gateway install.
-OLD_GW_PIDS=$(pgrep -f "openclaw.*gateway|openclaw-gatewa" 2>/dev/null || true)
-if [[ -n "$OLD_GW_PIDS" ]]; then
-    warn "Killing stale gateway processes: $(echo $OLD_GW_PIDS | tr '\n' ' ')"
-    kill -9 $OLD_GW_PIDS 2>/dev/null || true
-    sleep 1
-fi
+gw_stop_service "$AGENT_SERVICE_NAME"
+gw_kill_stale_gateways
 mkdir -p "$HOME/.config/systemd/user"
 
-if [[ -n "$AGENT_NAME" ]]; then
-    # Named agent: service file written by build-switch.sh — just ensure token
-    GATEWAY_TOKEN=$(config_string_or_empty '.gateway.auth.token // empty' "$OPENCLAW_CONFIG")
-    if [[ -z "$GATEWAY_TOKEN" ]]; then
-        GATEWAY_TOKEN=$(openssl rand -hex 32)
-        jq --arg token "$GATEWAY_TOKEN" '.gateway.auth.token = $token' \
-            "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp.$$" && mv "$OPENCLAW_CONFIG.tmp.$$" "$OPENCLAW_CONFIG"
-        info "Generated gateway auth token."
-    fi
-    # Embed token in the service file
-    if [[ -f "$GATEWAY_SERVICE_FILE" ]]; then
-        systemd_set_env "$GATEWAY_SERVICE_FILE" "OPENCLAW_GATEWAY_TOKEN" "$GATEWAY_TOKEN" "OPENCLAW_GATEWAY_PORT"
-        info "Embedded gateway token in service env."
-    else
+# Token normally exists in config already (staged phase ensures one); this
+# also covers configs whose token is an unresolved SecretRef marker.
+GATEWAY_TOKEN=$(config_string_or_empty '.gateway.auth.token // empty' "$OPENCLAW_CONFIG")
+if [[ -z "$GATEWAY_TOKEN" ]]; then
+    GATEWAY_TOKEN=$(openssl rand -hex 32)
+    jq --arg token "$GATEWAY_TOKEN" '.gateway.auth.token = $token' \
+        "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp.$$" && mv "$OPENCLAW_CONFIG.tmp.$$" "$OPENCLAW_CONFIG"
+    info "Generated gateway auth token."
+fi
+
+if [[ ! -f "$GATEWAY_SERVICE_FILE" ]]; then
+    if [[ -n "$AGENT_NAME" ]]; then
         error "Service file not found: $GATEWAY_SERVICE_FILE — run build-switch.sh first"
     fi
+    warn "No gateway service unit found — generating one (build-switch.sh normally owns this)."
+    PKG_VERSION=$(jq -r '.version // "unknown"' "$FREECLAW_DIR/package.json" 2>/dev/null || echo "unknown")
+    REPO_BRANCH=$(git -C "$FREECLAW_DIR" branch --show-current 2>/dev/null || echo "")
+    GW_SERVICE_FILE="$GATEWAY_SERVICE_FILE" \
+    GW_SERVICE_NAME="$AGENT_SERVICE_NAME" \
+    GW_NODE_PATH="$OPENCLAW_NODE" \
+    GW_ENTRYPOINT="$OPENCLAW_ENTRYPOINT" \
+    GW_STATE_DIR="$OPENCLAW_STATE_DIR" \
+    GW_PORT="$GATEWAY_PORT" \
+    GW_VERSION_STRING="$(gw_version_for_branch "$REPO_BRANCH" "$PKG_VERSION")" \
+    GW_CMD_NAME="$AGENT_CMD_NAME" \
+    GW_TOKEN="$GATEWAY_TOKEN" \
+    GW_AGENT_NAME="$AGENT_NAME" \
+        gw_write_service_unit
 else
-    # Default install: let openclaw handle service creation
-    openclaw_cmd gateway install --force
-    GATEWAY_TOKEN=$(config_string_or_empty '.gateway.auth.token // empty' "$OPENCLAW_CONFIG")
-    if [[ -z "$GATEWAY_TOKEN" ]]; then
-        GATEWAY_TOKEN=$(openssl rand -hex 32)
-        jq --arg token "$GATEWAY_TOKEN" '.gateway.auth.token = $token' \
-            "$OPENCLAW_CONFIG" > "$OPENCLAW_CONFIG.tmp.$$" && mv "$OPENCLAW_CONFIG.tmp.$$" "$OPENCLAW_CONFIG"
-        info "Replaced unresolved gateway auth token SecretRef with a generated local token."
-    fi
-    if [[ -f "$GATEWAY_SERVICE_FILE" ]]; then
-        systemd_set_env "$GATEWAY_SERVICE_FILE" "OPENCLAW_GATEWAY_TOKEN" "$GATEWAY_TOKEN" "OPENCLAW_GATEWAY_PORT"
-        info "Re-embedded gateway token in service env."
-    fi
+    systemd_set_env "$GATEWAY_SERVICE_FILE" "OPENCLAW_GATEWAY_TOKEN" "$GATEWAY_TOKEN" "OPENCLAW_GATEWAY_PORT"
+    info "Embedded gateway token in existing service unit (unit preserved — build-switch.sh owns it)."
 fi
 
 # Ensure service file port matches the resolved GATEWAY_PORT (may have changed
@@ -1334,21 +1239,14 @@ printf '%s' "$MODELS_BASE" | jq \
 # and pacman-managed.
 
 # ─── Step 5c: Clean up orphaned agents and stale locks ───────────────────────
-ORPHANS=$(pgrep -f "openclaw-agent" 2>/dev/null || true)
-if [[ -n "$ORPHANS" ]]; then
-    warn "Killing orphaned openclaw-agent processes: $ORPHANS"
-    kill -9 $ORPHANS 2>/dev/null || true
-    sleep 1
-fi
-STALE_LOCKS=$(find "$OPENCLAW_STATE_DIR/agents" -name "*.lock" 2>/dev/null || true)
-if [[ -n "$STALE_LOCKS" ]]; then
-    warn "Removing stale session locks..."
-    rm -f $STALE_LOCKS
-fi
+gw_cleanup_agent_orphans "$OPENCLAW_STATE_DIR"
 
 # ─── Step 6: Start gateway ───────────────────────────────────────────────────
 info "Starting gateway service..."
 systemctl --user daemon-reload
+# Enable for boot autostart — `openclaw gateway install` used to do this;
+# idempotent, and required now that we generate/patch the unit ourselves.
+systemctl --user enable "${AGENT_SERVICE_NAME}.service" 2>/dev/null || true
 systemctl --user restart "${AGENT_SERVICE_NAME}.service"
 GATEWAY_RESTARTED=1
 

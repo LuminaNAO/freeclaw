@@ -63,24 +63,18 @@ warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
 info()  { echo -e "${BLUE}[INFO]${NC} $1"; }
 
+# Shared gateway/service helpers (single owner of the systemd unit generator,
+# port policy, and process/lock cleanup — also sourced by llamacpp-init.sh).
+LIB_GATEWAY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-gateway.sh"
+if [[ ! -f "$LIB_GATEWAY" ]]; then
+    error "Missing $LIB_GATEWAY — this script ships with lib-gateway.sh; restore it from the repo."
+    exit 1
+fi
+source "$LIB_GATEWAY"
+
 # ============================================================================
 # BRANCH HELPERS
 # ============================================================================
-
-# Derive a version string from a branch name + base version.
-#   main / master     → $version  (vanilla)
-#   freeclaw          → f$version
-#   freeclaw-*        → f$version-<suffix>
-#   anything else     → $version-<branch>
-version_for_branch() {
-    local branch="$1" version="$2"
-    case "$branch" in
-        main|master)  echo "$version" ;;
-        freeclaw)     echo "f$version" ;;
-        freeclaw-*)   echo "f${version}-${branch#freeclaw-}" ;;
-        *)            echo "$version-$branch" ;;
-    esac
-}
 
 # List local branch names in the repo (one per line, sorted).
 list_branches() {
@@ -136,10 +130,14 @@ select_agent() {
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [branch] [agent-name]
+Usage: $(basename "$0") [branch] [agent-name] [--no-restart]
 
   branch       - any local branch in $OPENCLAW_BASE
   status       - show current build and gateway status
+  --no-restart - build + write service, but skip the final gateway restart.
+                 Use in the two-script procedure (build-switch + llamacpp-init):
+                 llamacpp-init restarts the gateway anyway, so restarting here
+                 just boots it once on the old config for nothing.
 
 If no arguments are given, branch and agent name are selected interactively.
 
@@ -172,6 +170,12 @@ EOF
 # ============================================================================
 
 setup_env() {
+    # Some shells can inherit a stale NVM_DIR from another account. Normalize it
+    # before sourcing nvm so installs and lookups stay inside the current home.
+    if [[ -n "${NVM_DIR:-}" && "$NVM_DIR" != "$HOME/.nvm" && "$NVM_DIR" != "$HOME"/.config/nvm ]]; then
+        export NVM_DIR="$HOME/.nvm"
+    fi
+
     # Source nvm so we can use it in this script
     if [ -f "$HOME/.nvm/nvm.sh" ]; then
         source "$HOME/.nvm/nvm.sh"
@@ -197,26 +201,8 @@ setup_env() {
     mkdir -p "$HOME/.config/systemd/user"
 }
 
-# ============================================================================
-# PORT GENERATION
-# ============================================================================
-
-generate_agent_port() {
-    # Generate a random FreeClaw gateway port in 40701-40798.
-    local port
-    while true; do
-        port=$(shuf -i 40701-40798 -n 1)
-        if ! ss -H -ltn "sport = :${port}" 2>/dev/null | grep -q .; then
-            echo "$port"
-            return
-        fi
-    done
-}
-
-is_gateway_port_range() {
-    local port="$1"
-    [[ "$port" =~ ^[0-9]+$ ]] && [[ "$port" -ge 40701 ]] && [[ "$port" -le 40798 ]]
-}
+# Port generation/validation lives in lib-gateway.sh (gw_generate_port,
+# gw_is_gateway_port_range, gw_resolve_port).
 
 ensure_node() {
     # Check if the correct major version is already active
@@ -313,35 +299,16 @@ ensure_pnpm_on_path() {
 # ============================================================================
 
 stop_gateway() {
-    log "Stopping gateway ($AGENT_SERVICE_NAME)..."
-    systemctl --user stop "$AGENT_SERVICE_NAME" 2>/dev/null || true
-    sleep 2
-    if systemctl --user is-active --quiet "$AGENT_SERVICE_NAME" 2>/dev/null; then
-        warn "Gateway didn't stop cleanly, force-killing..."
-        systemctl --user kill "$AGENT_SERVICE_NAME" --signal=9 2>/dev/null || true
-        sleep 1
-    fi
-    # Kill orphaned openclaw-agent processes that hold session lock files.
-    # These survive gateway restarts and block new inference attempts.
-    local orphans
-    orphans=$(pgrep -f "openclaw-agent" 2>/dev/null || true)
-    if [[ -n "$orphans" ]]; then
-        warn "Killing orphaned openclaw-agent processes: $orphans"
-        kill -9 $orphans 2>/dev/null || true
-        sleep 1
-    fi
-    # Remove stale session lock files
-    local locks
-    locks=$(find "$AGENT_STATE_DIR/agents" -name "*.lock" 2>/dev/null || true)
-    if [[ -n "$locks" ]]; then
-        warn "Removing stale session locks..."
-        rm -f $locks
-    fi
+    gw_stop_service "$AGENT_SERVICE_NAME"
+    gw_cleanup_agent_orphans "$AGENT_STATE_DIR"
 }
 
 restart_gateway() {
     log "Restarting gateway ($AGENT_SERVICE_NAME)..."
-    systemctl --user daemon-reload
+    if ! systemctl --user daemon-reload 2>/dev/null; then
+        warn "systemd user bus is unavailable; installed shims and service file, skipped gateway restart."
+        return 0
+    fi
     systemctl --user restart "$AGENT_SERVICE_NAME"
     sleep 3
     if systemctl --user is-active --quiet "$AGENT_SERVICE_NAME"; then
@@ -371,71 +338,27 @@ update_service() {
     # Resolve node path dynamically — never hardcode nvm paths
     local node_path
     node_path=$(which node)
-    local node_dir
-    node_dir=$(dirname "$node_path")
 
     local version
     version=$(node -e "console.log(require('$OPENCLAW_BASE/package.json').version)")
 
-    local version_string
-    version_string=$(version_for_branch "$branch" "$version")
+    # Reuse the port from the existing service file (source of truth) or
+    # config; generate a fresh one in the FreeClaw gateway block otherwise so
+    # one firewall rule covers local gateways while leaving 40801 for llama.cpp.
+    local gw_port
+    gw_port=$(gw_resolve_port "$OPENCLAW_SERVICE" "$AGENT_STATE_DIR/openclaw.json")
 
-    local token
-    token=$(get_current_token)
-
-    # Determine gateway port. Keep ports in the FreeClaw gateway block so one
-    # firewall rule can cover local gateways while leaving 40801 for llama.cpp.
-    local gw_port=""
-    if [[ -f "$OPENCLAW_SERVICE" ]]; then
-        local existing_port
-        existing_port=$(grep -oP 'OPENCLAW_GATEWAY_PORT=\K[0-9]+' "$OPENCLAW_SERVICE" 2>/dev/null || echo "")
-        if is_gateway_port_range "$existing_port"; then
-            gw_port="$existing_port"
-            log "Reusing existing gateway port: $gw_port"
-        elif [[ -n "$existing_port" ]]; then
-            log "Existing gateway port $existing_port is outside 40701-40798; assigning a new port"
-        fi
-    fi
-    if [[ -z "$gw_port" ]]; then
-        gw_port=$(generate_agent_port)
-        log "Generated gateway port: $gw_port"
-    fi
-
-    # Build PATH for the service: pnpm bin + node bin + standard paths
-    local svc_path="$PNPM_BIN_DIR:$PNPM_HOME:$node_dir:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:/usr/local/bin:/usr/bin:/bin"
-
-    local agent_label="$AGENT_CMD_NAME"
-    local svc_description="OpenClaw Gateway ($version_string)"
-    if [[ -n "$AGENT_NAME" ]]; then
-        svc_description="OpenClaw Gateway - $AGENT_NAME ($version_string)"
-    fi
-
-    cat > "$OPENCLAW_SERVICE" <<EOF
-[Unit]
-Description=$svc_description
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-ExecStart=$node_path $OPENCLAW_BASE/dist/index.js gateway --port $gw_port
-Restart=always
-RestartSec=5
-KillMode=process
-Environment=HOME=$HOME
-Environment=TMPDIR=/tmp
-Environment=PATH=$svc_path
-Environment=OPENCLAW_STATE_DIR=$AGENT_STATE_DIR
-Environment=OPENCLAW_GATEWAY_PORT=$gw_port
-$([ -n "$token" ] && echo "Environment=OPENCLAW_GATEWAY_TOKEN=$token")
-Environment=OPENCLAW_SYSTEMD_UNIT=${AGENT_SERVICE_NAME}.service
-Environment=OPENCLAW_SERVICE_MARKER=$agent_label
-Environment=OPENCLAW_SERVICE_KIND=gateway
-Environment=OPENCLAW_SERVICE_VERSION=$version_string
-
-[Install]
-WantedBy=default.target
-EOF
-    log "Wrote systemd service (version: $version_string, node: $node_path, port: $gw_port)"
+    GW_SERVICE_FILE="$OPENCLAW_SERVICE" \
+    GW_SERVICE_NAME="$AGENT_SERVICE_NAME" \
+    GW_NODE_PATH="$node_path" \
+    GW_ENTRYPOINT="$OPENCLAW_BASE/dist/index.js" \
+    GW_STATE_DIR="$AGENT_STATE_DIR" \
+    GW_PORT="$gw_port" \
+    GW_VERSION_STRING="$(gw_version_for_branch "$branch" "$version")" \
+    GW_CMD_NAME="$AGENT_CMD_NAME" \
+    GW_TOKEN="$(get_current_token)" \
+    GW_AGENT_NAME="$AGENT_NAME" \
+        gw_write_service_unit
 }
 
 # ============================================================================
@@ -671,8 +594,16 @@ show_status() {
 # MAIN
 # ============================================================================
 
-BRANCH="${1:-}"
-ARG_AGENT="${2:-}"
+NO_RESTART=0
+POSITIONAL=()
+for arg in "$@"; do
+    case "$arg" in
+        --no-restart) NO_RESTART=1 ;;
+        *) POSITIONAL+=("$arg") ;;
+    esac
+done
+BRANCH="${POSITIONAL[0]:-}"
+ARG_AGENT="${POSITIONAL[1]:-}"
 
 case "$BRANCH" in
     --help|-h)
@@ -715,7 +646,11 @@ case "$BRANCH" in
         stop_gateway
         build_freeclaw "$BRANCH"
         update_service "$BRANCH"
-        restart_gateway
+        if [[ "$NO_RESTART" -eq 1 ]]; then
+            log "Skipping gateway restart (--no-restart) — gateway is STOPPED until llamacpp-init (or systemctl --user restart $AGENT_SERVICE_NAME) starts it."
+        else
+            restart_gateway
+        fi
         log "=== Switch complete! ==="
         show_status
         ;;
