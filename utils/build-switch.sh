@@ -469,6 +469,30 @@ install_shims() {
     fi
 }
 
+# Install the utils/*.sh|*.py suite as commands, matching `make install`
+# (basename minus extension, underscores -> dashes). Without this a build-switch
+# install has `openclaw` but NOT llamacpp-init, trustgraph, lib-gateway, etc. —
+# the gap versus an AUR/`make install`. The util scripts reference sibling utils
+# by their own directory, so all siblings must land in the same dir together
+# (they do here). Skipped for isolated agent installs (they share the base
+# commands) — util commands are per-repo, not per-agent.
+install_util_commands() {
+    local utils_dir="$OPENCLAW_BASE/utils" name base f shim_dir
+    [[ -d "$utils_dir" ]] || return 0
+    for shim_dir in "$PNPM_BIN_DIR" "$PNPM_HOME" "$HOME/.local/bin"; do
+        [[ -n "$shim_dir" ]] || continue
+        mkdir -p "$shim_dir"
+        for f in "$utils_dir"/*.sh "$utils_dir"/*.py; do
+            [[ -f "$f" ]] || continue
+            base="$(basename "$f")"
+            name="$(printf '%s' "${base%.*}" | tr '_' '-')"
+            [[ "$name" == "openclaw" ]] && continue
+            ln -sfn "$f" "$shim_dir/$name"
+        done
+    done
+    log "Installed util commands (llamacpp-init, trustgraph, diagnose-gateway-hang, lib-gateway, ...) — matches make install"
+}
+
 # ============================================================================
 # BUILD & INSTALL
 # ============================================================================
@@ -527,6 +551,7 @@ build_freeclaw() {
     fi
 
     install_shims "$node_bin" "$entrypoint"
+    install_util_commands
 
     log "=== Build complete! ==="
 
