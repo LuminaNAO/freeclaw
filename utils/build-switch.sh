@@ -401,6 +401,11 @@ write_shim() {
 
     for shim_dir in "$PNPM_BIN_DIR" "$PNPM_HOME" "$HOME/.local/bin"; do
         mkdir -p "$shim_dir"
+        # Remove the name before writing it. A previous install can leave the
+        # shim as a symlink whose target no longer exists; `>` follows the link
+        # to the missing target and fails with "No such file or directory",
+        # aborting the install.
+        rm -f "$shim_dir/$name"
         {
             echo "#!/bin/sh"
             for line in "${env_lines[@]}"; do
