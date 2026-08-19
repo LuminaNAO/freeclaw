@@ -477,10 +477,17 @@ install_shims() {
 # Install the utils/*.sh|*.py suite as commands, matching `make install`
 # (basename minus extension, underscores -> dashes). Without this a build-switch
 # install has `openclaw` but NOT llamacpp-init, trustgraph, lib-gateway, etc. —
-# the gap versus an AUR/`make install`. The util scripts reference sibling utils
-# by their own directory, so all siblings must land in the same dir together
-# (they do here). Skipped for isolated agent installs (they share the base
-# commands) — util commands are per-repo, not per-agent.
+# the gap versus an AUR/`make install`. Skipped for isolated agent installs
+# (they share the base commands) — util commands are per-repo, not per-agent.
+#
+# Each command is a WRAPPER that execs the script in the checkout, not a symlink
+# to it. The util scripts resolve their siblings from the directory of the path
+# they were invoked by ("$(dirname "${BASH_SOURCE[0]}")"), and bash does not
+# follow symlinks for that: invoked through a symlink in ~/.local/bin, that
+# directory is ~/.local/bin, which holds no lib-gateway.sh (the commands are
+# installed without their extension). On a fresh box llamacpp-init died on its
+# first line of real work with "Missing ~/.local/bin/lib-gateway.sh". Exec'ing
+# the real path keeps that directory utils/, where every sibling lives.
 install_util_commands() {
     local utils_dir="$OPENCLAW_BASE/utils" name base f shim_dir
     [[ -d "$utils_dir" ]] || return 0
@@ -492,7 +499,11 @@ install_util_commands() {
             base="$(basename "$f")"
             name="$(printf '%s' "${base%.*}" | tr '_' '-')"
             [[ "$name" == "openclaw" ]] && continue
-            ln -sfn "$f" "$shim_dir/$name"
+            # rm -f first: the name may be a symlink from an earlier install
+            # (possibly dangling), and `>` would follow it.
+            rm -f "$shim_dir/$name"
+            printf '#!/bin/sh\nexec "%s" "$@"\n' "$f" > "$shim_dir/$name"
+            chmod +x "$shim_dir/$name"
         done
     done
     log "Installed util commands (llamacpp-init, trustgraph, diagnose-gateway-hang, lib-gateway, ...) — matches make install"
