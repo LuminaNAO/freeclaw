@@ -2,7 +2,7 @@ import type { SlashCommand } from "@mariozechner/pi-tui";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { USAGE_TIMEFRAMES } from "../usage/usage-stats.js";
+import { listKnownAgentIds, USAGE_TIMEFRAMES } from "../usage/usage-stats.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
 const FAST_LEVELS = ["status", "on", "off"];
@@ -38,6 +38,29 @@ function createLevelCompletion(
       }));
 }
 
+/**
+ * `/usagestats` takes an optional agent id and an optional timeframe, so suggest
+ * both. Agent ids come from transcript directories on disk; a read failure just
+ * means we fall back to timeframes only.
+ */
+function createUsageStatsCompletion(): NonNullable<SlashCommand["getArgumentCompletions"]> {
+  return (prefix) => {
+    const lower = prefix.toLowerCase();
+    let agentIds: string[] = [];
+    try {
+      agentIds = listKnownAgentIds();
+    } catch {
+      agentIds = [];
+    }
+    const timeframes = USAGE_TIMEFRAMES.map((value) => ({
+      value,
+      label: `${value} (timeframe)`,
+    }));
+    const agents = agentIds.map((value) => ({ value, label: `${value} (agent)` }));
+    return [...agents, ...timeframes].filter((item) => item.value.toLowerCase().startsWith(lower));
+  };
+}
+
 export function parseCommand(input: string): ParsedCommand {
   const trimmed = input.replace(/^\//, "").trim();
   if (!trimmed) {
@@ -59,7 +82,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   const usageCompletions = createLevelCompletion(USAGE_FOOTER_LEVELS);
   const elevatedCompletions = createLevelCompletion(ELEVATED_LEVELS);
   const activationCompletions = createLevelCompletion(ACTIVATION_LEVELS);
-  const timeframeCompletions = createLevelCompletion([...USAGE_TIMEFRAMES]);
+  const usageStatsCompletions = createUsageStatsCompletion();
   const commands: SlashCommand[] = [
     { name: "help", description: "Show slash command help" },
     { name: "status", description: "Show gateway status summary" },
@@ -102,8 +125,8 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     },
     {
       name: "usagestats",
-      description: "Show token usage by agent and model",
-      getArgumentCompletions: timeframeCompletions,
+      description: "Show token usage (all agents, or one agent in detail)",
+      getArgumentCompletions: usageStatsCompletions,
     },
     {
       name: "elevated",
@@ -160,7 +183,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/verbose <on|off>",
     "/reasoning <on|off>",
     "/usage <off|tokens|full>",
-    `/usagestats <${USAGE_TIMEFRAMES.join("|")}>`,
+    `/usagestats [agentId] [${USAGE_TIMEFRAMES.join("|")}]`,
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
     "/activation <mention|always>",

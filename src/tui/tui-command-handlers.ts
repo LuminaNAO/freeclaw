@@ -5,15 +5,18 @@ import {
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
+import { loadConfig } from "../config/config.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getTerminalTableWidth } from "../terminal/table.js";
-import { renderUsageReport } from "../usage/usage-render.js";
+import { renderAgentUsageDetail, renderUsageReport } from "../usage/usage-render.js";
 import {
+  buildAgentUsageDetail,
   buildUsageReport,
-  DEFAULT_USAGE_TIMEFRAME,
-  isUsageTimeframe,
+  costLookupFromConfig,
+  listKnownAgentIds,
+  parseUsageCommandArgs,
   USAGE_TIMEFRAMES,
 } from "../usage/usage-stats.js";
 import { helpText, parseCommand } from "./commands.js";
@@ -415,16 +418,40 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       }
       case "usagestats": {
-        const requested = args.trim().toLowerCase();
-        if (requested && !isUsageTimeframe(requested)) {
-          chatLog.addSystem(`usage: /usagestats <${USAGE_TIMEFRAMES.join("|")}>`);
+        const parsed = parseUsageCommandArgs(args);
+        if (parsed.kind === "invalid") {
+          chatLog.addSystem(
+            `unexpected argument "${parsed.token}"\nusage: /usagestats [agentId] [${USAGE_TIMEFRAMES.join("|")}]`,
+          );
           break;
         }
-        const timeframe = isUsageTimeframe(requested) ? requested : DEFAULT_USAGE_TIMEFRAME;
+        const width = getTerminalTableWidth();
+        let costLookup: ReturnType<typeof costLookupFromConfig>;
         try {
-          setActivityStatus(`collecting usage (${timeframe})`);
-          const report = await buildUsageReport({ timeframe });
-          chatLog.addSystem(renderUsageReport(report, { width: getTerminalTableWidth() }));
+          costLookup = costLookupFromConfig(loadConfig());
+        } catch {
+          costLookup = undefined;
+        }
+        try {
+          if (parsed.kind === "agent") {
+            setActivityStatus(`collecting usage for ${parsed.agentId} (${parsed.timeframe})`);
+            const detail = await buildAgentUsageDetail({
+              agentId: parsed.agentId,
+              timeframe: parsed.timeframe,
+              costLookup,
+            });
+            if (!detail.agentExists) {
+              const known = listKnownAgentIds();
+              const hint = known.length > 0 ? `\nknown agents: ${known.join(", ")}` : "";
+              chatLog.addSystem(`no usage recorded for agent "${parsed.agentId}"${hint}`);
+              break;
+            }
+            chatLog.addSystem(renderAgentUsageDetail(detail, { width }));
+            break;
+          }
+          setActivityStatus(`collecting usage (${parsed.timeframe})`);
+          const report = await buildUsageReport({ timeframe: parsed.timeframe, costLookup });
+          chatLog.addSystem(renderUsageReport(report, { width }));
         } catch (err) {
           chatLog.addSystem(`usagestats failed: ${String(err)}`);
         } finally {
