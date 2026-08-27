@@ -101,7 +101,7 @@ LLAMA_CPP_API_KEY="${LLAMA_CPP_API_KEY:-ollama-local}"
 LLAMA_CPP_BASE_URL="${LLAMA_CPP_BASE_URL:-}"  # constructed after interactive prompts
 # Gateway port range constants come from lib-gateway.sh (sourced below).
 
-MODEL_PROVIDER="llama.cpp"
+MODEL_PROVIDER="${LLAMA_CPP_PROVIDER:-llama.cpp}"
 # All of these are auto-detected from the running server. Set env vars to override.
 MODEL_ID="${MODEL_ID:-}"                      # auto: /v1/models
 MODEL_CONTEXT_WINDOW="${MODEL_CONTEXT_WINDOW:-}"  # auto: /slots[0].n_ctx
@@ -336,6 +336,10 @@ if [[ -z "$LLAMA_CPP_BASE_URL" ]]; then
     printf "\e[36m[INPUT]\e[0m API key for the endpoint (blank keeps default) [%s]: " "$LLAMA_CPP_API_KEY"
     read -r user_key
     [[ -n "$user_key" ]] && LLAMA_CPP_API_KEY="$user_key"
+
+    printf "\e[36m[INPUT]\e[0m Provider label shown in the picker [%s]: " "$MODEL_PROVIDER"
+    read -r user_provider
+    [[ -n "$user_provider" ]] && MODEL_PROVIDER="$user_provider"
 
     LLAMA_CPP_BASE_URL="http://${LLAMA_CPP_HOST}:${LLAMA_CPP_PORT}"
     info "Inference URL: ${LLAMA_CPP_BASE_URL}"
