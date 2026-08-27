@@ -333,11 +333,24 @@ if [[ -z "$LLAMA_CPP_BASE_URL" ]]; then
     read -r user_port
     [[ -n "$user_port" ]] && LLAMA_CPP_PORT="$user_port"
 
+    printf "\e[36m[INPUT]\e[0m API key for the endpoint (blank keeps default) [%s]: " "$LLAMA_CPP_API_KEY"
+    read -r user_key
+    [[ -n "$user_key" ]] && LLAMA_CPP_API_KEY="$user_key"
+
     LLAMA_CPP_BASE_URL="http://${LLAMA_CPP_HOST}:${LLAMA_CPP_PORT}"
     info "Inference URL: ${LLAMA_CPP_BASE_URL}"
 fi
 
-DEFAULT_CONTEXT=131072
+# Offer the endpoint native context window when it advertises one (llama.cpp
+# /props, or cloudburst which mirrors it), so the operator is shown the real
+# value instead of a generic guess.
+_native_ctx=""
+if [[ -n "$LLAMA_CPP_BASE_URL" ]]; then
+    _native_ctx=$(curl -sf -H "Authorization: Bearer ${LLAMA_CPP_API_KEY}" "${LLAMA_CPP_BASE_URL}/props" 2>/dev/null | jq -r "(.default_generation_settings.n_ctx // .n_ctx // empty)" 2>/dev/null || true)
+    [[ "$_native_ctx" =~ ^[1-9][0-9]*$ ]] || _native_ctx=""
+    [[ -n "$_native_ctx" ]] && info "Endpoint advertises native context: ${_native_ctx}"
+fi
+DEFAULT_CONTEXT="${_native_ctx:-131072}"
 if [[ -z "$MODEL_CONTEXT_WINDOW" ]]; then
     printf '\e[36m[INPUT]\e[0m Max context window in tokens [%s]: ' "$DEFAULT_CONTEXT"
     read -r user_ctx
@@ -497,9 +510,15 @@ fi
 
 # ─── Connect to llama.cpp ────────────────────────────────────────────────────
 info "Checking llama.cpp server at ${LLAMA_CPP_BASE_URL}..."
-MODELS_RESPONSE=$(curl -sf "${LLAMA_CPP_BASE_URL}/v1/models" \
-    -H "Authorization: Bearer ${LLAMA_CPP_API_KEY}") \
-    || error "Cannot reach llama.cpp at ${LLAMA_CPP_BASE_URL}. Is the server running?"
+_probe_body="/tmp/_lci_models.$$"
+_probe_code=$(curl -s -o "$_probe_body" -w "%{http_code}" -H "Authorization: Bearer ${LLAMA_CPP_API_KEY}" "${LLAMA_CPP_BASE_URL}/v1/models" 2>/dev/null || echo 000)
+MODELS_RESPONSE=$(cat "$_probe_body" 2>/dev/null || echo "{}"); rm -f "$_probe_body"
+case "$_probe_code" in
+    200) : ;;
+    401|403) error "Endpoint ${LLAMA_CPP_BASE_URL} is reachable but rejected the API key (HTTP ${_probe_code}). Set LLAMA_CPP_API_KEY to the endpoint key (for a cloudburst endpoint, its inbound apiKey)." ;;
+    000) error "Cannot reach ${LLAMA_CPP_BASE_URL} (connection failed). Check host/port and that the server is running." ;;
+    *) error "Unexpected HTTP ${_probe_code} from ${LLAMA_CPP_BASE_URL}/v1/models." ;;
+esac
 info "llama.cpp server is reachable."
 
 # Auto-detect model ID from the server if not explicitly set
