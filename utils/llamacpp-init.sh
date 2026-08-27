@@ -469,7 +469,7 @@ openclaw_cmd() { OPENCLAW_STATE_DIR="$OPENCLAW_STATE_DIR" "$OPENCLAW_NODE" "$OPE
 
 # Check for existing config
 if [[ -f "$OPENCLAW_CONFIG" ]]; then
-    if grep -q '"llama.cpp"' "$OPENCLAW_CONFIG" 2>/dev/null; then
+    if grep -q "\"llama.cpp\"" "$OPENCLAW_CONFIG" 2>/dev/null || grep -q "\"${MODEL_PROVIDER}\"" "$OPENCLAW_CONFIG" 2>/dev/null; then
         warn "llama.cpp provider already configured — re-applying..."
     elif [[ "$FORCE" -eq 1 ]]; then
         warn "--force set: overwriting existing config at $OPENCLAW_CONFIG"
