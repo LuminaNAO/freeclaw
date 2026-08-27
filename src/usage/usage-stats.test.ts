@@ -3,12 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  aggregateAgentDetail,
   aggregateUsage,
+  buildAgentUsageDetail,
   buildUsageReport,
   collectUsageTurns,
+  formatDayKey,
   formatModelKey,
   isUsageTimeframe,
+  listAgentIds,
+  listKnownAgentIds,
   listTranscriptFiles,
+  costLookupFromConfig,
+  parseUsageCommandArgs,
   parseUsageLine,
   resolveSince,
   totalTokens,
@@ -145,6 +152,21 @@ describe("parseUsageLine", () => {
       model: "unknown",
     });
   });
+
+  it("keeps a positive recorded cost and drops a zero-cost object", () => {
+    const billed = parseUsageLine(
+      line({
+        usage: { input: 10, output: 1, cost: { total: 0.42, input: 0.4, output: 0.02 } },
+      }),
+      "main",
+    );
+    expect(billed?.cost).toBeCloseTo(0.42);
+    const free = parseUsageLine(
+      line({ usage: { input: 10, output: 1, cost: { total: 0 } } }),
+      "main",
+    );
+    expect(free?.cost).toBeUndefined();
+  });
 });
 
 describe("formatModelKey", () => {
@@ -258,6 +280,87 @@ describe("aggregateUsage", () => {
     expect(report.agents).toEqual([]);
     expect(totalTokens(report.totals)).toBe(0);
   });
+
+  it("sums recorded positive costs and leaves unpriced models without a cost", () => {
+    const report = aggregateUsage(
+      [
+        turn({ provider: "cloudburst", model: "grok-4.6", input: 1000, cost: 0.12 }),
+        turn({ provider: "cloudburst", model: "grok-4.6", input: 500, cost: 0.04 }),
+        turn({ provider: "llama.cpp", model: "a.gguf", input: 9000 }),
+      ],
+      { timeframe: "all", now: NOW },
+    );
+    expect(report.totals.cost).toBeCloseTo(0.16);
+    const grok = report.agents[0].models.find((m) => m.key === "cloudburst/grok-4.6");
+    const local = report.agents[0].models.find((m) => m.key === "llama.cpp/a.gguf");
+    expect(grok?.cost).toBeCloseTo(0.16);
+    expect(local?.cost).toBeUndefined();
+  });
+
+  it("estimates cost from a lookup when the transcript recorded none", () => {
+    const lookup = (provider: string, model: string) =>
+      provider === "cloudburst" && model === "grok-4.6"
+        ? { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+        : undefined;
+    const report = aggregateUsage(
+      [
+        turn({
+          provider: "cloudburst",
+          model: "grok-4.6",
+          input: 1_000_000,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        }),
+        turn({ provider: "llama.cpp", model: "a.gguf", input: 1_000_000 }),
+      ],
+      { timeframe: "all", now: NOW, costLookup: lookup },
+    );
+    expect(report.totals.cost).toBeCloseTo(3);
+    expect(report.agents[0].models.find((m) => m.provider === "llama.cpp")?.cost).toBeUndefined();
+  });
+
+  it("prefers recorded cost over the estimated rate", () => {
+    const lookup = () => ({ input: 99, output: 99, cacheRead: 99, cacheWrite: 99 });
+    const report = aggregateUsage([turn({ input: 1_000_000, cost: 0.5 })], {
+      timeframe: "all",
+      now: NOW,
+      costLookup: lookup,
+    });
+    expect(report.totals.cost).toBeCloseTo(0.5);
+  });
+
+  it("treats recorded zero cost as unpriced so local models stay blank", () => {
+    const report = aggregateUsage([turn({ cost: 0 })], { timeframe: "all", now: NOW });
+    expect(report.totals.cost).toBeUndefined();
+  });
+});
+
+describe("costLookupFromConfig", () => {
+  it("returns rates for priced models and ignores all-zero defaults", () => {
+    const lookup = costLookupFromConfig({
+      models: {
+        providers: {
+          cloudburst: {
+            models: [
+              { id: "grok-4.6", cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } },
+            ],
+          },
+          "llama.cpp": {
+            models: [{ id: "a.gguf", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+          },
+        },
+      },
+    });
+    expect(lookup?.("cloudburst", "grok-4.6")?.input).toBe(3);
+    expect(lookup?.("llama.cpp", "a.gguf")).toBeUndefined();
+    expect(lookup?.("missing", "x")).toBeUndefined();
+  });
+
+  it("returns undefined when config has no providers", () => {
+    expect(costLookupFromConfig(undefined)).toBeUndefined();
+    expect(costLookupFromConfig({})).toBeUndefined();
+  });
 });
 
 describe("transcript discovery and reading", () => {
@@ -310,5 +413,309 @@ describe("transcript discovery and reading", () => {
 
     const allTime = await buildUsageReport({ timeframe: "all", stateDir: dir, now: NOW });
     expect(allTime.totals.turns).toBe(2);
+  });
+});
+
+const UTC = "UTC";
+const DAY = 24 * 60 * 60 * 1000;
+
+/** Midnight-anchored so day bucketing does not straddle a boundary by accident. */
+const NOON = Date.parse("2026-08-27T12:00:00.000Z");
+
+function detail(
+  turns: UsageTurn[],
+  over: { timeframe?: "1h" | "24h" | "7d" | "30d" | "all" } = {},
+) {
+  return aggregateAgentDetail(turns, {
+    agentId: "main",
+    timeframe: over.timeframe ?? "7d",
+    now: NOON,
+    timeZone: UTC,
+  });
+}
+
+describe("formatDayKey", () => {
+  it("formats a local-calendar day as YYYY-MM-DD", () => {
+    expect(formatDayKey(Date.parse("2026-08-27T12:00:00.000Z"), UTC)).toBe("2026-08-27");
+  });
+
+  it("respects the supplied timezone across a day boundary", () => {
+    const lateUtc = Date.parse("2026-08-27T23:30:00.000Z");
+    expect(formatDayKey(lateUtc, UTC)).toBe("2026-08-27");
+    expect(formatDayKey(lateUtc, "Asia/Tokyo")).toBe("2026-08-28");
+    const earlyUtc = Date.parse("2026-08-27T00:30:00.000Z");
+    expect(formatDayKey(earlyUtc, "America/Los_Angeles")).toBe("2026-08-26");
+  });
+});
+
+describe("aggregateAgentDetail", () => {
+  it("rolls up per model and per day for one agent", () => {
+    const result = detail([
+      turn({ timestamp: NOON, model: "a.gguf", input: 100, output: 10 }),
+      turn({ timestamp: NOON - DAY, model: "a.gguf", input: 50, output: 5 }),
+      turn({ timestamp: NOON - DAY, model: "b.gguf", input: 7, output: 1 }),
+    ]);
+
+    expect(result.agentId).toBe("main");
+    expect(result.totals).toMatchObject({ input: 157, output: 16, turns: 3 });
+    expect(result.models.map((m) => m.key)).toEqual(["llama.cpp/a.gguf", "llama.cpp/b.gguf"]);
+    expect(result.models[0]).toMatchObject({ input: 150, output: 15, turns: 2 });
+
+    expect(result.days.map((d) => d.day)).toEqual(["2026-08-27", "2026-08-26"]);
+    expect(result.days[0]).toMatchObject({ input: 100, output: 10, turns: 1 });
+    expect(result.days[1]).toMatchObject({ input: 57, output: 6, turns: 2 });
+    expect(result.days[1].models.map((m) => m.key)).toEqual([
+      "llama.cpp/a.gguf",
+      "llama.cpp/b.gguf",
+    ]);
+  });
+
+  it("orders days most recent first and models busiest first", () => {
+    const result = detail([
+      turn({ timestamp: NOON - 2 * DAY, input: 1 }),
+      turn({ timestamp: NOON, input: 5 }),
+      turn({ timestamp: NOON - DAY, input: 3 }),
+      turn({ timestamp: NOON, model: "big.gguf", input: 9000 }),
+    ]);
+    expect(result.days.map((d) => d.day)).toEqual(["2026-08-27", "2026-08-26", "2026-08-25"]);
+    expect(result.models[0].key).toBe("llama.cpp/big.gguf");
+  });
+
+  it("ignores turns belonging to other agents", () => {
+    const result = detail([
+      turn({ agentId: "main", input: 10 }),
+      turn({ agentId: "worker", input: 999 }),
+    ]);
+    expect(result.totals).toMatchObject({ input: 10, turns: 1 });
+    expect(result.days).toHaveLength(1);
+  });
+
+  it("applies the timeframe window", () => {
+    const turns = [
+      turn({ timestamp: NOON, input: 1 }),
+      turn({ timestamp: NOON - 3 * DAY, input: 10 }),
+      turn({ timestamp: NOON - 20 * DAY, input: 100 }),
+    ];
+    expect(detail(turns, { timeframe: "24h" }).totals.input).toBe(1);
+    expect(detail(turns, { timeframe: "7d" }).totals.input).toBe(11);
+    expect(detail(turns, { timeframe: "30d" }).totals.input).toBe(111);
+    expect(detail(turns, { timeframe: "all" }).totals.input).toBe(111);
+  });
+
+  it("counts undated turns in model totals but leaves them out of the day view", () => {
+    const result = detail(
+      [turn({ timestamp: NOON, input: 5 }), turn({ timestamp: undefined, input: 7 })],
+      { timeframe: "all" },
+    );
+    expect(result.totals).toMatchObject({ input: 12, turns: 2 });
+    expect(result.models[0].input).toBe(12);
+    expect(result.days).toHaveLength(1);
+    expect(result.days[0].input).toBe(5);
+    expect(result.skippedUndated).toBe(1);
+  });
+
+  it("excludes undated turns entirely from a bounded window", () => {
+    const result = detail(
+      [turn({ timestamp: NOON, input: 5 }), turn({ timestamp: undefined, input: 7 })],
+      { timeframe: "7d" },
+    );
+    expect(result.totals).toMatchObject({ input: 5, turns: 1 });
+    expect(result.skippedUndated).toBe(1);
+  });
+
+  it("groups turns on the same day into one row", () => {
+    const result = detail([
+      turn({ timestamp: Date.parse("2026-08-27T01:00:00.000Z"), input: 1 }),
+      turn({ timestamp: Date.parse("2026-08-27T22:00:00.000Z"), input: 2 }),
+    ]);
+    expect(result.days).toHaveLength(1);
+    expect(result.days[0]).toMatchObject({ day: "2026-08-27", input: 3, turns: 2 });
+  });
+
+  it("carries priced cost onto the matching day", () => {
+    const result = aggregateAgentDetail(
+      [
+        turn({ timestamp: NOON, cost: 0.1, input: 10 }),
+        turn({ timestamp: NOON - DAY, cost: 0.2, input: 20 }),
+        turn({ timestamp: NOON - DAY, input: 5 }),
+      ],
+      { agentId: "main", timeframe: "7d", now: NOON, timeZone: UTC },
+    );
+    expect(result.totals.cost).toBeCloseTo(0.3);
+    expect(result.days[0].cost).toBeCloseTo(0.1);
+    expect(result.days[1].cost).toBeCloseTo(0.2);
+  });
+
+  it("flags a completely unknown agent separately from a quiet window", () => {
+    const unknown = aggregateAgentDetail([turn({ agentId: "main" })], {
+      agentId: "ghost",
+      timeframe: "all",
+      now: NOON,
+      timeZone: UTC,
+    });
+    expect(unknown.agentExists).toBe(false);
+    expect(unknown.totals.turns).toBe(0);
+
+    const quiet = detail([turn({ timestamp: NOON - 60 * DAY })], { timeframe: "24h" });
+    expect(quiet.agentExists).toBe(true);
+    expect(quiet.totals.turns).toBe(0);
+    expect(quiet.days).toEqual([]);
+  });
+
+  it("keeps same-named models from different providers separate within a day", () => {
+    const result = detail([
+      turn({ timestamp: NOON, provider: "llama.cpp", model: "claude-opus-5", input: 1 }),
+      turn({ timestamp: NOON, provider: "cloudburst", model: "claude-opus-5", input: 2 }),
+    ]);
+    expect(result.days[0].models.map((m) => m.key).toSorted()).toEqual([
+      "cloudburst/claude-opus-5",
+      "llama.cpp/claude-opus-5",
+    ]);
+  });
+});
+
+describe("detail vs summary consistency", () => {
+  const turns = [
+    turn({ agentId: "main", timestamp: NOON, model: "a.gguf", input: 100, output: 5 }),
+    turn({ agentId: "main", timestamp: NOON - DAY, model: "b.gguf", input: 40, cacheRead: 9 }),
+    turn({ agentId: "main", timestamp: NOON - 2 * DAY, model: "a.gguf", input: 7 }),
+    turn({ agentId: "worker", timestamp: NOON, model: "a.gguf", input: 999 }),
+  ];
+
+  it("reports the same per-model numbers as the all-agents summary", () => {
+    for (const timeframe of ["24h", "7d", "30d", "all"] as const) {
+      const summary = aggregateUsage(turns, { timeframe, now: NOON });
+      const fromSummary = summary.agents.find((a) => a.agentId === "main");
+      const detail = aggregateAgentDetail(turns, {
+        agentId: "main",
+        timeframe,
+        now: NOON,
+        timeZone: UTC,
+      });
+      expect(detail.totals.turns).toBe(fromSummary?.turns ?? 0);
+      expect(detail.totals.input).toBe(fromSummary?.input ?? 0);
+      expect(detail.models.map((m) => [m.key, totalTokens(m)])).toEqual(
+        (fromSummary?.models ?? []).map((m) => [m.key, totalTokens(m)]),
+      );
+    }
+  });
+
+  it("day rows re-sum to the window totals", () => {
+    const detail = aggregateAgentDetail(turns, {
+      agentId: "main",
+      timeframe: "all",
+      now: NOON,
+      timeZone: UTC,
+    });
+    const summed = detail.days.reduce(
+      (acc, day) => ({
+        input: acc.input + day.input,
+        output: acc.output + day.output,
+        cacheRead: acc.cacheRead + day.cacheRead,
+        turns: acc.turns + day.turns,
+      }),
+      { input: 0, output: 0, cacheRead: 0, turns: 0 },
+    );
+    expect(summed).toEqual({
+      input: detail.totals.input,
+      output: detail.totals.output,
+      cacheRead: detail.totals.cacheRead,
+      turns: detail.totals.turns,
+    });
+  });
+});
+
+describe("parseUsageCommandArgs", () => {
+  it("defaults to the summary view over the default timeframe", () => {
+    expect(parseUsageCommandArgs("")).toEqual({ kind: "summary", timeframe: "24h" });
+    expect(parseUsageCommandArgs("   ")).toEqual({ kind: "summary", timeframe: "24h" });
+  });
+
+  it("reads a bare timeframe as a summary request", () => {
+    expect(parseUsageCommandArgs("7d")).toEqual({ kind: "summary", timeframe: "7d" });
+    expect(parseUsageCommandArgs("ALL")).toEqual({ kind: "summary", timeframe: "all" });
+  });
+
+  it("reads a bare agent id as a detail request on the default timeframe", () => {
+    expect(parseUsageCommandArgs("main")).toEqual({
+      kind: "agent",
+      agentId: "main",
+      timeframe: "24h",
+    });
+  });
+
+  it("accepts agent and timeframe in either order", () => {
+    expect(parseUsageCommandArgs("main 7d")).toEqual({
+      kind: "agent",
+      agentId: "main",
+      timeframe: "7d",
+    });
+    expect(parseUsageCommandArgs("7d main")).toEqual({
+      kind: "agent",
+      agentId: "main",
+      timeframe: "7d",
+    });
+  });
+
+  it("preserves agent id case while normalizing the timeframe", () => {
+    expect(parseUsageCommandArgs("MyAgent 30D")).toEqual({
+      kind: "agent",
+      agentId: "MyAgent",
+      timeframe: "30d",
+    });
+  });
+
+  it("rejects a duplicate timeframe or a stray extra token", () => {
+    expect(parseUsageCommandArgs("7d 24h")).toEqual({ kind: "invalid", token: "24h" });
+    expect(parseUsageCommandArgs("main worker")).toEqual({ kind: "invalid", token: "worker" });
+    expect(parseUsageCommandArgs("main 7d extra")).toEqual({ kind: "invalid", token: "extra" });
+  });
+
+  it("tolerates extra whitespace between tokens", () => {
+    expect(parseUsageCommandArgs("  main   7d  ")).toEqual({
+      kind: "agent",
+      agentId: "main",
+      timeframe: "7d",
+    });
+  });
+});
+
+describe("agent id listing", () => {
+  it("lists distinct agent ids from turns, sorted", () => {
+    expect(listAgentIds([turn({ agentId: "worker" }), turn({ agentId: "main" }), turn()])).toEqual([
+      "main",
+      "worker",
+    ]);
+    expect(listAgentIds([])).toEqual([]);
+  });
+
+  it("lists agent ids from disk without reading transcripts", () => {
+    const dir = makeStateDir({
+      "agents/worker/sessions/a.jsonl": "",
+      "agents/main/sessions/b.jsonl": "",
+    });
+    expect(listKnownAgentIds(dir)).toEqual(["main", "worker"]);
+  });
+
+  it("builds an agent detail end to end from disk", async () => {
+    const dir = makeStateDir({
+      "agents/main/sessions/a.jsonl": [
+        line({ ts: new Date(NOON).toISOString(), usage: { input: 10, output: 2 } }),
+        line({ ts: new Date(NOON - DAY).toISOString(), usage: { input: 4, output: 1 } }),
+      ].join("\n"),
+      "agents/worker/sessions/b.jsonl": line({
+        ts: new Date(NOON).toISOString(),
+        usage: { input: 999 },
+      }),
+    });
+    const result = await buildAgentUsageDetail({
+      agentId: "main",
+      timeframe: "7d",
+      stateDir: dir,
+      now: NOON,
+      timeZone: UTC,
+    });
+    expect(result.totals).toMatchObject({ input: 14, output: 3, turns: 2 });
+    expect(result.days.map((d) => d.day)).toEqual(["2026-08-27", "2026-08-26"]);
   });
 });
