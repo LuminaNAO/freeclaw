@@ -513,6 +513,25 @@ else
     info "Using configured model: ${MODEL_ID}"
 fi
 
+# Compact the picker ref: a full gguf path makes an unreadable provider/<path>
+# ref in the TUI. llama.cpp serves the loaded model regardless of the requested
+# model name (verified), so a short family+size slug is safe as the id, while the
+# full descriptive basename is kept as the display name. Set MODEL_ID to override.
+if [[ "$MODEL_ID" == *.gguf ]]; then
+    _mn="${MODEL_ID##*/}"; _mn="${_mn%.gguf}"
+    MODEL_NAME="${MODEL_NAME:-$_mn}"
+    _low="$(printf "%s" "$_mn" | tr "[:upper:]" "[:lower:]")"
+    if [[ "$_low" =~ ^([a-z][a-z0-9.]*-[0-9]+b) ]]; then
+        MODEL_ID="${BASH_REMATCH[1]}"
+    elif [[ "$_low" =~ ^([a-z][a-z0-9.]*) ]]; then
+        MODEL_ID="${BASH_REMATCH[1]}"
+    fi
+    info "Compact model id: ${MODEL_ID} (display name: ${MODEL_NAME})"
+elif [[ "$MODEL_ID" == */* ]]; then
+    MODEL_NAME="${MODEL_NAME:-${MODEL_ID##*/}}"
+    MODEL_ID="${MODEL_ID##*/}"
+    info "Compact model id: ${MODEL_ID}"
+fi
 MODEL_NAME="${MODEL_NAME:-${MODEL_ID}}"
 MODEL_REF="${MODEL_PROVIDER}/${MODEL_ID}"
 
