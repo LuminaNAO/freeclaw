@@ -124,7 +124,7 @@ gw_kill_stale_gateways() {
     local port="${1:-}"
     local pids
     if [[ -n "$port" ]]; then
-        pids=$(ss -ltnHp "sport = :$port" 2>/dev/null | grep -oE "pid=[0-9]+" | cut -d= -f2 | sort -u)
+        pids=$(ss -ltnHp "sport = :$port" 2>/dev/null | grep -oE "pid=[0-9]+" | cut -d= -f2 | sort -u || true)
     else
         pids=$(pgrep -f "openclaw.*gateway|openclaw-gatewa" 2>/dev/null || true)
     fi
