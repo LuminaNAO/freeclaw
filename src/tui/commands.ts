@@ -2,6 +2,7 @@ import type { SlashCommand } from "@mariozechner/pi-tui";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { USAGE_TIMEFRAMES } from "../usage/usage-stats.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
 const FAST_LEVELS = ["status", "on", "off"];
@@ -58,6 +59,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   const usageCompletions = createLevelCompletion(USAGE_FOOTER_LEVELS);
   const elevatedCompletions = createLevelCompletion(ELEVATED_LEVELS);
   const activationCompletions = createLevelCompletion(ACTIVATION_LEVELS);
+  const timeframeCompletions = createLevelCompletion([...USAGE_TIMEFRAMES]);
   const commands: SlashCommand[] = [
     { name: "help", description: "Show slash command help" },
     { name: "status", description: "Show gateway status summary" },
@@ -97,6 +99,11 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       name: "usage",
       description: "Toggle per-response usage line",
       getArgumentCompletions: usageCompletions,
+    },
+    {
+      name: "usagestats",
+      description: "Show token usage by agent and model",
+      getArgumentCompletions: timeframeCompletions,
     },
     {
       name: "elevated",
@@ -153,6 +160,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/verbose <on|off>",
     "/reasoning <on|off>",
     "/usage <off|tokens|full>",
+    `/usagestats <${USAGE_TIMEFRAMES.join("|")}>`,
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
     "/activation <mention|always>",

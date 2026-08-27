@@ -8,6 +8,14 @@ import {
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getTerminalTableWidth } from "../terminal/table.js";
+import { renderUsageReport } from "../usage/usage-render.js";
+import {
+  buildUsageReport,
+  DEFAULT_USAGE_TIMEFRAME,
+  isUsageTimeframe,
+  USAGE_TIMEFRAMES,
+} from "../usage/usage-stats.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
@@ -403,6 +411,24 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await refreshSessionInfo();
         } catch (err) {
           chatLog.addSystem(`usage failed: ${String(err)}`);
+        }
+        break;
+      }
+      case "usagestats": {
+        const requested = args.trim().toLowerCase();
+        if (requested && !isUsageTimeframe(requested)) {
+          chatLog.addSystem(`usage: /usagestats <${USAGE_TIMEFRAMES.join("|")}>`);
+          break;
+        }
+        const timeframe = isUsageTimeframe(requested) ? requested : DEFAULT_USAGE_TIMEFRAME;
+        try {
+          setActivityStatus(`collecting usage (${timeframe})`);
+          const report = await buildUsageReport({ timeframe });
+          chatLog.addSystem(renderUsageReport(report, { width: getTerminalTableWidth() }));
+        } catch (err) {
+          chatLog.addSystem(`usagestats failed: ${String(err)}`);
+        } finally {
+          setActivityStatus("");
         }
         break;
       }
