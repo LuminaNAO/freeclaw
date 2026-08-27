@@ -119,8 +119,15 @@ gw_stop_service() {
 # Kill any gateway process left over from previous installs — orphans hold the
 # port and make the fresh gateway crash-loop.
 gw_kill_stale_gateways() {
+    # Scope the sweep to the target gateway port when given, so a named/isolated
+    # agent never kills OTHER agents gateways (all share the same process name).
+    local port="${1:-}"
     local pids
-    pids=$(pgrep -f "openclaw.*gateway|openclaw-gatewa" 2>/dev/null || true)
+    if [[ -n "$port" ]]; then
+        pids=$(ss -ltnHp "sport = :$port" 2>/dev/null | grep -oE "pid=[0-9]+" | cut -d= -f2 | sort -u)
+    else
+        pids=$(pgrep -f "openclaw.*gateway|openclaw-gatewa" 2>/dev/null || true)
+    fi
     if [[ -n "$pids" ]]; then
         gw_warn "Killing stale gateway processes: $(echo $pids | tr '\n' ' ')"
         kill -9 $pids 2>/dev/null || true

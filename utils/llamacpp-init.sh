@@ -1023,7 +1023,7 @@ commit_staged_config
 # binary, no compile cache) on every init run.
 info "Setting up gateway service..."
 gw_stop_service "$AGENT_SERVICE_NAME"
-gw_kill_stale_gateways
+gw_kill_stale_gateways "$GATEWAY_PORT"
 mkdir -p "$HOME/.config/systemd/user"
 
 # Token normally exists in config already (staged phase ensures one); this
