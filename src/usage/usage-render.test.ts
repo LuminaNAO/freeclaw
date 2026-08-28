@@ -12,6 +12,7 @@ const NOW = Date.parse("2026-08-27T12:00:00.000Z");
 function turn(over: Partial<UsageTurn> = {}): UsageTurn {
   return {
     agentId: "main",
+    sessionId: "session-a",
     provider: "llama.cpp",
     model: "a.gguf",
     timestamp: NOW - 1000,
@@ -170,13 +171,16 @@ describe("renderAgentUsageDetail", () => {
     expect(out).toContain("Usage — main — last 7 days");
   });
 
-  it("renders a per-model table and a per-day table", () => {
+  it("renders per-model, per-session, and per-day tables", () => {
     const out = renderDetail([
-      turn({ timestamp: NOW, model: "a.gguf", input: 100 }),
-      turn({ timestamp: NOW - DAY_MS, model: "b.gguf", input: 50 }),
+      turn({ timestamp: NOW, model: "a.gguf", input: 100, sessionId: "session-a" }),
+      turn({ timestamp: NOW - DAY_MS, model: "b.gguf", input: 50, sessionId: "session-b" }),
     ]);
     expect(out).toContain("llama.cpp/a.gguf");
     expect(out).toContain("llama.cpp/b.gguf");
+    expect(out).toContain("By session (2):");
+    expect(out).toContain("session-a");
+    expect(out).toContain("session-b");
     expect(out).toContain("By day (2):");
     expect(out).toContain("2026-08-27");
     expect(out).toContain("2026-08-26");

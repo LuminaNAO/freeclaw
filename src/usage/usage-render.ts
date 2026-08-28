@@ -191,7 +191,7 @@ function summarizeDayModels(models: ModelUsage[], max: number): string {
 
 /**
  * Render one agent in detail: a per-model rollup for the whole window, then a
- * per-day table showing where the tokens went.
+ * per-session and per-day tables showing where the tokens went.
  */
 export function renderAgentUsageDetail(
   detail: AgentUsageDetail,
@@ -240,7 +240,27 @@ export function renderAgentUsageDetail(
     width: options.width,
   });
 
-  const parts = [header, modelTable, `By day (${detail.days.length}):`, dayTable];
+  const sessionWidth = textColumnWidth(options.width, SCOPE_MAX_WIDTH, numericWidth);
+  const sessionRows = detail.sessions.map((session) =>
+    totalsRow(fitCell(session.sessionId, sessionWidth), session, showCost),
+  );
+  const sessionTable = renderTable({
+    columns: [
+      { key: "scope", header: "session", maxWidth: sessionWidth },
+      ...usageColumns(showCost),
+    ],
+    rows: sessionRows,
+    width: options.width,
+  });
+
+  const parts = [
+    header,
+    modelTable,
+    `By session (${detail.sessions.length}):`,
+    sessionTable,
+    `By day (${detail.days.length}):`,
+    dayTable,
+  ];
   if (detail.skippedUndated > 0) {
     parts.push(`${detail.skippedUndated} turn(s) without timestamps excluded from the day view.`);
   }

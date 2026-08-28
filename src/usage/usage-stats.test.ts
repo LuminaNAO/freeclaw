@@ -57,6 +57,7 @@ function line(overrides: {
 function turn(over: Partial<UsageTurn> = {}): UsageTurn {
   return {
     agentId: "main",
+    sessionId: "session-a",
     provider: "llama.cpp",
     model: "m.gguf",
     timestamp: NOW - 1000,
@@ -92,9 +93,10 @@ afterEach(() => {
 
 describe("parseUsageLine", () => {
   it("parses an assistant message carrying usage", () => {
-    const parsed = parseUsageLine(line({}), "main");
+    const parsed = parseUsageLine(line({}), "main", "session-123");
     expect(parsed).toMatchObject({
       agentId: "main",
+      sessionId: "session-123",
       provider: "llama.cpp",
       model: "Qwen3.6-27B-UD-Q4_K_XL.gguf",
       input: 100,
@@ -396,6 +398,10 @@ describe("transcript discovery and reading", () => {
     const collected = await collectUsageTurns(dir);
     expect(collected).toHaveLength(3);
     expect(collected.filter((t) => t.agentId === "main")).toHaveLength(2);
+    expect(collected.filter((t) => t.agentId === "main").map((t) => t.sessionId)).toEqual([
+      "a",
+      "a",
+    ]);
     expect(collected.find((t) => t.agentId === "worker")?.provider).toBe("cloudburst");
   });
 
@@ -458,6 +464,8 @@ describe("aggregateAgentDetail", () => {
 
     expect(result.agentId).toBe("main");
     expect(result.totals).toMatchObject({ input: 157, output: 16, turns: 3 });
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]).toMatchObject({ sessionId: "session-a", turns: 3 });
     expect(result.models.map((m) => m.key)).toEqual(["llama.cpp/a.gguf", "llama.cpp/b.gguf"]);
     expect(result.models[0]).toMatchObject({ input: 150, output: 15, turns: 2 });
 

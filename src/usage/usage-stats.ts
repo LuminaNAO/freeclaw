@@ -21,6 +21,8 @@ const TIMEFRAME_MS: Record<Exclude<UsageTimeframe, "all">, number> = {
 /** A single assistant turn's usage, already tied to an agent/provider/model. */
 export type UsageTurn = {
   agentId: string;
+  /** Transcript/session filename without the `.jsonl` suffix. */
+  sessionId: string;
   provider: string;
   model: string;
   /** Epoch milliseconds. Turns without a parsable timestamp get `undefined`. */
@@ -61,6 +63,11 @@ export type AgentUsage = UsageTotals & {
   models: ModelUsage[];
 };
 
+export type SessionUsage = UsageTotals & {
+  sessionId: string;
+  models: ModelUsage[];
+};
+
 export type UsageReport = {
   timeframe: UsageTimeframe;
   /** Inclusive lower bound in epoch ms; `undefined` for the `all` timeframe. */
@@ -85,6 +92,8 @@ export type AgentUsageDetail = {
   since?: number;
   /** Per-model rollup across the whole window, busiest first. */
   models: ModelUsage[];
+  /** Per-session rollup across the selected window, busiest first. */
+  sessions: SessionUsage[];
   /** Per-day rollup across the window, most recent first. */
   days: DayUsage[];
   totals: UsageTotals;
@@ -162,7 +171,11 @@ export function totalTokens(totals: UsageTotals): number {
  * Returns `undefined` for any line that is not an assistant message carrying usage,
  * so callers can feed raw JSONL straight through.
  */
-export function parseUsageLine(line: string, agentId: string): UsageTurn | undefined {
+export function parseUsageLine(
+  line: string,
+  agentId: string,
+  sessionId = "unknown-session",
+): UsageTurn | undefined {
   const trimmed = line.trim();
   if (!trimmed) {
     return undefined;
@@ -205,6 +218,7 @@ export function parseUsageLine(line: string, agentId: string): UsageTurn | undef
   const recordedCost = pricedCost(typeof recordedTotal === "number" ? recordedTotal : undefined);
   return {
     agentId,
+    sessionId,
     provider: typeof msg.provider === "string" && msg.provider ? msg.provider : "unknown",
     model: typeof msg.model === "string" && msg.model ? msg.model : "unknown",
     timestamp: Number.isFinite(parsedTs) ? parsedTs : undefined,
@@ -307,6 +321,7 @@ export function aggregateAgentDetail(
 ): AgentUsageDetail {
   const since = resolveSince(options.timeframe, options.now);
   const models = new Map<string, ModelUsage>();
+  const sessions = new Map<string, { totals: UsageTotals; models: Map<string, ModelUsage> }>();
   const days = new Map<string, { totals: UsageTotals; models: Map<string, ModelUsage> }>();
   const totals = emptyTotals();
   let skippedUndated = 0;
@@ -330,6 +345,13 @@ export function aggregateAgentDetail(
     const cost = resolveTurnCost(turn, options.costLookup);
     accumulateModel(models, turn, cost);
     addTurn(totals, turn, cost);
+    let session = sessions.get(turn.sessionId);
+    if (!session) {
+      session = { totals: emptyTotals(), models: new Map() };
+      sessions.set(turn.sessionId, session);
+    }
+    accumulateModel(session.models, turn, cost);
+    addTurn(session.totals, turn, cost);
     if (turn.timestamp === undefined) {
       // Counts toward model totals, but cannot be placed on a calendar day.
       skippedUndated += 1;
@@ -359,6 +381,13 @@ export function aggregateAgentDetail(
     timeframe: options.timeframe,
     since,
     models: [...models.values()].toSorted(byTokensDesc),
+    sessions: [...sessions.entries()]
+      .map(([sessionId, entry]) => ({
+        sessionId,
+        ...entry.totals,
+        models: [...entry.models.values()].toSorted(byTokensDesc),
+      }))
+      .toSorted(byTokensDesc),
     days: dayRows,
     totals,
     skippedUndated,
@@ -410,6 +439,7 @@ export function listTranscriptFiles(stateDir: string): Array<{ file: string; age
 
 /** Stream one transcript line-by-line so large sessions never load fully into memory. */
 async function* readTurns(file: string, agentId: string): AsyncGenerator<UsageTurn> {
+  const sessionId = path.basename(file, ".jsonl");
   let stream: fs.ReadStream;
   try {
     stream = fs.createReadStream(file, { encoding: "utf8" });
@@ -419,7 +449,7 @@ async function* readTurns(file: string, agentId: string): AsyncGenerator<UsageTu
   try {
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
     for await (const line of rl) {
-      const turn = parseUsageLine(line, agentId);
+      const turn = parseUsageLine(line, agentId, sessionId);
       if (turn) {
         yield turn;
       }
