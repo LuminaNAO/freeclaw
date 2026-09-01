@@ -54,12 +54,16 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
     }
     if (def.kind === "number") {
-      if (typeof value === "number" && Number.isFinite(value)) {
+      // Only positive durations signal poll intent. Tool-generated sends often
+      // carry schema defaults like pollDurationHours: 0 alongside empty
+      // question/options; treating those as poll params turned normal media
+      // sends into rejected poll requests.
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) {
         return true;
       }
       if (typeof value === "string") {
         const trimmed = value.trim();
-        if (trimmed.length > 0 && Number.isFinite(Number(trimmed))) {
+        if (trimmed.length > 0 && Number.isFinite(Number(trimmed)) && Number(trimmed) > 0) {
           return true;
         }
       }

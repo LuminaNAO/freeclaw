@@ -1511,6 +1511,11 @@ export async function runEmbeddedPiAgent(
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             lastToolError: attempt.lastToolError,
+            origin: {
+              provider: params.messageChannel ?? params.messageProvider,
+              to: params.messageTo,
+              accountId: params.agentAccountId,
+            },
             config: params.config,
             sessionKey: params.sessionKey ?? params.sessionId,
             provider: activeErrorContext.provider,

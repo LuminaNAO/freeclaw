@@ -52,6 +52,8 @@ export type EmbeddedRunAttemptResult = {
     error?: string;
     mutatingAction?: boolean;
     actionFingerprint?: string;
+    mediaUrls?: string[];
+    target?: MessagingToolSend;
   };
   didSendViaMessagingTool: boolean;
   didSendDeterministicApprovalPrompt?: boolean;

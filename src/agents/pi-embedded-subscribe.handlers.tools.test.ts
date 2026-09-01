@@ -487,4 +487,33 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
   });
+
+  it("captures the failed send's media URLs and target on lastToolError for fallback reconciliation", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-m4",
+      args: { action: "send", to: "channel:123", content: "hi", media: "./generated-image.png" },
+    };
+
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-m4",
+      isError: true,
+      result: 'Error: Poll fields require action "poll"; use action "poll" instead of "send".',
+    };
+
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.lastToolError?.toolName).toBe("message");
+    expect(ctx.state.lastToolError?.mediaUrls).toEqual(["./generated-image.png"]);
+    expect(ctx.state.lastToolError?.target).toMatchObject({ tool: "message" });
+    expect(ctx.state.lastToolError?.target?.to).toContain("123");
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
+  });
 });

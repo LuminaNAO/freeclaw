@@ -22,6 +22,10 @@ export type ToolErrorSummary = {
   error?: string;
   mutatingAction?: boolean;
   actionFingerprint?: string;
+  /** Media URLs from a failed messaging send, used to reconcile inline fallback delivery. */
+  mediaUrls?: string[];
+  /** Structured destination of the failed messaging send (same-origin equivalence check). */
+  target?: MessagingToolSend;
 };
 
 export type ToolCallSummary = {

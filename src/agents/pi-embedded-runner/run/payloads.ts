@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
+import { shouldSuppressMessagingToolReplies } from "../../../auto-reply/reply/reply-payloads.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
@@ -12,6 +13,7 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
+import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import {
   extractAssistantText,
@@ -27,6 +29,14 @@ type LastToolError = {
   error?: string;
   mutatingAction?: boolean;
   actionFingerprint?: string;
+  mediaUrls?: string[];
+  target?: MessagingToolSend;
+};
+/** Routing identity of the conversation this reply is delivered to. */
+type ReplyOriginContext = {
+  provider?: string;
+  to?: string;
+  accountId?: string;
 };
 type ToolErrorWarningPolicy = {
   showWarning: boolean;
@@ -50,6 +60,56 @@ function isRecoverableToolError(error: string | undefined): boolean {
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
+}
+
+function normalizeMediaKeyForReconcile(value: string): string {
+  let normalized = value.trim();
+  if (normalized.startsWith("file://")) {
+    normalized = normalized.slice("file://".length);
+  }
+  if (normalized.startsWith("./")) {
+    normalized = normalized.slice(2);
+  }
+  return normalized;
+}
+
+/**
+ * True when a failed messaging send is provably made whole by this reply:
+ * the send targeted the very conversation this reply is delivered to (same
+ * structured provider/target/account, via the canonical origin-equivalence
+ * helper) AND every media URL of the failed send rides this reply's inline
+ * MEDIA fallback. Only then would a "send failed" warning be a false failure
+ * report. Fails closed: missing target, missing origin routing, cross-target
+ * sends, or partial media coverage all keep the warning.
+ */
+function isFallbackDeliveryForFailedSend(
+  lastToolError: LastToolError,
+  replyItems: Array<{ media?: string[] }>,
+  origin: ReplyOriginContext | undefined,
+): boolean {
+  const failedTarget = lastToolError.target;
+  if (!failedTarget) {
+    return false;
+  }
+  const sameOriginTarget = shouldSuppressMessagingToolReplies({
+    messageProvider: origin?.provider,
+    messagingToolSentTargets: [failedTarget],
+    originatingTo: origin?.to,
+    accountId: origin?.accountId,
+  });
+  if (!sameOriginTarget) {
+    return false;
+  }
+  const failedMedia = (lastToolError.mediaUrls ?? [])
+    .map(normalizeMediaKeyForReconcile)
+    .filter(Boolean);
+  if (failedMedia.length === 0) {
+    return false;
+  }
+  const deliveredMedia = new Set(
+    replyItems.flatMap((item) => item.media ?? []).map(normalizeMediaKeyForReconcile),
+  );
+  return failedMedia.every((mediaUrl) => deliveredMedia.has(mediaUrl));
 }
 
 function resolveToolErrorWarningPolicy(params: {
@@ -92,6 +152,8 @@ export function buildEmbeddedRunPayloads(params: {
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: LastToolError;
+  /** Origin conversation routing, used to prove failed-send/fallback equivalence. */
+  origin?: ReplyOriginContext;
   config?: OpenClawConfig;
   sessionKey: string;
   provider?: string;
@@ -293,7 +355,13 @@ export function buildEmbeddedRunPayloads(params: {
 
     // Always surface mutating tool failures so we do not silently confirm actions that did not happen.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
-    if (warningPolicy.showWarning) {
+    // Exception: when the failed send targeted this very conversation and its
+    // media is delivered by this reply's inline MEDIA fallback, the
+    // user-visible action succeeded — skip the stale failure warning.
+    if (
+      warningPolicy.showWarning &&
+      !isFallbackDeliveryForFailedSend(params.lastToolError, replyItems, params.origin)
+    ) {
       const toolSummary = formatToolAggregate(
         params.lastToolError.toolName,
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,

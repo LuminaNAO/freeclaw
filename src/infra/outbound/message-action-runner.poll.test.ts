@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   installMessageActionRunnerTestRegistry,
@@ -149,5 +152,84 @@ describe("runMessageAction poll handling", () => {
     });
 
     expect(call?.maxSelections).toBe(1);
+  });
+});
+
+describe("runMessageAction send with poll-shaped params", () => {
+  beforeEach(() => {
+    installMessageActionRunnerTestRegistry();
+  });
+
+  afterEach(() => {
+    resetMessageActionRunnerTestRegistry();
+  });
+
+  async function withMediaSandbox(
+    test: (params: { sandboxDir: string; mediaPath: string }) => Promise<void>,
+  ) {
+    const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "poll-send-sandbox-"));
+    const mediaPath = path.join(sandboxDir, "generated-image.png");
+    await fs.writeFile(mediaPath, "png-bytes");
+    try {
+      await test({ sandboxDir, mediaPath });
+    } finally {
+      await fs.rm(sandboxDir, { recursive: true, force: true });
+    }
+  }
+
+  const runDrySend = (params: { actionParams: Record<string, unknown>; sandboxRoot?: string }) =>
+    runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: params.actionParams as never,
+      dryRun: true,
+      sandboxRoot: params.sandboxRoot,
+    });
+
+  it("accepts a media send that carries only empty/default poll fields", async () => {
+    await withMediaSandbox(async ({ sandboxDir, mediaPath }) => {
+      const result = await runDrySend({
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          message: "generated image",
+          media: mediaPath,
+          replyTo: "123.456",
+          pollQuestion: "",
+          pollOption: [],
+          pollDurationHours: 0,
+          pollMulti: false,
+        },
+        sandboxRoot: sandboxDir,
+      });
+
+      expect(result.kind).toBe("send");
+    });
+  });
+
+  it("still rejects send when meaningful poll fields are supplied", async () => {
+    await expect(
+      runDrySend({
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza", "Sushi"],
+        },
+      }),
+    ).rejects.toThrow(/Poll fields require action "poll"/);
+  });
+
+  it("still rejects send when a positive poll duration is supplied", async () => {
+    await expect(
+      runDrySend({
+        actionParams: {
+          channel: "slack",
+          target: "#C12345678",
+          message: "hi",
+          pollDurationHours: 24,
+        },
+      }),
+    ).rejects.toThrow(/Poll fields require action "poll"/);
   });
 });

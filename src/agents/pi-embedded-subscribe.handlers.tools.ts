@@ -305,9 +305,9 @@ export async function handleToolExecutionStart(
     await ctx.params.onBlockReplyFlush();
   }
 
-  const rawToolName = String(evt.toolName);
+  const rawToolName = evt.toolName;
   const toolName = normalizeToolName(rawToolName);
-  const toolCallId = String(evt.toolCallId);
+  const toolCallId = evt.toolCallId;
   const args = evt.args;
   const runId = ctx.params.runId;
 
@@ -395,8 +395,8 @@ export function handleToolExecutionUpdate(
     partialResult?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(String(evt.toolName));
-  const toolCallId = String(evt.toolCallId);
+  const toolName = normalizeToolName(evt.toolName);
+  const toolCallId = evt.toolCallId;
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
   emitAgentEvent({
@@ -428,10 +428,10 @@ export async function handleToolExecutionEnd(
     result?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(String(evt.toolName));
-  const toolCallId = String(evt.toolCallId);
+  const toolName = normalizeToolName(evt.toolName);
+  const toolCallId = evt.toolCallId;
   const runId = ctx.params.runId;
-  const isError = Boolean(evt.isError);
+  const isError = evt.isError;
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
@@ -445,12 +445,18 @@ export async function handleToolExecutionEnd(
   ctx.state.toolSummaryById.delete(toolCallId);
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
+    // Keep the failed send's media and destination so payload assembly can
+    // reconcile a later successful inline MEDIA fallback to the same
+    // conversation instead of surfacing a stale warning.
+    const failedMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId);
     ctx.state.lastToolError = {
       toolName,
       meta,
       error: errorMessage,
       mutatingAction: callSummary?.mutatingAction,
       actionFingerprint: callSummary?.actionFingerprint,
+      mediaUrls: failedMediaUrls?.length ? [...failedMediaUrls] : undefined,
+      target: ctx.state.pendingMessagingTargets.get(toolCallId),
     };
   } else if (ctx.state.lastToolError) {
     // Keep unresolved mutating failures until the same action succeeds.
