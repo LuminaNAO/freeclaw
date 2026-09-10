@@ -121,7 +121,9 @@ error() { printf '\e[31m[ERROR]\e[0m %s\n' "$*" >&2; exit 1; }
 
 # Shared gateway/service helpers (port policy, systemd unit generator,
 # process/lock cleanup) — single source of truth, also used by build-switch.sh.
-LIB_GATEWAY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-gateway.sh"
+# readlink -f: invoked through the /usr/bin symlink (AUR make install),
+# BASH_SOURCE[0] is the symlink; resolve it before locating siblings.
+LIB_GATEWAY="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)/lib-gateway.sh"
 if [[ ! -f "$LIB_GATEWAY" ]]; then
     error "Missing $LIB_GATEWAY — this script ships with lib-gateway.sh; restore it from the repo."
 fi

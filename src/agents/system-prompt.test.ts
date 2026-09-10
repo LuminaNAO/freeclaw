@@ -221,7 +221,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
     );
-    expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
+    expect(prompt).toContain("When delegation is explicitly requested, completion is push-based");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain(
       "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
@@ -271,6 +271,19 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
     );
+  });
+  it("defaults to direct work instead of delegating complex coding tasks", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
+    });
+
+    expect(prompt).toContain("Work directly with the current model and tools by default.");
+    expect(prompt).toContain(
+      "Do not delegate coding work to a sub-agent or external coding harness",
+    );
+    expect(prompt).toContain("Task complexity or duration alone is not a reason to delegate.");
+    expect(prompt).not.toContain("If a task is more complex or takes longer, spawn a sub-agent.");
   });
 
   it("omits ACP harness guidance when ACP is disabled", () => {

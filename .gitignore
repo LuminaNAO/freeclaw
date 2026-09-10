@@ -137,3 +137,6 @@ ui/.vitest-attachments
 docs/superpowers
 openclaw.podman.env
 signal-identity-dumps/
+
+# per-repo private audit denylist (local-only, must not ship)
+.publishing_protocol.local

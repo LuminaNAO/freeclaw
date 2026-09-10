@@ -131,7 +131,9 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     args = parser.parse_args()
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    # realpath (not abspath): abspath does not resolve symlinks, and the AUR
+    # install symlinks /usr/bin/trustgraph -> /usr/lib/freeclaw/utils/trustgraph.py.
+    script_dir = os.path.dirname(os.path.realpath(__file__))
     default_dump = os.path.join(script_dir, "signal-identity-dumps", "current.json")
     dump_path = args.dump_path or default_dump
 

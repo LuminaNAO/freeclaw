@@ -371,7 +371,7 @@ export function buildAgentSystemPrompt(params: {
   const runtimeInfo = params.runtimeInfo;
   const runtimeChannel = runtimeInfo?.channel?.trim().toLowerCase();
   const runtimeCapabilities = (runtimeInfo?.capabilities ?? [])
-    .map((cap) => String(cap).trim())
+    .map((cap) => cap.trim())
     .filter(Boolean);
   const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
@@ -447,7 +447,10 @@ export function buildAgentSystemPrompt(params: {
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
-    "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+    "Work directly with the current model and tools by default.",
+    "Do not delegate coding work to a sub-agent or external coding harness (such as Codex, Claude Code, or Gemini) unless the user explicitly asks for delegation or names that harness.",
+    "Task complexity or duration alone is not a reason to delegate.",
+    "When delegation is explicitly requested, completion is push-based: results auto-announce when done.",
     ...(acpHarnessSpawnAllowed
       ? [
           'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',

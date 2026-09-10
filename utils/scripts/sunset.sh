@@ -16,7 +16,7 @@ set -euo pipefail
 
 WORKSPACE="${WORKSPACE:-$HOME/.openclaw/workspace}"
 SLEEP_STATE="$WORKSPACE/sleep-state.json"
-HELPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HELPER_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 OPENCLAW_HELPERS="$(dirname "$HELPER_DIR")"
 GROUP_MEMORY_SCRIPT="$OPENCLAW_HELPERS/signal-group-memory.sh"
 

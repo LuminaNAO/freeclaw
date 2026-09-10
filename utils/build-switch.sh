@@ -65,7 +65,11 @@ info()  { echo -e "${BLUE}[INFO]${NC} $1"; }
 
 # Shared gateway/service helpers (single owner of the systemd unit generator,
 # port policy, and process/lock cleanup — also sourced by llamacpp-init.sh).
-LIB_GATEWAY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-gateway.sh"
+# readlink -f: invoked through the /usr/bin symlink (AUR make install),
+# BASH_SOURCE[0] is the symlink; resolve it before locating siblings.
+# (build-switch's own ~/.local/bin install uses exec wrappers, where
+# BASH_SOURCE[0] is already the real path — readlink -f is a no-op there.)
+LIB_GATEWAY="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)/lib-gateway.sh"
 if [[ ! -f "$LIB_GATEWAY" ]]; then
     error "Missing $LIB_GATEWAY — this script ships with lib-gateway.sh; restore it from the repo."
     exit 1
