@@ -22,7 +22,7 @@ ensure-pnpm:
 	fi
 
 node_modules/.modules.yaml: pnpm-lock.yaml package.json pnpm-workspace.yaml | ensure-pnpm
-	$(PNPM) install --frozen-lockfile
+	SHARP_IGNORE_GLOBAL_LIBVIPS=1 $(PNPM) install --frozen-lockfile
 
 build: node_modules/.modules.yaml
 	$(PNPM) build

@@ -1,16 +1,16 @@
 # Signal Relay — Architecture
 
 Status: **design only, not integrated yet** (2026-09-06)
-Owner: the operator + Lumina · First target: **Arthur** (a remote agent, `<relay-agent-ip>` · Second: **Herman** (dad's agent, machine TBD)
+Owner: the operator + Lumina · First target: **Alpha** (a remote agent, `<relay-agent-ip>` · Second: **Beta** (machine TBD)
 
 ## Problem
 
 OpenClaw's Signal channel is bound 1:1 to the machine running signal-cli. Lumina
-(the host) is the only NAO with a Signal account. Arthur (a remote agent, `<relay-agent-ip>` and
-Herman (dad) run agents **without Signal accounts**, and we do not want to give
+(the host) is the only NAO with a Signal account. Alpha (a remote agent, `<relay-agent-ip>` and
+Beta run agents **without Signal accounts**, and we do not want to give
 them Signal accounts (account ownership stays singular: Lumina's).
 
-The operator wants ordinary Signal groups — "Arthur", "Herman" — in which Lumina is a
+The operator wants ordinary Signal groups — "Alpha", "Beta" — in which Lumina is a
 member, but where all traffic is transparently relayed to the remote agent and
 its replies come back into the same group, attributed to the agent.
 
@@ -30,33 +30,33 @@ _before_ any agent runs — no hook needed for inbound.
 ### Shape
 
 ```
-Signal group "Arthur" (members: the operator, Lumina-account)
+Signal group "Alpha" (members: the operator, Lumina-account)
         │  inbound (signal-cli, host gateway)
         ▼
-Gateway binding: group:<id> → agentId: "arthur-relay"   (local stub agent)
+Gateway binding: group:<id> → agentId: "alpha-relay"   (local stub agent)
         │
         ▼
-arthur-relay (stub agent, thin system prompt, single tool)
+alpha-relay (stub agent, thin system prompt, single tool)
    tool: signal_relay_send({text, group})
         │  HTTPS, bearer token, loopback/LAN only
         ▼
-Arthur's gateway (`<relay-agent-ip>` — OpenAI-compat endpoint
+Alpha's gateway (`<relay-agent-ip>` — OpenAI-compat endpoint
    POST /v1/chat/completions
    body.user  = group id      → stable session per group
    body.messages = [ …, { role:"user",
-                          content: "[group:Arthur] the operator: …" } ]
+                          content: "[group:Alpha] the operator: …" } ]
         │  final assistant text
         ▼
-arthur-relay replies verbatim → gateway → signal-cli → group "Arthur"
+alpha-relay replies verbatim → gateway → signal-cli → group "Alpha"
 ```
 
 Outbound needs **no hook**: the stub agent just answers, and the normal channel
 send path delivers it to the group. Replies appear from Lumina's Signal account,
-prefixed by the relay (e.g. `Arthur:`) so group members can tell whose turn it is.
+prefixed by the relay (e.g. `Alpha:`) so group members can tell whose turn it is.
 
 ### Stub agent contract
 
-- One stub per remote agent: `arthur-relay`, `herman-relay` in `agents.list`.
+- One stub per remote agent: `alpha-relay`, `beta-relay` in `agents.list`.
 - System prompt: _You are a relay. Never answer yourself. On every inbound
   message call `signal_relay_send` with the full sender-attributed text and
   reply with its result verbatim. If the relay errors, say so briefly._
@@ -70,13 +70,13 @@ prefixed by the relay (e.g. `Arthur:`) so group members can tell whose turn it i
 Reuse the gateway's existing OpenAI-compatible endpoint (`/v1/chat/completions`,
 `src/gateway/openai-http.ts`). Every OpenClaw gateway already serves it; the
 `user` field maps to session key, giving per-group conversation persistence on
-Arthur's box with zero new protocol.
+Alpha's box with zero new protocol.
 
 - Transport: LAN/WireGuard only (mesh), bearer token per remote agent.
 - Request timeout: long (agent turns can run minutes); non-stream for v1.
 - Sender identity is injected as a text prefix, not metadata — remote agents
   have no channel metadata plumbing yet. Format:
-  `[group:Arthur] <sender display> (<Signal uuid>): <text>`
+  `[group:Alpha] <sender display> (<Signal uuid>): <text>`
 
 ## v2 — push mode (agent-initiated sends)
 
@@ -94,7 +94,7 @@ This mirrors how I already use the `message` tool, generalized across machines.
 
 ## v3 — generalization
 
-- Herman: second `agents` entry (machine + IP once known), nothing else changes.
+- Beta: second `agents` entry (machine + IP once known), nothing else changes.
 - Health: relay liveness (can the remote endpoint answer a `GET /v1/models`)
   folded into the daily infrastructure check cron.
 - Multi-account: if a remote agent ever _does_ get its own Signal account, the
@@ -120,12 +120,12 @@ This mirrors how I already use the `message` tool, generalized across machines.
   agents: {
     list: [
       // … existing …
-      { id: "arthur-relay", name: "Arthur Relay" /* stub prompt */ },
+      { id: "alpha-relay", name: "Alpha Relay" /* stub prompt */ },
     ],
     bindings: [
       {
-        match: { channel: "signal", peer: { kind: "group", id: "<signal group id of 'Arthur'>" } },
-        agentId: "arthur-relay",
+        match: { channel: "signal", peer: { kind: "group", id: "<signal group id of 'Alpha'>" } },
+        agentId: "alpha-relay",
       },
     ],
   },
@@ -135,14 +135,14 @@ This mirrors how I already use the `message` tool, generalized across machines.
         enabled: true,
         config: {
           endpoints: {
-            arthur: {
+            alpha: {
               url: "http://<relay-agent-ip>:<gateway-port>/v1",
               token: "<static bearer>",
-              prefix: "Arthur",
-              groups: { Arthur: "<signal group id>" },
+              prefix: "Alpha",
+              groups: { Alpha: "<signal group id>" },
               timeoutSeconds: 600,
             },
-            // herman: { … } — phase 3
+            // beta: { … } — phase 3
           },
         },
       },
@@ -168,19 +168,19 @@ docs/design/signal-relay.md  # this document
 ## Phases
 
 - **P0** — this doc. ✅
-- **P1 (Arthur)** — stub agent + binding + `signal_relay_send` + request/response dispatch. Verify: the operator pings in the Arthur group → Arthur answers there; Arthur's own session stays coherent across turns.
+- **P1 (Alpha)** — stub agent + binding + `signal_relay_send` + request/response dispatch. Verify: the operator pings in the Alpha group → Alpha answers there; Alpha's own session stays coherent across turns.
 - **P2** — push mode webhook.
-- **P3** — Herman entry + cron health check.
+- **P3** — Beta entry + cron health check.
 
 ## Open questions
 
-1. **Arthur's gateway port** — what port does the relay agent's OpenClaw gateway
+1. **Alpha's gateway port** — what port does the relay agent's OpenClaw gateway
    serve the OpenAI-compat endpoint on? (Need to confirm; also whether
    `/v1/chat/completions` is enabled there.)
-2. **Group ids** — do the "Arthur"/"Herman" groups already exist on Signal, and
+2. **Group ids** — do the "Alpha"/"Beta" groups already exist on Signal, and
    is Lumina's account already a member? The binding key is the gateway's
    normalized `group:<…>` chat id.
-3. **Identity prefix** — `Arthur:` vs `Arthur (remote agent):` vs bare text.
+3. **Identity prefix** — `Alpha:` vs `Alpha (remote agent):` vs bare text.
 4. **Sender names** — remote agents get Signal display names (unstable) +
    uuid; should the relay resolve uuid→known-name via the trust graph before
    dispatching? (Nice to have; keep raw uuid in v1.)
