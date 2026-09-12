@@ -80,14 +80,14 @@ Diffs the current Signal identity dump against the previous one. Run by `signal-
 
 ### `trustgraph-build.sh`
 
-Builds and updates Lumina's L3 Trust Graph (`trustgraph.yaml`) from the Signal identity dump. Designed to run during the sleep cycle (Stage 2: The Scholar), not during active sessions — zero context cost to working sessions.
+Builds and updates a trust graph (`trustgraph.yaml`) from the Signal identity dump. Designed to run on a schedule outside active sessions — zero context cost to working sessions.
 
 ```bash
 ./trustgraph-build.sh <workspace>              # Build from default dump
 ./trustgraph-build.sh <workspace> --dry-run    # Preview without writing
 ```
 
-**Purpose:** Long-term social memory tracking every person Lumina interacts with — their nature, trust level (0–5), preferences, expertise, and key interaction history.
+**Purpose:** Opt-in, consent-aware long-term social memory for the account owner — interaction metadata for contacts the owner chooses to track (nature, trust level 0–5, preferences, expertise, key interaction history).
 
 **Schema:** YAML keyed on Signal UUID (`uuid:xxxx`). Non-destructive merges — never overwrites known fields with null. Groups membership is NOT stored (derived on demand from the signal dump).
 
