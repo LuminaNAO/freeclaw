@@ -38,7 +38,7 @@ Legend:
 
 **Controls:**
 
-- `agents.defaults.blockStreamingDefault`: `"on"`/`"off"` (default off).
+- `agents.defaults.blockStreamingDefault`: `"on"`/`"off"` (default on; explicit `"off"` still wins).
 - Channel overrides: `*.blockStreaming` (and per-account variants) to force `"on"`/`"off"` per channel.
 - `agents.defaults.blockStreamingBreak`: `"text_end"` or `"message_end"`.
 - `agents.defaults.blockStreamingChunk`: `{ minChars, maxChars, breakPreference? }`.
