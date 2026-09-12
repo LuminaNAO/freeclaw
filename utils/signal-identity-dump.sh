@@ -6,7 +6,7 @@
 #
 # Usage:
 #   ./signal-identity-dump.sh                   # auto-detect account from accounts.json
-#   ./signal-identity-dump.sh +6283167492405    # explicit account
+#   ./signal-identity-dump.sh +15555550100    # explicit account
 #
 # Notes:
 #   - signal-cli has no built-in 'whoami' subcommand. The local account's UUID
