@@ -570,6 +570,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
   });
 
+  it("omits every NO_REPLY mention when the surface disallows silent replies", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      silentReplyPromptMode: "none",
+    });
+
+    expect(prompt).not.toContain("## Silent Replies");
+    expect(prompt).not.toContain(SILENT_REPLY_TOKEN);
+    expect(prompt).toContain("one-line acknowledgement");
+  });
+
   it("includes inline button style guidance when runtime supports inline buttons", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

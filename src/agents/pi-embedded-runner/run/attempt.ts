@@ -10,6 +10,7 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveSilentReplyPromptMode } from "../../../config/silent-reply.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -1693,6 +1694,11 @@ export async function runEmbeddedAttempt(
       contextFiles,
       bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
+      silentReplyPromptMode: resolveSilentReplyPromptMode({
+        cfg: params.config,
+        channel: params.messageChannel ?? params.messageProvider,
+        chatType: params.groupId ? "group" : "direct",
+      }),
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",

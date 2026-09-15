@@ -37,6 +37,7 @@ import {
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  stripSilentTokenEdges,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -146,6 +147,7 @@ export async function runAgentTurnWithFallback(params: {
 
   while (true) {
     try {
+      let didLogSilentStrip = false;
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
@@ -168,7 +170,22 @@ export async function runAgentTurnWithFallback(params: {
           isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
           isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
         ) {
+          // A bare (possibly still-streaming) token fragment: nothing to send.
           return { skip: true };
+        }
+        if (text?.includes(SILENT_REPLY_TOKEN)) {
+          // Local models often bundle NO_REPLY with a real reply ("NO_REPLY\nHi",
+          // "Hi NO_REPLY"). Dropping the reply or leaking the literal token are
+          // both wrong: strip the token from either edge and deliver the rest.
+          const stripped = stripSilentTokenEdges(text, SILENT_REPLY_TOKEN);
+          if (stripped !== text && !didLogSilentStrip) {
+            didLogSilentStrip = true;
+            logVerbose("Stripped bundled NO_REPLY token from reply");
+          }
+          if (!stripped) {
+            return { skip: true };
+          }
+          text = stripped;
         }
         if (!text) {
           // Allow media-only payloads (e.g. tool result screenshots) through.
@@ -475,12 +492,12 @@ export async function runAgentTurnWithFallback(params: {
       fallbackModel = fallbackResult.model;
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
-            provider: String(attempt.provider ?? ""),
-            model: String(attempt.model ?? ""),
-            error: String(attempt.error ?? ""),
-            reason: attempt.reason ? String(attempt.reason) : undefined,
+            provider: attempt.provider ?? "",
+            model: attempt.model ?? "",
+            error: attempt.error ?? "",
+            reason: attempt.reason || undefined,
             status: typeof attempt.status === "number" ? attempt.status : undefined,
-            code: attempt.code ? String(attempt.code) : undefined,
+            code: attempt.code || undefined,
           }))
         : [];
 

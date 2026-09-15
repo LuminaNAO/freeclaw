@@ -1,3 +1,4 @@
+import type { SurfacesConfig } from "./silent-reply.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
@@ -81,6 +82,8 @@ export type OpenClawConfig = {
     };
   };
   browser?: BrowserConfig;
+  /** Per-channel surface policies, e.g. surfaces.signal.silentReply.group: "disallow". */
+  surfaces?: SurfacesConfig;
   ui?: {
     /** Accent color for OpenClaw UI chrome (hex). */
     seamColor?: string;

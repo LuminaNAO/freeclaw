@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isSilentReplyPrefixText, isSilentReplyText, stripSilentToken } from "./tokens.js";
+import {
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  stripSilentToken,
+  stripSilentTokenEdges,
+} from "./tokens.js";
 
 describe("isSilentReplyText", () => {
   it("returns true for exact token", () => {
@@ -100,5 +105,35 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("NO_X")).toBe(false);
     expect(isSilentReplyPrefixText("NO_REPLY more")).toBe(false);
     expect(isSilentReplyPrefixText("NO-")).toBe(false);
+  });
+});
+
+describe("stripSilentTokenEdges", () => {
+  it("strips a leading token and keeps the reply (local models bundle it)", () => {
+    expect(stripSilentTokenEdges("NO_REPLY\nHere is the answer.")).toBe("Here is the answer.");
+    expect(stripSilentTokenEdges("NO_REPLY: ok")).toBe("ok");
+    expect(stripSilentTokenEdges("**NO_REPLY** ok")).toBe("ok");
+  });
+
+  it("strips a trailing token", () => {
+    expect(stripSilentTokenEdges("Here is the answer.\n\nNO_REPLY")).toBe("Here is the answer.");
+  });
+
+  it("strips both edges", () => {
+    expect(stripSilentTokenEdges("NO_REPLY ok NO_REPLY")).toBe("ok");
+  });
+
+  it("returns empty when only the token was there", () => {
+    expect(stripSilentTokenEdges("NO_REPLY")).toBe("");
+    expect(stripSilentTokenEdges("  NO_REPLY  ")).toBe("");
+  });
+
+  it("leaves embedded or word-joined tokens alone", () => {
+    expect(stripSilentTokenEdges("Please NO_REPLY to this")).toBe("Please NO_REPLY to this");
+    expect(stripSilentTokenEdges("NO_REPLYing is fun")).toBe("NO_REPLYing is fun");
+  });
+
+  it("works with a custom token", () => {
+    expect(stripSilentTokenEdges("HEARTBEAT_OK all quiet", "HEARTBEAT_OK")).toBe("all quiet");
   });
 });
