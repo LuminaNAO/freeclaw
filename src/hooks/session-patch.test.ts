@@ -25,7 +25,7 @@ describe("emitSessionPatchHook", () => {
       emitSessionPatchHook({
         sessionKey: "agent:main:main",
         sessionEntry: entry,
-        patch: { key: "agent:main:main", model: "cloudburst/opus" },
+        patch: { key: "agent:main:main", model: "acme/alpha" },
         cfg: {} as OpenClawConfig,
       }),
     ).not.toThrow();
@@ -39,13 +39,13 @@ describe("emitSessionPatchHook", () => {
     const entry: SessionEntry = {
       sessionId: "s1",
       updatedAt: 1,
-      providerOverride: "cloudburst",
-      modelOverride: "opus",
+      providerOverride: "acme",
+      modelOverride: "alpha",
     };
     emitSessionPatchHook({
       sessionKey: "agent:main:signal:group:abc",
       sessionEntry: entry,
-      patch: { key: "agent:main:signal:group:abc", model: "cloudburst/opus" },
+      patch: { key: "agent:main:signal:group:abc", model: "acme/alpha" },
       cfg: {} as OpenClawConfig,
     });
     await flush();
@@ -56,7 +56,7 @@ describe("emitSessionPatchHook", () => {
     expect(event.sessionKey).toBe("agent:main:signal:group:abc");
     expect(event.context.patch).toEqual({
       key: "agent:main:signal:group:abc",
-      model: "cloudburst/opus",
+      model: "acme/alpha",
     });
     expect(event.context.sessionEntry).toEqual(entry);
     // Handlers get a copy, never the live entry.
@@ -72,7 +72,7 @@ describe("emitSessionPatchHook", () => {
     emitSessionPatchHook({
       sessionKey: "agent:main:main",
       sessionEntry: { sessionId: "s1", updatedAt: 1 },
-      patch: { key: "agent:main:main", model: "cloudburst/opus" },
+      patch: { key: "agent:main:main", model: "acme/alpha" },
       cfg: {} as OpenClawConfig,
     });
     await flush();

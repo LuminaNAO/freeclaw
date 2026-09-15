@@ -38,37 +38,37 @@ describe("persistInlineDirectives session:patch emission", () => {
     const sessionKey = "agent:main:signal:group:abc";
     const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1 };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "cloudburst" });
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "acme" });
 
     const result = await persistInlineDirectives({
-      directives: directivesWithModel("cloudburst/opus"),
-      effectiveModelDirective: "cloudburst/opus",
+      directives: directivesWithModel("acme/alpha"),
+      effectiveModelDirective: "acme/alpha",
       cfg,
       sessionEntry,
       sessionStore,
       sessionKey,
       elevatedEnabled: false,
       elevatedAllowed: false,
-      defaultProvider: "cloudburst",
-      defaultModel: "sol",
+      defaultProvider: "acme",
+      defaultModel: "base",
       aliasIndex,
       allowedModelKeys: new Set<string>(),
-      provider: "cloudburst",
-      model: "sol",
-      initialModelLabel: "cloudburst/sol",
+      provider: "acme",
+      model: "base",
+      initialModelLabel: "acme/base",
       formatModelSwitchEvent: (label) => `Model switched to ${label}.`,
       agentCfg: undefined,
     });
     await flush();
 
-    expect(result.provider).toBe("cloudburst");
-    expect(result.model).toBe("opus");
+    expect(result.provider).toBe("acme");
+    expect(result.model).toBe("alpha");
     expect(seen).toHaveLength(1);
     const event = seen[0];
     expect(isSessionPatchEvent(event)).toBe(true);
     expect(event.sessionKey).toBe(sessionKey);
-    expect(event.context.patch).toEqual({ key: sessionKey, model: "cloudburst/opus" });
-    expect((event.context.sessionEntry as SessionEntry).modelOverride).toBe("opus");
+    expect(event.context.patch).toEqual({ key: sessionKey, model: "acme/alpha" });
+    expect((event.context.sessionEntry as SessionEntry).modelOverride).toBe("alpha");
   });
 
   it("stays silent when the directive does not change the model", async () => {
@@ -82,27 +82,27 @@ describe("persistInlineDirectives session:patch emission", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "s1",
       updatedAt: 1,
-      providerOverride: "cloudburst",
-      modelOverride: "opus",
+      providerOverride: "acme",
+      modelOverride: "alpha",
     };
-    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "cloudburst" });
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "acme" });
 
     await persistInlineDirectives({
-      directives: directivesWithModel("cloudburst/opus"),
-      effectiveModelDirective: "cloudburst/opus",
+      directives: directivesWithModel("acme/alpha"),
+      effectiveModelDirective: "acme/alpha",
       cfg,
       sessionEntry,
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       elevatedEnabled: false,
       elevatedAllowed: false,
-      defaultProvider: "cloudburst",
-      defaultModel: "sol",
+      defaultProvider: "acme",
+      defaultModel: "base",
       aliasIndex,
       allowedModelKeys: new Set<string>(),
-      provider: "cloudburst",
-      model: "opus",
-      initialModelLabel: "cloudburst/opus",
+      provider: "acme",
+      model: "alpha",
+      initialModelLabel: "acme/alpha",
       formatModelSwitchEvent: (label) => `Model switched to ${label}.`,
       agentCfg: undefined,
     });

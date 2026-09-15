@@ -242,7 +242,7 @@ describe("hooks", () => {
         name: "returns true for session:patch events with expected context",
         event: createInternalHookEvent("session", "patch", "agent:main:signal:group:abc", {
           sessionEntry: { sessionId: "s1", updatedAt: 1 },
-          patch: { key: "agent:main:signal:group:abc", model: "cloudburst/opus" },
+          patch: { key: "agent:main:signal:group:abc", model: "acme/alpha" },
           cfg: {},
         } satisfies SessionPatchHookContext),
         expected: true,
