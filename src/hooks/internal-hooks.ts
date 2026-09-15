@@ -8,6 +8,8 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
+import type { SessionsPatchParams } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
@@ -156,6 +158,24 @@ export type MessagePreprocessedHookEvent = InternalHookEvent & {
   context: MessagePreprocessedHookContext;
 };
 
+// ============================================================================
+// Session Hook Events
+// ============================================================================
+
+export type SessionPatchHookContext = {
+  /** The session entry after the patch was applied and persisted. */
+  sessionEntry: SessionEntry;
+  /** Only the fields that changed (e.g. `{ model: "provider/model" }`). */
+  patch: SessionsPatchParams;
+  cfg: OpenClawConfig;
+};
+
+export type SessionPatchHookEvent = InternalHookEvent & {
+  type: "session";
+  action: "patch";
+  context: SessionPatchHookContext;
+};
+
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, gateway, etc.) */
   type: InternalHookEventType;
@@ -183,9 +203,12 @@ export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | 
  * are invisible to triggerInternalHook in another chunk, causing hooks
  * to silently fire with zero handlers.
  */
+// The global key is a cross-chunk contract; its dunder spelling is deliberate.
+// oxlint-disable-next-line no-underscore-dangle
 const _g = globalThis as typeof globalThis & {
   __openclaw_internal_hook_handlers__?: Map<string, InternalHookHandler[]>;
 };
+// oxlint-disable-next-line no-underscore-dangle
 const handlers = (_g.__openclaw_internal_hook_handlers__ ??= new Map<
   string,
   InternalHookHandler[]
@@ -253,6 +276,17 @@ export function clearInternalHooks(): void {
  */
 export function getRegisteredEventKeys(): string[] {
   return Array.from(handlers.keys());
+}
+
+/**
+ * Whether any handler is registered for the event type or the specific
+ * type:action key. Lets emitters skip building (and cloning) a payload when
+ * nobody is listening.
+ */
+export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
+  return (
+    (handlers.get(type)?.length ?? 0) > 0 || (handlers.get(`${type}:${action}`)?.length ?? 0) > 0
+  );
 }
 
 /**
@@ -404,6 +438,24 @@ export function isMessageTranscribedEvent(
   }
   return (
     hasStringContextField(context, "transcript") && hasStringContextField(context, "channelId")
+  );
+}
+
+export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {
+  if (!isHookEventTypeAndAction(event, "session", "patch")) {
+    return false;
+  }
+  const context = getHookContext<SessionPatchHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    typeof context.patch === "object" &&
+    context.patch !== null &&
+    typeof context.cfg === "object" &&
+    context.cfg !== null &&
+    typeof context.sessionEntry === "object" &&
+    context.sessionEntry !== null
   );
 }
 

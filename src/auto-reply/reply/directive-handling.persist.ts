@@ -14,6 +14,7 @@ import {
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import { emitSessionPatchHook } from "../../hooks/session-patch.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -80,6 +81,8 @@ export async function persistInlineDirectives(params: {
     let reasoningChanged =
       directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
     let updated = false;
+    // Qualified "provider/model" when an inline /model directive changed the entry.
+    let modelPatch: string | undefined;
 
     if (directives.hasThinkDirective && directives.thinkLevel) {
       sessionEntry.thinkingLevel = directives.thinkLevel;
@@ -181,6 +184,9 @@ export async function persistInlineDirectives(params: {
             });
           }
           updated = updated || modelUpdated;
+          if (modelUpdated) {
+            modelPatch = nextLabel;
+          }
         }
       }
     }
@@ -207,6 +213,16 @@ export async function persistInlineDirectives(params: {
         elevatedChanged,
         reasoningChanged,
       });
+      if (modelPatch) {
+        // Let session:patch listeners (e.g. model badge hooks) observe chat-side
+        // model switches the same way they observe gateway sessions.patch.
+        emitSessionPatchHook({
+          sessionKey,
+          sessionEntry,
+          patch: { key: sessionKey, model: modelPatch },
+          cfg,
+        });
+      }
     }
   }
 

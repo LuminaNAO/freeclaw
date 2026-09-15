@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Hooks: add the `session:patch` internal hook event (ported from upstream) and also fire it on chat-side model switches (`/model`, `/new <model>`), so hooks can react to every session model change.
+
 ## 1.1.0 - 2026-05-08
 
 ### Changes
