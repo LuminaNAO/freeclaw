@@ -7,6 +7,7 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import { emitSessionPatchHook } from "../../hooks/session-patch.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
@@ -359,12 +360,13 @@ export async function handleDirectiveOnly(
       sessionEntry.execNode = directives.execNode;
     }
   }
+  let modelPersisted = false;
   if (modelSelection) {
-    applyModelOverrideToSessionEntry({
+    modelPersisted = applyModelOverrideToSessionEntry({
       entry: sessionEntry,
       selection: modelSelection,
       profileOverride,
-    });
+    }).updated;
   }
   if (directives.hasQueueDirective && directives.queueReset) {
     delete sessionEntry.queueMode;
@@ -398,6 +400,16 @@ export async function handleDirectiveOnly(
       enqueueSystemEvent(formatModelSwitchEvent(nextLabel, modelSelection.alias), {
         sessionKey,
         contextKey: `model:${nextLabel}`,
+      });
+    }
+    if (modelPersisted) {
+      // Bare `/model x` messages land here (not in persistInlineDirectives);
+      // surface the switch to session:patch listeners the same way.
+      emitSessionPatchHook({
+        sessionKey,
+        sessionEntry,
+        patch: { key: sessionKey, model: nextLabel },
+        cfg: params.cfg,
       });
     }
   }
