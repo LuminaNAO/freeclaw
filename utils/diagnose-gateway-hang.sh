@@ -14,8 +14,8 @@ GATEWAY_PORT=""
 
 # Source nvm if available
 [ -f "$HOME/.nvm/nvm.sh" ] && source "$HOME/.nvm/nvm.sh" 2>/dev/null
-export PNPM_HOME="$HOME/.local/share/pnpm"
-export PATH="$PNPM_HOME:$PATH"
+# openclaw lives in ~/.local/bin (build-switch installs nothing elsewhere)
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 
 # ─── 1. Basics ──────────────────────────────────────────────────────────────
 section "1. System / Node versions"

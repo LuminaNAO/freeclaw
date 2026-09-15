@@ -452,10 +452,10 @@ elif [ -f /usr/share/nvm/init-nvm.sh ]; then
     source /usr/share/nvm/init-nvm.sh
 fi
 
-export PNPM_HOME="$HOME/.local/share/pnpm"
+# build-switch installs openclaw (and this suite) into ~/.local/bin only.
 case ":$PATH:" in
-    *":$PNPM_HOME:"*) ;;
-    *) export PATH="$PNPM_HOME:$PATH" ;;
+    *":$HOME/.local/bin:"*) ;;
+    *) export PATH="$HOME/.local/bin:$PATH" ;;
 esac
 
 # ─── Pre-flight checks ───────────────────────────────────────────────────────

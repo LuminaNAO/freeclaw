@@ -209,7 +209,8 @@ gw_write_service_unit() {
     node_dir=$(dirname "$GW_NODE_PATH")
     v8_cache_dir="$HOME/.openclaw/v8-compile-cache"
     mkdir -p "$v8_cache_dir" "$(dirname "$GW_SERVICE_FILE")"
-    svc_path="${PNPM_BIN_DIR:-$HOME/.local/share/pnpm/bin}:${PNPM_HOME:-$HOME/.local/share/pnpm}:$node_dir:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:/usr/local/bin:/usr/bin:/bin"
+    # Commands installed by build-switch live in ~/.local/bin only.
+    svc_path="$node_dir:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/bin:/usr/local/bin:/usr/bin:/bin"
     svc_description="OpenClaw Gateway ($GW_VERSION_STRING)"
     if [[ -n "${GW_AGENT_NAME:-}" ]]; then
         svc_description="OpenClaw Gateway - $GW_AGENT_NAME ($GW_VERSION_STRING)"
