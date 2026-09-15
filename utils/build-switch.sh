@@ -542,7 +542,7 @@ build_freeclaw() {
     fi
 
     log "Installing dependencies (Node $(node -v))..."
-    SHARP_IGNORE_GLOBAL_LIBVIPS=1 pnpm install
+    SHARP_IGNORE_GLOBAL_LIBVIPS=1 pnpm install --frozen-lockfile
 
     # Patches modify files inside node_modules — must run after every pnpm install
     for patch in "$OPENCLAW_BASE"/scripts/patch-*.sh; do
