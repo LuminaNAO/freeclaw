@@ -159,13 +159,14 @@ merge_meta() {
     raw_active=$(printf '%s' "$group_json" | jq -r '.active')
     if [[ "$raw_active" == "true" ]]; then status="active"; else status="left"; fi
 
-    # `retired` is sticky: set by an explicit human decision (Manu), never
-    # silently reverted by a sync. If a retired group reappears in a dump,
-    # it stays retired until someone re-activates it by hand.
+    # `retired` and `left` are sticky: set by an explicit human decision (Manu),
+    # never silently reverted to `active` by a sync. If a retired/left group
+    # reappears in a dump (re-invited, stale dump, or re-joined), it keeps its
+    # decided state until someone re-activates it by hand.
     local existing_status
     existing_status=$(printf '%s' "$existing_json" | jq -r '.status // "active"')
-    if [[ "$existing_status" == "retired" && "$status" == "active" ]]; then
-        status="retired"
+    if [[ "$existing_status" == "retired" || "$existing_status" == "left" ]] && [[ "$status" == "active" ]]; then
+        status="$existing_status"
     fi
 
     jq -n \
@@ -206,11 +207,19 @@ merge_meta() {
 }
 
 # Mark a group as removed (was on disk, no longer in the dump at all).
+# `retired` and `left` are sticky: a human-decided state is never silently
+# downgraded to `removed` just because the group dropped out of a dump (the
+# dump can be stale, or the group was genuinely deleted after a retirement).
+# `removed` only applies to groups that were still `active` on disk.
 mark_removed_meta() {
     local existing_json="$1"
     jq -n --argjson existing "$existing_json" --arg now "$NOW" '
         $existing + {
-            status:        "removed",
+            status:        (
+                if ($existing.status == "retired" or $existing.status == "left")
+                then $existing.status
+                else "removed"
+                end),
             agent_active:  false,
             left_at:       ($existing.left_at // $now),
             last_seen_at:  ($existing.last_seen_at // $now)
