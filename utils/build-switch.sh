@@ -22,6 +22,12 @@ set -e
 
 OPENCLAW_BASE="$HOME/code/freeclaw"
 
+# Every command build-switch installs (openclaw, named agents, the utils/
+# suite) lands in exactly one place: ~/.local/bin, the XDG user-executable
+# directory (file-hierarchy(7)) that distros put on PATH by default. No copies
+# in pnpm dirs, no symlinks into whatever happens to be first on PATH.
+USER_BIN_DIR="$HOME/.local/bin"
+
 # Node.js major version required by openclaw
 NODE_MAJOR=24
 
@@ -187,11 +193,12 @@ setup_env() {
         source /usr/share/nvm/init-nvm.sh
     fi
 
-    # Always use current user's home for pnpm paths — never hardcode usernames.
-    # pnpm v11 uses $PNPM_HOME/bin as its configured global bin directory.
+    # pnpm's global dirs. Nothing is installed to them any more (every command
+    # lands in USER_BIN_DIR); they are kept on this process's PATH only so the
+    # `pnpm` binary is found on boxes that installed pnpm standalone into
+    # PNPM_HOME, and so remove_legacy_shims can find old shim copies.
     export PNPM_HOME="$HOME/.local/share/pnpm"
     export PNPM_BIN_DIR="$PNPM_HOME/bin"
-    mkdir -p "$PNPM_HOME" "$PNPM_BIN_DIR"
     case ":$PATH:" in
         *":$PNPM_BIN_DIR:"*) ;;
         *) export PATH="$PNPM_BIN_DIR:$PATH" ;;
@@ -244,58 +251,39 @@ check_pnpm() {
     log "pnpm: $(pnpm --version)"
 }
 
-# Ensure pnpm shim dirs are on the user's interactive-shell PATH.
-# build-switch exports them within its own process, so without this
-# the freshly-installed `openclaw` shim isn't found in a new terminal.
-# Supports bash, zsh, fish.
-ensure_pnpm_on_path() {
-    local rc_files=("$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile" "$HOME/.bash_profile")
-    local found=false
-    for rc in "${rc_files[@]}"; do
-        [[ -f "$rc" ]] \
-            && grep -q 'PNPM_HOME' "$rc" 2>/dev/null \
-            && grep -q 'PNPM_HOME/bin' "$rc" 2>/dev/null \
-            && { found=true; break; }
+# ~/.local/bin is where every command lands (USER_BIN_DIR) and is on PATH by
+# default on modern distros. If it isn't here, say so ONCE and stop — the
+# user's rc files are theirs. An installer that edits them is how PATH ends
+# up containing the same directory four times.
+ensure_local_bin_on_path() {
+    mkdir -p "$USER_BIN_DIR"
+    case ":$PATH:" in
+        *":$USER_BIN_DIR:"*) return 0 ;;
+    esac
+    warn "$USER_BIN_DIR is not on your PATH, so new shells won't find '$AGENT_CMD_NAME'."
+    warn "Add this to ~/.profile (or your shell's equivalent), then open a new shell:"
+    warn "    export PATH=\"\$HOME/.local/bin:\$PATH\""
+    # Make it visible to this process so the post-install verify can run.
+    export PATH="$USER_BIN_DIR:$PATH"
+}
+
+# Earlier build-switch releases wrote a copy of every shim into the pnpm
+# global dirs as well (and a symlink into the first writable PATH entry).
+# Remove those copies so exactly one file per command remains. Only
+# build-switch's own wrappers are touched — a real pnpm global (a symlink
+# into the store) is left alone.
+remove_legacy_shims() {
+    local dir f
+    for dir in "$PNPM_BIN_DIR" "$PNPM_HOME"; do
+        [[ -n "$dir" && -d "$dir" ]] || continue
+        for f in "$dir"/*; do
+            [[ -f "$f" && ! -L "$f" ]] || continue
+            head -1 "$f" 2>/dev/null | grep -q '^#!/bin/sh$' || continue
+            grep -qE '^exec "' "$f" 2>/dev/null || continue
+            rm -f "$f"
+            log "Removed legacy shim copy: $f"
+        done
     done
-
-    if $found; then
-        return 0
-    fi
-
-    local target_rc="$HOME/.bashrc"
-    log "Adding pnpm shim paths to $target_rc"
-    {
-        echo ""
-        echo "# pnpm shims for OpenClaw/FreeClaw"
-        echo "export PNPM_HOME=\"$PNPM_HOME\""
-        echo "export PNPM_BIN_DIR=\"\$PNPM_HOME/bin\""
-        echo "case \":\$PATH:\" in *\":\$PNPM_BIN_DIR:\"*) ;; *) export PATH=\"\$PNPM_BIN_DIR:\$PATH\" ;; esac"
-        echo "case \":\$PATH:\" in *\":\$PNPM_HOME:\"*) ;; *) export PATH=\"\$PNPM_HOME:\$PATH\" ;; esac"
-    } >> "$target_rc"
-    log "pnpm shim paths added — open a new shell (or 'source ~/.bashrc') before running $AGENT_CMD_NAME"
-
-    # Also bind to fish if it is installed
-    if command -v fish &>/dev/null; then
-        local fish_conf="$HOME/.config/fish/config.fish"
-        mkdir -p "$HOME/.config/fish"
-        if grep -q 'PNPM_HOME' "$fish_conf" 2>/dev/null && grep -q 'PNPM_HOME/bin' "$fish_conf" 2>/dev/null; then
-            log "fish config already has pnpm shim paths"
-        else
-            log "Adding pnpm shim paths to fish config: $fish_conf"
-            {
-                echo ""
-                echo "# pnpm shims for OpenClaw/FreeClaw (added by build-switch)"
-                echo "set -gx PNPM_HOME \"$PNPM_HOME\""
-                echo "set -gx PNPM_BIN_DIR \"\$PNPM_HOME/bin\""
-                echo "if not string match -q -- \"\$PNPM_BIN_DIR\" \$PATH"
-                echo "  set -gx PATH \"\$PNPM_BIN_DIR\" \$PATH"
-                echo "end"
-                echo "if not string match -q -- \"\$PNPM_HOME\" \$PATH"
-                echo "  set -gx PATH \"\$PNPM_HOME\" \$PATH"
-                echo "end"
-            } >> "$fish_conf"
-        fi
-    fi
 }
 
 # ============================================================================
@@ -396,29 +384,28 @@ check_soft_deps() {
 # SHIM INSTALLATION
 # ============================================================================
 
-# Write a shell wrapper shim to both pnpm and local bin dirs.
+# Write a shell wrapper shim into ~/.local/bin (USER_BIN_DIR) — the only place
+# commands are installed.
 write_shim() {
     local name="$1" node_bin="$2" entrypoint="$3"
     shift 3
     # Remaining args are extra env exports for the shim body
     local env_lines=("$@")
 
-    for shim_dir in "$PNPM_BIN_DIR" "$PNPM_HOME" "$HOME/.local/bin"; do
-        mkdir -p "$shim_dir"
-        # Remove the name before writing it. A previous install can leave the
-        # shim as a symlink whose target no longer exists; `>` follows the link
-        # to the missing target and fails with "No such file or directory",
-        # aborting the install.
-        rm -f "$shim_dir/$name"
-        {
-            echo "#!/bin/sh"
-            for line in "${env_lines[@]}"; do
-                echo "export $line"
-            done
-            echo "exec \"$node_bin\" \"$entrypoint\" \"\$@\""
-        } > "$shim_dir/$name"
-        chmod +x "$shim_dir/$name"
-    done
+    mkdir -p "$USER_BIN_DIR"
+    # Remove the name before writing it. A previous install can leave the
+    # shim as a symlink whose target no longer exists; `>` follows the link
+    # to the missing target and fails with "No such file or directory",
+    # aborting the install.
+    rm -f "$USER_BIN_DIR/$name"
+    {
+        echo "#!/bin/sh"
+        for line in "${env_lines[@]}"; do
+            echo "export $line"
+        done
+        echo "exec \"$node_bin\" \"$entrypoint\" \"\$@\""
+    } > "$USER_BIN_DIR/$name"
+    chmod +x "$USER_BIN_DIR/$name"
 }
 
 install_shims() {
@@ -429,23 +416,6 @@ install_shims() {
     local v8_cache_dir="$HOME/.openclaw/v8-compile-cache"
     mkdir -p "$v8_cache_dir"
 
-    # Pick a directory already on the *invoking shell's* PATH so the shim
-    # works immediately, with no rc-file sourcing. write_shim still writes
-    # to pnpm shim dirs and ~/.local/bin for future shells; this is just an
-    # extra "current-shell" landing pad.
-    SHIM_CURRENT_SHELL_DIR=""
-    local candidate
-    while IFS= read -r candidate; do
-        [[ -z "$candidate" ]] && continue
-        case "$candidate" in
-            /usr/*|/bin|/sbin) continue ;;  # skip system dirs (need sudo)
-        esac
-        if [[ -d "$candidate" && -w "$candidate" ]]; then
-            SHIM_CURRENT_SHELL_DIR="$candidate"
-            break
-        fi
-    done < <(echo "$PATH" | tr ':' '\n')
-
     if [[ -n "$AGENT_NAME" ]]; then
         log "Installing agent command: $AGENT_CMD_NAME"
         mkdir -p "$AGENT_STATE_DIR"
@@ -453,8 +423,8 @@ install_shims() {
             "OPENCLAW_STATE_DIR=$AGENT_STATE_DIR" \
             "OPENCLAW_SYSTEMD_UNIT=${AGENT_SERVICE_NAME}" \
             "NODE_COMPILE_CACHE=$v8_cache_dir"
-        # Ensure the base openclaw shim exists too (needed for pnpm link)
-        if [[ ! -f "$PNPM_BIN_DIR/openclaw" ]]; then
+        # Ensure the base openclaw shim exists too
+        if [[ ! -f "$USER_BIN_DIR/openclaw" ]]; then
             write_shim "openclaw" "$node_bin" "$entrypoint" \
                 "NODE_COMPILE_CACHE=$v8_cache_dir"
         fi
@@ -463,19 +433,13 @@ install_shims() {
             "NODE_COMPILE_CACHE=$v8_cache_dir"
     fi
 
-    # Drop a symlink in the on-PATH dir for the current shell.
-    if [[ -n "$SHIM_CURRENT_SHELL_DIR" \
-          && "$SHIM_CURRENT_SHELL_DIR" != "$PNPM_HOME" \
-          && "$SHIM_CURRENT_SHELL_DIR" != "$PNPM_BIN_DIR" \
-          && "$SHIM_CURRENT_SHELL_DIR" != "$HOME/.local/bin" ]]; then
-        ln -sf "$PNPM_BIN_DIR/$AGENT_CMD_NAME" "$SHIM_CURRENT_SHELL_DIR/$AGENT_CMD_NAME"
-        log "Symlinked $AGENT_CMD_NAME into $SHIM_CURRENT_SHELL_DIR (already on PATH)"
-    fi
-
     # Verify the shim works
-    if ! timeout 10 "$PNPM_BIN_DIR/$AGENT_CMD_NAME" --version &>/dev/null; then
-        warn "$AGENT_CMD_NAME shim may not work — check $PNPM_BIN_DIR/$AGENT_CMD_NAME"
+    if ! timeout 10 "$USER_BIN_DIR/$AGENT_CMD_NAME" --version &>/dev/null; then
+        warn "$AGENT_CMD_NAME shim may not work — check $USER_BIN_DIR/$AGENT_CMD_NAME"
     fi
+    # bash caches command locations: a shell that already resolved an older
+    # path needs its hash table cleared before it sees the new file.
+    log "Installed $USER_BIN_DIR/$AGENT_CMD_NAME (existing shells: run 'hash -r')"
 }
 
 # Install the utils/*.sh|*.py suite as commands, matching `make install`
@@ -493,22 +457,25 @@ install_shims() {
 # first line of real work with "Missing ~/.local/bin/lib-gateway.sh". Exec'ing
 # the real path keeps that directory utils/, where every sibling lives.
 install_util_commands() {
-    local utils_dir="$OPENCLAW_BASE/utils" name base f shim_dir
+    local utils_dir="$OPENCLAW_BASE/utils" name base f
     [[ -d "$utils_dir" ]] || return 0
-    for shim_dir in "$PNPM_BIN_DIR" "$PNPM_HOME" "$HOME/.local/bin"; do
-        [[ -n "$shim_dir" ]] || continue
-        mkdir -p "$shim_dir"
-        for f in "$utils_dir"/*.sh "$utils_dir"/*.py; do
-            [[ -f "$f" ]] || continue
-            base="$(basename "$f")"
-            name="$(printf '%s' "${base%.*}" | tr '_' '-')"
-            [[ "$name" == "openclaw" ]] && continue
-            # rm -f first: the name may be a symlink from an earlier install
-            # (possibly dangling), and `>` would follow it.
-            rm -f "$shim_dir/$name"
-            printf '#!/bin/sh\nexec "%s" "$@"\n' "$f" > "$shim_dir/$name"
-            chmod +x "$shim_dir/$name"
-        done
+    mkdir -p "$USER_BIN_DIR"
+    for f in "$utils_dir"/*.sh "$utils_dir"/*.py; do
+        [[ -f "$f" ]] || continue
+        base="$(basename "$f")"
+        name="$(printf '%s' "${base%.*}" | tr '_' '-')"
+        # Test files are not commands (utils/foo.test.sh would install as
+        # "foo.test"); also remove one that an earlier release installed.
+        if [[ "$base" == *.test.* ]]; then
+            rm -f "$USER_BIN_DIR/$name"
+            continue
+        fi
+        [[ "$name" == "openclaw" ]] && continue
+        # rm -f first: the name may be a symlink from an earlier install
+        # (possibly dangling), and `>` would follow it.
+        rm -f "$USER_BIN_DIR/$name"
+        printf '#!/bin/sh\nexec "%s" "$@"\n' "$f" > "$USER_BIN_DIR/$name"
+        chmod +x "$USER_BIN_DIR/$name"
     done
     log "Installed util commands (llamacpp-init, trustgraph, diagnose-gateway-hang, lib-gateway, ...) — matches make install"
 }
@@ -542,7 +509,7 @@ build_freeclaw() {
     fi
 
     log "Installing dependencies (Node $(node -v))..."
-    pnpm install
+    SHARP_IGNORE_GLOBAL_LIBVIPS=1 pnpm install --frozen-lockfile
 
     # Patches modify files inside node_modules — must run after every pnpm install
     for patch in "$OPENCLAW_BASE"/scripts/patch-*.sh; do
@@ -560,6 +527,7 @@ build_freeclaw() {
 
     log "Installing command shims..."
     pnpm uninstall -g openclaw >/dev/null 2>&1 || true
+    remove_legacy_shims
     # pnpm link --global behavior differs across pnpm releases and can prompt
     # to purge node_modules. Install deterministic wrappers instead.
     local node_bin
@@ -682,7 +650,7 @@ case "$BRANCH" in
         setup_env
         ensure_node
         check_pnpm
-        ensure_pnpm_on_path
+        ensure_local_bin_on_path
         if [[ -n "$AGENT_NAME" ]]; then
             log "=== Agent mode: $AGENT_NAME ==="
             log "State dir: $AGENT_STATE_DIR"

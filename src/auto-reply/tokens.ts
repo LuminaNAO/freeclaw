@@ -49,6 +49,20 @@ export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKE
   return text.replace(getSilentTrailingRegex(token), "").trim();
 }
 
+/**
+ * Strip a silent reply token from the start and/or end of mixed-content text.
+ * Local models often bundle the token with a real reply ("NO_REPLY\nHi" or
+ * "Hi NO_REPLY"); delivering the remaining text beats dropping the reply or
+ * leaking the literal token. Returns "" when only the token was there.
+ */
+export function stripSilentTokenEdges(text: string, token: string = SILENT_REPLY_TOKEN): string {
+  const escaped = escapeRegExp(token);
+  // Leading token, optionally bold-wrapped, followed by whitespace/punctuation
+  // or the end of text — never a word continuation ("NO_REPLYing").
+  const leading = new RegExp(`^\\s*\\*{0,2}${escaped}\\*{0,2}(?:[\\s:.,;\\-—]+|$)`);
+  return stripSilentToken(text.replace(leading, ""), token);
+}
+
 export function isSilentReplyPrefixText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,

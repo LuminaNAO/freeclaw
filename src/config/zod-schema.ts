@@ -203,9 +203,29 @@ const TalkSchema = z
     }
   });
 
+const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
+    // surfaces.<channel>.silentReply.{group,direct}: "disallow" stops the model
+    // being taught NO_REPLY on that surface (see src/config/silent-reply.ts).
+    surfaces: z
+      .record(
+        z.string(),
+        z
+          .object({
+            silentReply: z
+              .object({
+                group: SilentReplyPolicySchema.optional(),
+                direct: SilentReplyPolicySchema.optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     meta: z
       .object({
         lastTouchedVersion: z.string().optional(),
@@ -541,7 +561,7 @@ export const OpenClawSchema = z
       .superRefine((val, ctx) => {
         if (val.sessionRetention !== undefined && val.sessionRetention !== false) {
           try {
-            parseDurationMs(String(val.sessionRetention).trim(), { defaultUnit: "h" });
+            parseDurationMs(val.sessionRetention.trim(), { defaultUnit: "h" });
           } catch {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,

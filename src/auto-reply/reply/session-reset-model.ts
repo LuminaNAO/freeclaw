@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
+import { emitSessionPatchHook } from "../../hooks/session-patch.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveModelDirectiveSelection, type ModelDirectiveSelection } from "./model-selection.js";
@@ -58,13 +59,14 @@ function buildSelectionFromExplicit(params: {
 }
 
 function applySelectionToSession(params: {
+  cfg: OpenClawConfig;
   selection: ModelDirectiveSelection;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
 }) {
-  const { selection, sessionEntry, sessionStore, sessionKey, storePath } = params;
+  const { cfg, selection, sessionEntry, sessionStore, sessionKey, storePath } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
     return;
   }
@@ -83,6 +85,13 @@ function applySelectionToSession(params: {
       // Ignore persistence errors; session still proceeds.
     });
   }
+  // `/new <model>` is a model switch too; surface it to session:patch listeners.
+  emitSessionPatchHook({
+    sessionKey,
+    sessionEntry,
+    patch: { key: sessionKey, model: `${selection.provider}/${selection.model}` },
+    cfg,
+  });
 }
 
 export async function applyResetModelOverride(params: {
@@ -189,6 +198,7 @@ export async function applyResetModelOverride(params: {
   params.sessionCtx.BodyForCommands = cleanedBody;
 
   applySelectionToSession({
+    cfg: params.cfg,
     selection,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,

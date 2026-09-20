@@ -160,7 +160,9 @@ describe("routeReply", () => {
     await expectSlackNoSend({ text: SILENT_REPLY_TOKEN });
   });
 
-  it("does not drop payloads that merely start with the silent token", async () => {
+  it("delivers payloads that merely start with the silent token, minus the token", async () => {
+    // Local models often bundle NO_REPLY with a real reply. The reply must go
+    // out (never dropped) and the literal token must never reach the user.
     mocks.sendMessageSlack.mockClear();
     const res = await routeReply({
       payload: { text: `${SILENT_REPLY_TOKEN} -- (why am I here?)` },
@@ -171,7 +173,7 @@ describe("routeReply", () => {
     expect(res.ok).toBe(true);
     expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
       "channel:C123",
-      `${SILENT_REPLY_TOKEN} -- (why am I here?)`,
+      "(why am I here?)",
       expect.any(Object),
     );
   });

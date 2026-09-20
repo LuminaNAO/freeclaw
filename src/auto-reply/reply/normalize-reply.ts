@@ -4,7 +4,7 @@ import {
   HEARTBEAT_TOKEN,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
-  stripSilentToken,
+  stripSilentTokenEdges,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
@@ -50,11 +50,13 @@ export function normalizeReplyPayload(
     }
     text = "";
   }
-  // Strip NO_REPLY from mixed-content messages (e.g. "😄 NO_REPLY") so the
-  // token never leaks to end users.  If stripping leaves nothing, treat it as
-  // silent just like the exact-match path above.  (#30916, #30955)
+  // Strip NO_REPLY from mixed-content messages so the token never leaks to end
+  // users — trailing ("😄 NO_REPLY", #30916/#30955) and leading ("NO_REPLY\nHi"),
+  // which local models produce constantly in group chats and which used to
+  // deliver the literal token. If stripping leaves nothing, treat it as silent
+  // just like the exact-match path above.
   if (text && text.includes(silentToken) && !isSilentReplyText(text, silentToken)) {
-    text = stripSilentToken(text, silentToken);
+    text = stripSilentTokenEdges(text, silentToken);
     if (!text && !hasMedia && !hasChannelData) {
       opts.onSkip?.("silent");
       return null;

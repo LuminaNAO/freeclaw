@@ -1,10 +1,25 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 export const CHARS_PER_TOKEN_ESTIMATE = 4;
-export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 
-export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
+/**
+ * The guard estimates the WIRE payload, not the persisted transcript:
+ * tool-result `details` never reach the provider, and assistant thinking is
+ * only counted when the provider replays it (see includeThinking). One
+ * chars-per-token constant applies to content and budget alike.
+ */
+export type MessageCharEstimateOptions = {
+  /** Count persisted assistant thinking blocks. Pass false when the provider
+   * does not replay them (for example llama.cpp, where FreeClaw drops
+   * thinking blocks before the request is built). Default: true. */
+  includeThinking?: boolean;
+};
+
+export type MessageCharEstimateCache = {
+  map: WeakMap<AgentMessage, number>;
+  includeThinking: boolean;
+};
 
 function isTextBlock(block: unknown): block is { type: "text"; text: string } {
   return !!block && typeof block === "object" && (block as { type?: unknown }).type === "text";
@@ -71,7 +86,22 @@ export function getToolResultText(msg: AgentMessage): string {
   return chunks.join("\n");
 }
 
-function estimateMessageChars(msg: AgentMessage): number {
+export type ContextCharsBreakdown = {
+  /** User message text plus assistant visible text and tool-call arguments. */
+  textChars: number;
+  /** Persisted assistant thinking blocks (counted on the wire only when the
+   * provider replays them). */
+  thinkingChars: number;
+  /** Tool result content chars. */
+  toolChars: number;
+  /** Tool result details chars (persisted but never sent on the wire). */
+  detailsChars: number;
+  /** Total on the cache's wire semantics, identical to estimateContextChars()
+   * on the same messages and cache. */
+  totalChars: number;
+};
+
+function estimateMessageChars(msg: AgentMessage, includeThinking: boolean): number {
   if (!msg || typeof msg !== "object") {
     return 0;
   }
@@ -104,7 +134,9 @@ function estimateMessageChars(msg: AgentMessage): number {
         if (typed.type === "text" && typeof typed.text === "string") {
           chars += typed.text.length;
         } else if (typed.type === "thinking" && typeof typed.thinking === "string") {
-          chars += typed.thinking.length;
+          if (includeThinking) {
+            chars += typed.thinking.length;
+          }
         } else if (typed.type === "toolCall") {
           try {
             chars += JSON.stringify(typed.arguments ?? {}).length;
@@ -120,33 +152,32 @@ function estimateMessageChars(msg: AgentMessage): number {
   }
 
   if (isToolResultMessage(msg)) {
-    const content = getToolResultContent(msg);
-    let chars = estimateContentBlockChars(content);
-    const details = (msg as { details?: unknown }).details;
-    chars += estimateUnknownChars(details);
-    const weightedChars = Math.ceil(
-      chars * (CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE),
-    );
-    return Math.max(chars, weightedChars);
+    // Content only: `details` is internal metadata that never reaches the wire.
+    return estimateContentBlockChars(getToolResultContent(msg));
   }
 
   return 256;
 }
 
-export function createMessageCharEstimateCache(): MessageCharEstimateCache {
-  return new WeakMap<AgentMessage, number>();
+export function createMessageCharEstimateCache(
+  opts?: MessageCharEstimateOptions,
+): MessageCharEstimateCache {
+  return {
+    map: new WeakMap<AgentMessage, number>(),
+    includeThinking: opts?.includeThinking ?? true,
+  };
 }
 
 export function estimateMessageCharsCached(
   msg: AgentMessage,
   cache: MessageCharEstimateCache,
 ): number {
-  const hit = cache.get(msg);
+  const hit = cache.map.get(msg);
   if (hit !== undefined) {
     return hit;
   }
-  const estimated = estimateMessageChars(msg);
-  cache.set(msg, estimated);
+  const estimated = estimateMessageChars(msg, cache.includeThinking);
+  cache.map.set(msg, estimated);
   return estimated;
 }
 
@@ -157,9 +188,83 @@ export function estimateContextChars(
   return messages.reduce((sum, msg) => sum + estimateMessageCharsCached(msg, cache), 0);
 }
 
+/**
+ * Per-category breakdown of the context estimate, for guard decision logging.
+ * Parts are raw transcript chars — the same vocabulary as the divergence
+ * analysis — while totalChars follows the cache's wire semantics so it can be
+ * compared against the guard budget.
+ */
+export function estimateContextCharsBreakdown(
+  messages: AgentMessage[],
+  cache: MessageCharEstimateCache,
+): ContextCharsBreakdown {
+  const breakdown: ContextCharsBreakdown = {
+    textChars: 0,
+    thinkingChars: 0,
+    toolChars: 0,
+    detailsChars: 0,
+    totalChars: 0,
+  };
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    breakdown.totalChars += estimateMessageCharsCached(msg, cache);
+
+    if (msg.role === "user") {
+      const content = msg.content;
+      breakdown.textChars +=
+        typeof content === "string"
+          ? content.length
+          : Array.isArray(content)
+            ? estimateContentBlockChars(content)
+            : 0;
+      continue;
+    }
+
+    if (msg.role === "assistant") {
+      const content = (msg as { content?: unknown }).content;
+      if (!Array.isArray(content)) {
+        continue;
+      }
+      for (const block of content) {
+        if (!block || typeof block !== "object") {
+          continue;
+        }
+        const typed = block as { type?: unknown; text?: unknown; thinking?: unknown };
+        if (typed.type === "thinking" && typeof typed.thinking === "string") {
+          breakdown.thinkingChars += typed.thinking.length;
+        } else if (typed.type === "text" && typeof typed.text === "string") {
+          breakdown.textChars += typed.text.length;
+        } else if (typed.type === "toolCall") {
+          // Mirrors estimateMessageChars: only the serialized arguments count.
+          const args = (block as { arguments?: unknown }).arguments;
+          try {
+            breakdown.textChars += JSON.stringify(args ?? {}).length;
+          } catch {
+            breakdown.textChars += 128;
+          }
+        } else {
+          breakdown.textChars += estimateUnknownChars(block);
+        }
+      }
+      continue;
+    }
+
+    if (isToolResultMessage(msg)) {
+      breakdown.toolChars += estimateContentBlockChars(getToolResultContent(msg));
+      const details = (msg as { details?: unknown }).details;
+      breakdown.detailsChars += details === undefined ? 0 : estimateUnknownChars(details);
+    }
+  }
+
+  return breakdown;
+}
+
 export function invalidateMessageCharsCacheEntry(
   cache: MessageCharEstimateCache,
   msg: AgentMessage,
 ): void {
-  cache.delete(msg);
+  cache.map.delete(msg);
 }

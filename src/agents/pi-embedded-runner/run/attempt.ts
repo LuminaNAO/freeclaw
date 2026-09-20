@@ -10,6 +10,7 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveSilentReplyPromptMode } from "../../../config/silent-reply.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -75,6 +76,7 @@ import {
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
+import { makeToolPrunablePredicate } from "../../pi-extensions/context-pruning/tools.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
@@ -1500,6 +1502,9 @@ export async function runEmbeddedAttempt(
     let yieldAbortSettled: Promise<void> | null = null;
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
+    // Set by the tool-result context guard when it is over the prune trigger
+    // with nothing left to prune — run.ts escalates to compaction once per run.
+    let pruneExhausted = false;
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
@@ -1693,6 +1698,11 @@ export async function runEmbeddedAttempt(
       contextFiles,
       bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
+      silentReplyPromptMode: resolveSilentReplyPromptMode({
+        cfg: params.config,
+        channel: params.messageChannel ?? params.messageProvider,
+        chatType: params.groupId ? "group" : "direct",
+      }),
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
@@ -1877,6 +1887,16 @@ export async function runEmbeddedAttempt(
             params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
           ),
         ),
+        sessionManager,
+        // Thinking blocks only count against the budget when the provider
+        // actually replays them on the wire.
+        includeThinking: !transcriptPolicy.dropThinkingBlocks,
+        isToolPrunable: makeToolPrunablePredicate(
+          params.config?.agents?.defaults?.contextPruning?.tools ?? {},
+        ),
+        onPruneExhausted: () => {
+          pruneExhausted = true;
+        },
       });
       const cacheTrace = createCacheTrace({
         cfg: params.config,
@@ -2884,6 +2904,7 @@ export async function runEmbeddedAttempt(
         ),
         attemptUsage: getUsageTotals(),
         compactionCount: getCompactionCount(),
+        pruneExhausted: pruneExhausted || undefined,
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
         yieldDetected: yieldDetected || undefined,

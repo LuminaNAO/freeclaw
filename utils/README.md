@@ -40,6 +40,19 @@ FreeClaw gateway ports are assigned from `40701-40798`; `40801` remains the defa
 
 Triage script for a stuck or unresponsive OpenClaw gateway: checks binary, ports, state files, locks, sockets, disk/memory, and environment overrides.
 
+### Simulation harness (context pruning)
+
+Reproduce and measure the context-pruning pathology against an isolated agent (default `simclaw`) bound to a test llama.cpp instance. See the phased plan in the pruning handover docs for the success metrics (re-prefill events > 8k prompt tokens per 20-turn run, seconds spent in them).
+
+```bash
+./sim-init.sh [agent]      # Wire the agent's provider at $LLAMA_CPP_BASE_URL (default :40901)
+./simlong.sh [session-id]  # 20-turn agentic driver; use a fresh session id per experiment
+./simswap.sh [A] [B]       # Two-session slot save/restore swap test
+./simwatch.py [substring]  # Per-request table from llama.log + llama-deep.log
+```
+
+Outputs land in `$SIM_RUN_DIR` (default `~/code/freeclaw-pruning-handover/runs`). `simwatch.py` honors `LLAMA_LOG` / `LLAMA_DEEP_LOG` overrides.
+
 ### `freeclaw_heartbeat_toggle.sh`
 
 Durably enables/disables OpenClaw agent heartbeats by editing `openclaw.json` directly, then attempts the runtime gateway toggle with a bounded timeout. Use this instead of relying only on `openclaw system heartbeat disable`, which can be runtime-only.
@@ -80,14 +93,14 @@ Diffs the current Signal identity dump against the previous one. Run by `signal-
 
 ### `trustgraph-build.sh`
 
-Builds and updates Lumina's L3 Trust Graph (`trustgraph.yaml`) from the Signal identity dump. Designed to run during the sleep cycle (Stage 2: The Scholar), not during active sessions — zero context cost to working sessions.
+Builds and updates a trust graph (`trustgraph.yaml`) from the Signal identity dump. Designed to run on a schedule outside active sessions — zero context cost to working sessions.
 
 ```bash
 ./trustgraph-build.sh <workspace>              # Build from default dump
 ./trustgraph-build.sh <workspace> --dry-run    # Preview without writing
 ```
 
-**Purpose:** Long-term social memory tracking every person Lumina interacts with — their nature, trust level (0–5), preferences, expertise, and key interaction history.
+**Purpose:** Opt-in, consent-aware long-term social memory for the account owner — interaction metadata for contacts the owner chooses to track (nature, trust level 0–5, preferences, expertise, key interaction history).
 
 **Schema:** YAML keyed on Signal UUID (`uuid:xxxx`). Non-destructive merges — never overwrites known fields with null. Groups membership is NOT stored (derived on demand from the signal dump).
 

@@ -57,6 +57,7 @@ import {
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  stripSilentTokenEdges,
 } from "../auto-reply/tokens.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
@@ -583,13 +584,9 @@ async function prepareAgentCommandExecution(
   }
 
   const laneRaw = typeof opts.lane === "string" ? opts.lane.trim() : "";
-  const isSubagentLane = laneRaw === String(AGENT_LANE_SUBAGENT);
+  const isSubagentLane = laneRaw === (AGENT_LANE_SUBAGENT as string);
   const timeoutSecondsRaw =
-    opts.timeout !== undefined
-      ? Number.parseInt(String(opts.timeout), 10)
-      : isSubagentLane
-        ? 0
-        : undefined;
+    opts.timeout !== undefined ? Number.parseInt(opts.timeout, 10) : isSubagentLane ? 0 : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
@@ -1203,7 +1200,16 @@ async function agentCommandInternal(
       });
     }
 
-    const payloads = result.payloads ?? [];
+    // Same rule as channel delivery (normalizeReplyPayload): a NO_REPLY bundled
+    // with real text is stripped from either edge, never printed or dropped.
+    // An exact NO_REPLY is left alone here — the CLI shows what the model said.
+    const payloads = (result.payloads ?? []).map((payload) =>
+      payload.text &&
+      payload.text.includes(SILENT_REPLY_TOKEN) &&
+      !isSilentReplyText(payload.text, SILENT_REPLY_TOKEN)
+        ? { ...payload, text: stripSilentTokenEdges(payload.text, SILENT_REPLY_TOKEN) }
+        : payload,
+    );
     return await deliverAgentCommandResult({
       cfg,
       deps,

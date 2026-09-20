@@ -7,6 +7,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { emitSessionPatchHook } from "../../hooks/session-patch.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
@@ -115,7 +116,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const keysRaw = Array.isArray(p.keys) ? p.keys : [];
     const keys = keysRaw
-      .map((key) => String(key ?? "").trim())
+      .map((key) => key.trim())
       .filter(Boolean)
       .slice(0, 64);
     const limit =
@@ -212,6 +213,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, applied.error);
       return;
     }
+    emitSessionPatchHook({
+      sessionKey: target.canonicalKey ?? key,
+      sessionEntry: applied.entry,
+      patch: p,
+      cfg,
+    });
     const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
     const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);

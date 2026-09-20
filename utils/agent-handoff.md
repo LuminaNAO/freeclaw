@@ -34,7 +34,7 @@ scripts. Override with `--dump <path>` on the diff/memory scripts.
 
 Group IDs in openclaw.json (`channels.signal.groups`) are 44-char base64
 strings with `/`, `+`, `=`, e.g.
-`0Qc/wHffzC8y4BJB9qB2dOdKw0xqfmdv7wutKT8lDo4=`.
+`AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=`.
 
 The simplest path:
 

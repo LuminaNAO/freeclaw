@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # teleport-to.sh — Teleport gateway FROM home TO this (remote) machine
 # Usage: teleport-to.sh <home-host>
-#   home-host: SSH address of home machine (e.g., lumina@framed)
+#   home-host: SSH address of home machine (e.g., user@home-host)
 
 set -euo pipefail
 

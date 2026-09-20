@@ -159,6 +159,15 @@ merge_meta() {
     raw_active=$(printf '%s' "$group_json" | jq -r '.active')
     if [[ "$raw_active" == "true" ]]; then status="active"; else status="left"; fi
 
+    # `retired` is sticky: set by an explicit human decision (Manu), never
+    # silently reverted by a sync. If a retired group reappears in a dump,
+    # it stays retired until someone re-activates it by hand.
+    local existing_status
+    existing_status=$(printf '%s' "$existing_json" | jq -r '.status // "active"')
+    if [[ "$existing_status" == "retired" && "$status" == "active" ]]; then
+        status="retired"
+    fi
+
     jq -n \
         --argjson existing "$existing_json" \
         --argjson dump     "$group_json" \

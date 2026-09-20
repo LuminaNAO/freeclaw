@@ -64,6 +64,9 @@ export type EmbeddedRunAttemptResult = {
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
   compactionCount?: number;
+  /** True when the tool-result context guard found nothing left to prune while
+   * over the trigger — run.ts escalates to compaction once per run. */
+  pruneExhausted?: boolean;
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };
   /** True when sessions_yield tool was called during this attempt. */

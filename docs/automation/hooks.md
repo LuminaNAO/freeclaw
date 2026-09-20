@@ -250,6 +250,7 @@ Triggered when agent commands are issued:
 
 ### Session Events
 
+- **`session:patch`**: After a session entry is changed and persisted. Fires for the gateway `sessions.patch` RPC (Control UI, `openclaw sessions patch`) and for chat-side model switches (`/model ...`, `/new <model>`). `context.sessionEntry` is the updated entry, `context.patch` holds only the changed fields (model switches arrive as a qualified `model: "provider/model"`), and `context.cfg` is the active config.
 - **`session:compact:before`**: Right before compaction summarizes history
 - **`session:compact:after`**: After compaction completes with summary metadata
 

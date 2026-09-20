@@ -739,8 +739,10 @@ export async function runEmbeddedPiAgent(
       };
 
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+      const MAX_PRUNE_EXHAUSTED_COMPACTION_ATTEMPTS = 1;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
+      let pruneExhaustedCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       let bootstrapPromptWarningSignaturesSeen =
         params.bootstrapPromptWarningSignaturesSeen ??
@@ -1483,6 +1485,114 @@ export async function runEmbeddedPiAgent(
               });
             }
             logAssistantFailoverDecision("surface_error");
+          }
+
+          // The tool-result context guard signaled prune exhaustion during this
+          // attempt: over the prune trigger with nothing prunable left before
+          // the boundary. Escalate to a full compaction once per run so the
+          // next turn starts under the trigger. Mirrors the overflow path's
+          // guard against double compaction, at run level: skip when ANY
+          // earlier attempt in this run already compacted (autoCompactionCount
+          // includes this attempt's count, accumulated above), not just this
+          // attempt. Does not retry the prompt — the turn succeeded.
+          if (
+            attempt.pruneExhausted &&
+            !aborted &&
+            !promptError &&
+            autoCompactionCount === 0 &&
+            pruneExhaustedCompactionAttempts < MAX_PRUNE_EXHAUSTED_COMPACTION_ATTEMPTS
+          ) {
+            pruneExhaustedCompactionAttempts++;
+            const pruneDiagId = createCompactionDiagId();
+            log.warn(
+              `[prune-exhausted] no prunable tool results left over trigger; escalating to compaction ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId} provider=${provider}/${modelId} ` +
+                `diagId=${pruneDiagId}`,
+            );
+            const pruneHookRunner = contextEngine.info.ownsCompaction === true ? hookRunner : null;
+            if (pruneHookRunner?.hasHooks("before_compaction")) {
+              try {
+                await pruneHookRunner.runBeforeCompaction(
+                  { messageCount: -1, sessionFile: params.sessionFile },
+                  hookCtx,
+                );
+              } catch (hookErr) {
+                log.warn(
+                  `before_compaction hook failed during prune-exhausted escalation: ${String(hookErr)}`,
+                );
+              }
+            }
+            try {
+              const pruneCompactResult = await contextEngine.compact({
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                sessionFile: params.sessionFile,
+                tokenBudget: ctxInfo.tokens,
+                // The guard's own estimate is the trigger; pi's threshold (window
+                // minus reserve) is deliberately higher, so force past it.
+                force: true,
+                compactionTarget: "budget",
+                runtimeContext: {
+                  sessionKey: params.sessionKey,
+                  messageChannel: params.messageChannel,
+                  messageProvider: params.messageProvider,
+                  agentAccountId: params.agentAccountId,
+                  authProfileId: lastProfileId,
+                  workspaceDir: resolvedWorkspace,
+                  agentDir,
+                  config: params.config,
+                  skillsSnapshot: params.skillsSnapshot,
+                  senderIsOwner: params.senderIsOwner,
+                  provider,
+                  model: modelId,
+                  runId: params.runId,
+                  thinkLevel,
+                  reasoningLevel: params.reasoningLevel,
+                  bashElevated: params.bashElevated,
+                  extraSystemPrompt: params.extraSystemPrompt,
+                  ownerNumbers: params.ownerNumbers,
+                  trigger: "prune-exhausted",
+                  diagId: pruneDiagId,
+                  attempt: pruneExhaustedCompactionAttempts,
+                  maxAttempts: MAX_PRUNE_EXHAUSTED_COMPACTION_ATTEMPTS,
+                },
+              });
+              if (
+                pruneCompactResult.ok &&
+                pruneCompactResult.compacted &&
+                pruneHookRunner?.hasHooks("after_compaction")
+              ) {
+                try {
+                  await pruneHookRunner.runAfterCompaction(
+                    {
+                      messageCount: -1,
+                      compactedCount: -1,
+                      tokenCount: pruneCompactResult.result?.tokensAfter,
+                      sessionFile: params.sessionFile,
+                    },
+                    hookCtx,
+                  );
+                } catch (hookErr) {
+                  log.warn(
+                    `after_compaction hook failed during prune-exhausted escalation: ${String(hookErr)}`,
+                  );
+                }
+              }
+              if (pruneCompactResult.compacted) {
+                autoCompactionCount += 1;
+                log.info(
+                  `prune-exhausted compaction succeeded for ${provider}/${modelId} diagId=${pruneDiagId}`,
+                );
+              } else {
+                log.warn(
+                  `prune-exhausted compaction did not compact for ${provider}/${modelId}: ${pruneCompactResult.reason ?? "unknown"}`,
+                );
+              }
+            } catch (compactErr) {
+              log.warn(
+                `contextEngine.compact() threw during prune-exhausted escalation for ${provider}/${modelId}: ${String(compactErr)}`,
+              );
+            }
           }
 
           const usage = toNormalizedUsage(usageAccumulator);

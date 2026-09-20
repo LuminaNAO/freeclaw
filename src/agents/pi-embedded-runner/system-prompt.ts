@@ -1,5 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { SilentReplyPromptMode } from "../../config/silent-reply.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
@@ -53,6 +54,7 @@ export function buildEmbeddedSystemPrompt(params: {
   contextFiles?: EmbeddedContextFile[];
   bootstrapTruncationWarningLines?: string[];
   memoryCitationsMode?: MemoryCitationsMode;
+  silentReplyPromptMode?: SilentReplyPromptMode;
 }): string {
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -83,6 +85,7 @@ export function buildEmbeddedSystemPrompt(params: {
     contextFiles: params.contextFiles,
     bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     memoryCitationsMode: params.memoryCitationsMode,
+    silentReplyPromptMode: params.silentReplyPromptMode,
   });
 }
 
@@ -103,6 +106,9 @@ export function applySystemPromptOverrideToSession(
     _baseSystemPrompt?: string;
     _rebuildSystemPrompt?: (toolNames: string[]) => string;
   };
+  // These are pi-coding-agent's own private fields; the names are not ours to change.
+  // oxlint-disable-next-line no-underscore-dangle
   mutableSession._baseSystemPrompt = prompt;
+  // oxlint-disable-next-line no-underscore-dangle
   mutableSession._rebuildSystemPrompt = () => prompt;
 }

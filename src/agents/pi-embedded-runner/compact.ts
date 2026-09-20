@@ -135,7 +135,7 @@ export type CompactEmbeddedPiSessionParams = {
   customInstructions?: string;
   tokenBudget?: number;
   force?: boolean;
-  trigger?: "overflow" | "manual";
+  trigger?: "overflow" | "manual" | "prune-exhausted";
   diagId?: string;
   attempt?: number;
   maxAttempts?: number;
@@ -579,9 +579,7 @@ export async function compactEmbeddedPiSessionDirect(
         if (!runtimeCapabilities) {
           runtimeCapabilities = [];
         }
-        if (
-          !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
-        ) {
+        if (!runtimeCapabilities.some((cap) => cap.trim().toLowerCase() === "inlinebuttons")) {
           runtimeCapabilities.push("inlineButtons");
         }
       }

@@ -26,7 +26,7 @@ On the remote machine:
 
 Example:
 
-- `ssh lumina@framed` works without a password.
+- `ssh user@home-host` works without a password.
 
 On the home machine:
 
@@ -37,7 +37,7 @@ On the home machine:
 On the remote machine:
 
 1. Run:
-   - `./teleport-to.sh lumina@framed`
+   - `./teleport-to.sh user@home-host`
 2. You’ll see:
    - Stopping home gateway
    - Starting SSH tunnel
@@ -51,7 +51,7 @@ On the remote machine:
 On the remote machine:
 
 1. Run:
-   - `./teleport-back.sh lumina@framed`
+   - `./teleport-back.sh user@home-host`
 2. You’ll see:
    - Stopping local gateway
    - Unmounting workspace

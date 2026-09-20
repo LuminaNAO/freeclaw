@@ -3,10 +3,12 @@ import {
   clearInternalHooks,
   createInternalHookEvent,
   getRegisteredEventKeys,
+  hasInternalHookListeners,
   isAgentBootstrapEvent,
   isGatewayStartupEvent,
   isMessageReceivedEvent,
   isMessageSentEvent,
+  isSessionPatchEvent,
   registerInternalHook,
   triggerInternalHook,
   unregisterInternalHook,
@@ -14,6 +16,7 @@ import {
   type GatewayStartupHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
+  type SessionPatchHookContext,
 } from "./internal-hooks.js";
 
 describe("hooks", () => {
@@ -154,9 +157,11 @@ describe("hooks", () => {
       await triggerInternalHook(event);
 
       expect(handler).toHaveBeenCalledWith(event);
+      // oxlint-disable-next-line no-underscore-dangle
       expect(globalHooks.__openclaw_internal_hook_handlers__?.has("command:new")).toBe(true);
 
       const injectedHandler = vi.fn();
+      // oxlint-disable-next-line no-underscore-dangle
       globalHooks.__openclaw_internal_hook_handlers__?.set("command:new", [injectedHandler]);
       await triggerInternalHook(event);
       expect(injectedHandler).toHaveBeenCalledWith(event);
@@ -207,6 +212,63 @@ describe("hooks", () => {
     for (const testCase of cases) {
       it(testCase.name, () => {
         expect(isAgentBootstrapEvent(testCase.event)).toBe(testCase.expected);
+      });
+    }
+  });
+
+  describe("hasInternalHookListeners", () => {
+    it("reports listeners on the general type or the specific action", () => {
+      expect(hasInternalHookListeners("session", "patch")).toBe(false);
+
+      const handler = vi.fn();
+      registerInternalHook("session:patch", handler);
+      expect(hasInternalHookListeners("session", "patch")).toBe(true);
+      expect(hasInternalHookListeners("session", "compact:before")).toBe(false);
+
+      unregisterInternalHook("session:patch", handler);
+      registerInternalHook("session", handler);
+      expect(hasInternalHookListeners("session", "patch")).toBe(true);
+      expect(hasInternalHookListeners("command", "new")).toBe(false);
+    });
+  });
+
+  describe("isSessionPatchEvent", () => {
+    const cases: Array<{
+      name: string;
+      event: ReturnType<typeof createInternalHookEvent>;
+      expected: boolean;
+    }> = [
+      {
+        name: "returns true for session:patch events with expected context",
+        event: createInternalHookEvent("session", "patch", "agent:main:signal:group:abc", {
+          sessionEntry: { sessionId: "s1", updatedAt: 1 },
+          patch: { key: "agent:main:signal:group:abc", model: "acme/alpha" },
+          cfg: {},
+        } satisfies SessionPatchHookContext),
+        expected: true,
+      },
+      {
+        name: "returns false when patch is missing",
+        event: createInternalHookEvent("session", "patch", "test-session", {
+          sessionEntry: { sessionId: "s1", updatedAt: 1 },
+          cfg: {},
+        }),
+        expected: false,
+      },
+      {
+        name: "returns false for other session events",
+        event: createInternalHookEvent("session", "compact:before", "test-session", {
+          sessionEntry: { sessionId: "s1", updatedAt: 1 },
+          patch: { key: "test-session" },
+          cfg: {},
+        }),
+        expected: false,
+      },
+    ];
+
+    for (const testCase of cases) {
+      it(testCase.name, () => {
+        expect(isSessionPatchEvent(testCase.event)).toBe(testCase.expected);
       });
     }
   });
