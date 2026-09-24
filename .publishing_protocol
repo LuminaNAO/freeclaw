@@ -12,3 +12,21 @@ VERSION_FILE=package.json
 # - AUR is published ONLY via: nao-aur-publish freeclaw vN
 #   Never push this repo's git history to AUR.
 # - .SRCINFO is never committed here — generated at publish time.
+
+# POST-PUBLISH GATEWAY VERIFICATION — do on EVERY FreeClaw upgrade
+# (added 2026-09-24, after v17: two live-service config bugs were found
+#  only because Manu checked `openclaw --version` directly. Use the git tag
+#  and `openclaw --version` — NEVER trust ~/.fe/manifest.yaml's `freeclaw:`
+#  line, which was stale since v17):
+#   1. Version source of truth = `openclaw --version` (and the vN git tag).
+#      ~/.fe/manifest.yaml is NOT authoritative for the running version.
+#   2. Gateway token in service file → regenerate the unit so the token is
+#      NOT embedded: `openclaw gateway install --force` (then restart).
+#      If the systemd unit hardcodes the token, re-stage with --force.
+#   3. Node must run from a STABLE path, not nvm. A Node upgrade (or PATH
+#      change) can strand the gateway at boot. Prefer system Node or an
+#      absolute pinned path; verify `which node` before a restart.
+#   Checklist before restarts/after upgrade:
+#     openclaw --version
+#     systemctl --user cat <gateway-service> | grep -i token   # want NOTHING
+#     which node && node --version                             # want stable path
