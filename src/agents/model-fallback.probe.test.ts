@@ -22,7 +22,7 @@ import {
   resolveProfilesUnavailableReason,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-import { _probeThrottleInternals, runWithModelFallback } from "./model-fallback.js";
+import { probeThrottleInternals, runWithModelFallback } from "./model-fallback.js";
 
 const mockedEnsureAuthProfileStore = vi.mocked(ensureAuthProfileStore);
 const mockedGetSoonestCooldownExpiry = vi.mocked(getSoonestCooldownExpiry);
@@ -136,7 +136,7 @@ describe("runWithModelFallback – probe logic", () => {
     Date.now = vi.fn(() => NOW);
 
     // Clear throttle state between tests
-    _probeThrottleInternals.lastProbeAttempt.clear();
+    probeThrottleInternals.lastProbeAttempt.clear();
 
     // Default: ensureAuthProfileStore returns a fake store
     const fakeStore: AuthProfileStore = {
@@ -231,7 +231,7 @@ describe("runWithModelFallback – probe logic", () => {
 
     expectPrimaryProbeSuccess(result, run, "probed-ok");
 
-    _probeThrottleInternals.lastProbeAttempt.clear();
+    probeThrottleInternals.lastProbeAttempt.clear();
 
     const fallbackCfg = makeCfg({
       agents: {
@@ -338,7 +338,7 @@ describe("runWithModelFallback – probe logic", () => {
     mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
 
     // Simulate a recent probe 10s ago
-    _probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 10_000);
+    probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 10_000);
 
     const run = vi.fn().mockResolvedValue("ok");
 
@@ -354,7 +354,7 @@ describe("runWithModelFallback – probe logic", () => {
     mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
 
     // Last probe was 31s ago — should NOT be throttled
-    _probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 31_000);
+    probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 31_000);
 
     const run = vi.fn().mockResolvedValue("probed-ok");
 
@@ -363,33 +363,33 @@ describe("runWithModelFallback – probe logic", () => {
   });
 
   it("prunes stale probe throttle entries before checking eligibility", () => {
-    _probeThrottleInternals.lastProbeAttempt.set(
+    probeThrottleInternals.lastProbeAttempt.set(
       "stale",
-      NOW - _probeThrottleInternals.PROBE_STATE_TTL_MS - 1,
+      NOW - probeThrottleInternals.PROBE_STATE_TTL_MS - 1,
     );
-    _probeThrottleInternals.lastProbeAttempt.set("fresh", NOW - 5_000);
+    probeThrottleInternals.lastProbeAttempt.set("fresh", NOW - 5_000);
 
-    expect(_probeThrottleInternals.lastProbeAttempt.has("stale")).toBe(true);
+    expect(probeThrottleInternals.lastProbeAttempt.has("stale")).toBe(true);
 
-    expect(_probeThrottleInternals.isProbeThrottleOpen(NOW, "fresh")).toBe(false);
+    expect(probeThrottleInternals.isProbeThrottleOpen(NOW, "fresh")).toBe(false);
 
-    expect(_probeThrottleInternals.lastProbeAttempt.has("stale")).toBe(false);
-    expect(_probeThrottleInternals.lastProbeAttempt.has("fresh")).toBe(true);
+    expect(probeThrottleInternals.lastProbeAttempt.has("stale")).toBe(false);
+    expect(probeThrottleInternals.lastProbeAttempt.has("fresh")).toBe(true);
   });
 
   it("caps probe throttle state by evicting the oldest entries", () => {
-    for (let i = 0; i < _probeThrottleInternals.MAX_PROBE_KEYS; i += 1) {
-      _probeThrottleInternals.lastProbeAttempt.set(`key-${i}`, NOW - (i + 1));
+    for (let i = 0; i < probeThrottleInternals.MAX_PROBE_KEYS; i += 1) {
+      probeThrottleInternals.lastProbeAttempt.set(`key-${i}`, NOW - (i + 1));
     }
 
-    _probeThrottleInternals.markProbeAttempt(NOW, "freshest");
+    probeThrottleInternals.markProbeAttempt(NOW, "freshest");
 
-    expect(_probeThrottleInternals.lastProbeAttempt.size).toBe(
-      _probeThrottleInternals.MAX_PROBE_KEYS,
+    expect(probeThrottleInternals.lastProbeAttempt.size).toBe(
+      probeThrottleInternals.MAX_PROBE_KEYS,
     );
-    expect(_probeThrottleInternals.lastProbeAttempt.has("freshest")).toBe(true);
-    expect(_probeThrottleInternals.lastProbeAttempt.has("key-255")).toBe(false);
-    expect(_probeThrottleInternals.lastProbeAttempt.has("key-0")).toBe(true);
+    expect(probeThrottleInternals.lastProbeAttempt.has("freshest")).toBe(true);
+    expect(probeThrottleInternals.lastProbeAttempt.has("key-255")).toBe(false);
+    expect(probeThrottleInternals.lastProbeAttempt.has("key-0")).toBe(true);
   });
 
   it("handles non-finite soonest safely (treats as probe-worthy)", async () => {

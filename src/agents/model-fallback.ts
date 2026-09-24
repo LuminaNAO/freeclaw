@@ -215,7 +215,7 @@ function resolveImageFallbackCandidates(params: {
 
   const addRaw = (raw: string, opts?: { allowlist?: boolean }) => {
     const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
+      raw: raw ?? "",
       defaultProvider: params.defaultProvider,
       aliasIndex,
     });
@@ -265,8 +265,8 @@ function resolveFallbackCandidates(params: {
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
-  const providerRaw = String(params.provider ?? "").trim() || defaultProvider;
-  const modelRaw = String(params.model ?? "").trim() || defaultModel;
+  const providerRaw = (params.provider ?? "").trim() || defaultProvider;
+  const modelRaw = (params.model ?? "").trim() || defaultModel;
   const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
   const configuredPrimary = normalizeModelRef(defaultProvider, defaultModel);
   const aliasIndex = buildModelAliasIndex({
@@ -293,7 +293,7 @@ function resolveFallbackCandidates(params: {
     if (normalizedPrimary.provider !== configuredPrimary.provider) {
       const isConfiguredFallback = configuredFallbacks.some((raw) => {
         const resolved = resolveModelRefFromString({
-          raw: String(raw ?? ""),
+          raw: raw ?? "",
           defaultProvider,
           aliasIndex,
         });
@@ -307,7 +307,7 @@ function resolveFallbackCandidates(params: {
 
   for (const raw of modelFallbacks) {
     const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
+      raw: raw ?? "",
       defaultProvider,
       aliasIndex,
     });
@@ -319,7 +319,23 @@ function resolveFallbackCandidates(params: {
     addExplicitCandidate(resolved.ref);
   }
 
-  if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
+  // When fallbacksOverride is undefined, fall back to the config default model as
+  // the final candidate — but only when the defaults-level fallbacks key is absent
+  // or non-empty. An explicitly empty fallbacks array means "never substitute",
+  // matching the per-agent semantics in agent-scope.ts:201.
+  const defaultsModel = params.cfg?.agents?.defaults?.model;
+  const defaultsFallbacksExplicitlyEmpty =
+    defaultsModel != null &&
+    typeof defaultsModel === "object" &&
+    Object.hasOwn(defaultsModel, "fallbacks") &&
+    Array.isArray(defaultsModel.fallbacks) &&
+    defaultsModel.fallbacks.length === 0;
+  if (
+    params.fallbacksOverride === undefined &&
+    !defaultsFallbacksExplicitlyEmpty &&
+    primary?.provider &&
+    primary.model
+  ) {
     addExplicitCandidate({ provider: primary.provider, model: primary.model });
   }
 
@@ -334,7 +350,7 @@ const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROBE_KEYS = 256;
 
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
-  const scope = String(agentDir ?? "").trim();
+  const scope = (agentDir ?? "").trim();
   return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
 }
 
@@ -401,7 +417,7 @@ function shouldProbePrimaryDuringCooldown(params: {
 }
 
 /** @internal – exposed for unit tests only */
-export const _probeThrottleInternals = {
+export const probeThrottleInternals = {
   lastProbeAttempt,
   MIN_PROBE_INTERVAL_MS,
   PROBE_MARGIN_MS,
@@ -756,7 +772,7 @@ export async function runWithModelFallback<T>(params: {
     }
   }
 
-  throwFallbackFailureSummary({
+  return throwFallbackFailureSummary({
     attempts,
     candidates,
     lastError,
@@ -812,7 +828,7 @@ export async function runWithImageModelFallback<T>(params: {
     }
   }
 
-  throwFallbackFailureSummary({
+  return throwFallbackFailureSummary({
     attempts,
     candidates,
     lastError,

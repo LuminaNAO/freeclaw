@@ -286,7 +286,11 @@ function dedupeAndPreferIpv4(results: readonly LookupAddress[]): string[] {
     }
     otherFamilies.push(entry.address);
   }
-  return [...ipv4, ...otherFamilies];
+  // Return IPv4 only when any IPv4 exists. Pinned round-robin does not fall
+  // back across families: on hosts without an IPv6 route (or with broken
+  // IPv6), offering v6 records at all makes undici die ETIMEDOUT instead of
+  // completing on IPv4. IPv6 is used only when the hostname is v6-only.
+  return ipv4.length > 0 ? ipv4 : otherFamilies;
 }
 
 export async function resolvePinnedHostnameWithPolicy(

@@ -967,13 +967,41 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("appends the configured primary as a last fallback", async () => {
+  it("does NOT append the configured primary when fallbacks is explicitly empty", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
           model: {
             primary: "openai/gpt-4.1-mini",
             fallbacks: [],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }))
+      .mockResolvedValueOnce("ok");
+
+    // Explicitly-empty fallbacks = "never substitute". The pinned model errors out.
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openrouter",
+        model: "meta-llama/llama-3.3-70b:free",
+        run,
+      }),
+    ).rejects.toThrow("timeout");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("appends the configured primary as a last fallback when fallbacks is absent", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            // fallbacks key intentionally absent — old behaviour preserved
           },
         },
       },
@@ -1057,13 +1085,13 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
     });
 
-    it("still skips fallbacks when using different provider than config", async () => {
+    it("still skips fallbacks when using different provider than config and fallbacks absent", async () => {
       const cfg = makeCfg({
         agents: {
           defaults: {
             model: {
               primary: "anthropic/claude-opus-4-6",
-              fallbacks: [], // Empty fallbacks to match working pattern
+              // fallbacks key intentionally absent — config primary IS appended
             },
           },
         },
@@ -1086,6 +1114,34 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini"); // Original request
       expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-opus-4-6"); // Config primary as final fallback
+    });
+
+    it("errors out without substitution when fallbacks explicitly empty and provider differs", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: [], // Explicitly empty = never substitute
+            },
+          },
+        },
+      });
+
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('No credentials found for profile "openai:default".'))
+        .mockResolvedValueOnce("config primary worked");
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "openai", // Different provider
+          model: "gpt-4.1-mini",
+          run,
+        }),
+      ).rejects.toThrow('No credentials found for profile "openai:default".');
+      expect(run).toHaveBeenCalledTimes(1); // No fallback attempt
     });
 
     it("uses fallbacks when session model exactly matches config primary", async () => {

@@ -155,7 +155,7 @@ describe("ssrf pinning", () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 
-  it("sorts IPv4 addresses before IPv6 in pinned results", async () => {
+  it("drops IPv6 addresses from pinned results when IPv4 exists", async () => {
     const lookup = vi.fn(async () => [
       { address: "2001:db8::1", family: 6 },
       { address: "93.184.216.34", family: 4 },
@@ -164,12 +164,19 @@ describe("ssrf pinning", () => {
     ]) as unknown as LookupFn;
 
     const pinned = await resolvePinnedHostname("example.com", lookup);
-    expect(pinned.addresses).toEqual([
-      "93.184.216.34",
-      "93.184.216.35",
-      "2001:db8::1",
-      "2001:db8::2",
-    ]);
+    // Pinned round-robin cannot fall back across families: on hosts with no
+    // IPv6 route, v6 records make undici die ETIMEDOUT. IPv4 wins outright.
+    expect(pinned.addresses).toEqual(["93.184.216.34", "93.184.216.35"]);
+  });
+
+  it("keeps IPv6 addresses when no IPv4 exists", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "2001:db8::1", family: 6 },
+      { address: "2001:db8::2", family: 6 },
+    ]) as unknown as LookupFn;
+
+    const pinned = await resolvePinnedHostname("example.com", lookup);
+    expect(pinned.addresses).toEqual(["2001:db8::1", "2001:db8::2"]);
   });
 
   it("uses DNS family metadata for ordering (not address string heuristics)", async () => {
@@ -179,7 +186,7 @@ describe("ssrf pinning", () => {
     ]) as unknown as LookupFn;
 
     const pinned = await resolvePinnedHostname("example.com", lookup);
-    expect(pinned.addresses).toEqual(["2606:2800:220:1:248:1893:25c8:1946", "93.184.216.34"]);
+    expect(pinned.addresses).toEqual(["2606:2800:220:1:248:1893:25c8:1946"]);
   });
 
   it("allows ISATAP embedded private IPv4 when private network is explicitly enabled", async () => {
