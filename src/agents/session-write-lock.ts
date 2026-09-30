@@ -21,6 +21,8 @@ type HeldLock = {
   lockPath: string;
   acquiredAt: number;
   maxHoldMs: number;
+  payload: LockFilePayload;
+  refreshedAt: number;
   releasePromise?: Promise<void>;
 };
 
@@ -46,6 +48,7 @@ const DEFAULT_MAX_HOLD_MS = 5 * 60 * 1000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
 const MAX_LOCK_HOLD_MS = 2_147_000_000;
+const LOCK_REFRESH_INTERVAL_MS = DEFAULT_STALE_MS / 3;
 
 type CleanupState = {
   registered: boolean;
@@ -190,11 +193,25 @@ function releaseAllLocksSync(): void {
   }
 }
 
+// A live holder refreshes createdAt so other processes do not reclaim its lock as "too-old" while a long run
+// (no wall-clock cap by default) is still working.
+async function refreshHeldLock(held: HeldLock, nowMs: number): Promise<void> {
+  held.payload = { ...held.payload, createdAt: new Date(nowMs).toISOString() };
+  await held.handle.truncate(0);
+  await held.handle.write(JSON.stringify(held.payload, null, 2), 0, "utf8");
+  held.refreshedAt = nowMs;
+}
+
 async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
   let released = 0;
   for (const [sessionFile, held] of HELD_LOCKS.entries()) {
     const heldForMs = nowMs - held.acquiredAt;
     if (heldForMs <= held.maxHoldMs) {
+      if (nowMs - held.refreshedAt >= LOCK_REFRESH_INTERVAL_MS) {
+        await refreshHeldLock(held, nowMs).catch(() => {
+          // Best effort: a failed refresh only means the old createdAt stays in place.
+        });
+      }
       continue;
     }
 
@@ -491,12 +508,15 @@ export async function acquireSessionWriteLock(params: {
         lockPayload.starttime = starttime;
       }
       await handle.writeFile(JSON.stringify(lockPayload, null, 2), "utf8");
+      const acquiredAt = Date.now();
       const createdHeld: HeldLock = {
         count: 1,
         handle,
         lockPath,
-        acquiredAt: Date.now(),
+        acquiredAt,
         maxHoldMs,
+        payload: lockPayload,
+        refreshedAt: acquiredAt,
       };
       HELD_LOCKS.set(normalizedSessionFile, createdHeld);
       return {
@@ -552,6 +572,7 @@ export async function acquireSessionWriteLock(params: {
   throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
 }
 
+// oxlint-disable-next-line no-underscore-dangle
 export const __testing = {
   cleanupSignals: [...CLEANUP_SIGNALS],
   handleTerminationSignal,

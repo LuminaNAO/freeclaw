@@ -570,7 +570,7 @@ Options:
 - `--local`
 - `--deliver`
 - `--json`
-- `--timeout <seconds>`
+- `--timeout <seconds>` (whole-run limit; default none unless `agents.defaults.timeoutSeconds` is set; `0` = none)
 
 ### `agents`
 

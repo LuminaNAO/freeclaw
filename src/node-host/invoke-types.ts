@@ -14,6 +14,9 @@ export type SystemRunParams = {
   approvalDecision?: string | null;
   runId?: string | null;
   suppressNotifyOnExit?: boolean | null;
+  /** Stamped by the gateway from its own config; used only when the node has no explicit local policy. */
+  gatewayExecSecurity?: string | null;
+  gatewayExecAsk?: string | null;
 };
 
 export type RunResult = {

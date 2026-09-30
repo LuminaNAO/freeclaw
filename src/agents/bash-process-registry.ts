@@ -102,6 +102,9 @@ export function deleteSession(id: string) {
 }
 
 export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr", chunk: string) {
+  for (const listener of outputListeners) {
+    listener({ scopeKey: session.scopeKey, startedAt: session.startedAt });
+  }
   session.pendingStdout ??= [];
   session.pendingStderr ??= [];
   session.pendingStdoutChars ??= sumPendingChars(session.pendingStdout);
@@ -258,6 +261,37 @@ export function trimWithCap(text: string, max: number) {
 
 export function listRunningSessions() {
   return Array.from(runningSessions.values()).filter((s) => s.backgrounded);
+}
+
+/**
+ * True when an exec child (foreground or background) for this scope is still running. With `sinceMs`, only
+ * processes started at or after that time count (so jobs left over from earlier runs do not keep a run alive).
+ */
+export function hasLiveProcessForScope(scopeKey: string | undefined, sinceMs?: number): boolean {
+  if (!scopeKey) {
+    return false;
+  }
+  for (const session of runningSessions.values()) {
+    if (
+      !session.exited &&
+      session.scopeKey === scopeKey &&
+      (sinceMs === undefined || session.startedAt >= sinceMs)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+type OutputListener = (source: { scopeKey: string | undefined; startedAt: number }) => void;
+const outputListeners = new Set<OutputListener>();
+
+/** Notified on every chunk of exec output (foreground or background). Returns an unsubscribe function. */
+export function onProcessOutput(listener: OutputListener): () => void {
+  outputListeners.add(listener);
+  return () => {
+    outputListeners.delete(listener);
+  };
 }
 
 export function listFinishedSessions() {

@@ -219,11 +219,25 @@ struct ExecApprovalsResolvedDefaults {
     var autoAllowSkills: Bool
 }
 
+/// Exec policy the gateway explicitly configured, sent with system.run. Applies only where this node's own
+/// exec-approvals.json has no explicit value, so a node can always tighten (or loosen) locally.
+struct ExecGatewayPolicy: Equatable {
+    var security: ExecSecurity?
+    var ask: ExecAsk?
+
+    init(security: String?, ask: String?) {
+        self.security = security.flatMap { ExecSecurity(rawValue: $0) }
+        self.ask = ask.flatMap { ExecAsk(rawValue: $0) }
+    }
+}
+
 enum ExecApprovalsStore {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals")
     private static let defaultAgentId = "main"
-    private static let defaultSecurity: ExecSecurity = .deny
-    private static let defaultAsk: ExecAsk = .onMiss
+    // Node fallback when neither this node's exec-approvals.json nor the gateway sets a policy.
+    // Owner decision (runcap): full/off; existing nodes without an explicit policy flip to this.
+    private static let defaultSecurity: ExecSecurity = .full
+    private static let defaultAsk: ExecAsk = .off
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
     private static let secureStateDirPermissions = 0o700
@@ -368,9 +382,9 @@ enum ExecApprovalsStore {
         return file
     }
 
-    static func resolve(agentId: String?) -> ExecApprovalsResolved {
+    static func resolve(agentId: String?, gateway: ExecGatewayPolicy? = nil) -> ExecApprovalsResolved {
         let file = self.ensureFile()
-        return self.resolveFromFile(file, agentId: agentId)
+        return self.resolveFromFile(file, agentId: agentId, gateway: gateway)
     }
 
     /// Read-only resolve: loads file without writing (no ensureFile side effects).
@@ -380,11 +394,17 @@ enum ExecApprovalsStore {
         return self.resolveFromFile(file, agentId: agentId)
     }
 
-    private static func resolveFromFile(_ file: ExecApprovalsFile, agentId: String?) -> ExecApprovalsResolved {
+    /// Precedence per field: this node's explicit exec-approvals.json value (agent > "*" > defaults) >
+    /// the gateway's explicit policy sent with system.run > full/off fallback.
+    private static func resolveFromFile(
+        _ file: ExecApprovalsFile,
+        agentId: String?,
+        gateway: ExecGatewayPolicy? = nil) -> ExecApprovalsResolved
+    {
         let defaults = file.defaults ?? ExecApprovalsDefaults()
         let resolvedDefaults = ExecApprovalsResolvedDefaults(
-            security: defaults.security ?? self.defaultSecurity,
-            ask: defaults.ask ?? self.defaultAsk,
+            security: defaults.security ?? gateway?.security ?? self.defaultSecurity,
+            ask: defaults.ask ?? gateway?.ask ?? self.defaultAsk,
             askFallback: defaults.askFallback ?? self.defaultAskFallback,
             autoAllowSkills: defaults.autoAllowSkills ?? self.defaultAutoAllowSkills)
         let key = self.agentKey(agentId)

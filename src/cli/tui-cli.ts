@@ -16,7 +16,10 @@ export function registerTuiCli(program: Command) {
     .option("--deliver", "Deliver assistant replies", false)
     .option("--thinking <level>", "Thinking level override")
     .option("--message <text>", "Send an initial message after connecting")
-    .option("--timeout-ms <ms>", "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)")
+    .option(
+      "--timeout-ms <ms>",
+      "Whole-run time limit in ms (default: none, or agents.defaults.timeoutSeconds)",
+    )
     .option("--history-limit <n>", "History entries to load", "200")
     .addHelpText(
       "after",

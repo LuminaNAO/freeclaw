@@ -32,6 +32,7 @@ import {
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
 import { noteChannelStatus, setupChannels } from "./onboard-channels.js";
+import { applyFreshInstallExecDefaults } from "./onboard-config.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -257,7 +258,7 @@ async function promptWebToolsConfig(
       }),
       runtime,
     );
-    const key = String(keyInput ?? "").trim();
+    const key = (keyInput ?? "").trim();
 
     if (key || existingKey) {
       const applied = applySearchKey(nextConfig, providerChoice as SP, (key || existingKey)!);
@@ -409,7 +410,10 @@ export async function runConfigureWizard(
       return;
     }
 
-    let nextConfig = { ...baseConfig };
+    // First-run configure creates the config file: seed the fresh-install host exec defaults.
+    let nextConfig = snapshot.exists
+      ? { ...baseConfig }
+      : applyFreshInstallExecDefaults(baseConfig);
     let didSetGatewayMode = false;
     if (nextConfig.gateway?.mode !== "local") {
       nextConfig = {
@@ -444,7 +448,7 @@ export async function runConfigureWizard(
         }),
         runtime,
       );
-      workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
+      workspaceDir = resolveUserPath((workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
       if (!snapshot.exists) {
         const indicators = ["MEMORY.md", "memory", ".git"].map((name) =>
           nodePath.join(workspaceDir, name),
@@ -508,7 +512,7 @@ export async function runConfigureWizard(
         }),
         runtime,
       );
-      gatewayPort = Number.parseInt(String(portInput), 10);
+      gatewayPort = Number.parseInt(portInput, 10);
     };
 
     if (opts.sections) {

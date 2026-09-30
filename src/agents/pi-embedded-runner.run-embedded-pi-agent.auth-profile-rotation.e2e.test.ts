@@ -8,6 +8,10 @@ import { registerLogTransport, resetLogger, setLoggerOverride } from "../logging
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
+import {
+  getProviderQuotaWindowUntil,
+  resetProviderQuotaWindowsForTest,
+} from "./provider-quota-window.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const resolveCopilotApiTokenMock = vi.fn();
@@ -61,6 +65,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.useRealTimers();
+  resetProviderQuotaWindowsForTest();
   runEmbeddedAttemptMock.mockClear();
   resolveCopilotApiTokenMock.mockReset();
   computeBackoffMock.mockClear();
@@ -706,6 +711,31 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       runId: "run:auto",
     });
     expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+  });
+
+  it("does not rotate to another profile of a provider that reported an exhausted usage window", async () => {
+    runEmbeddedAttemptMock.mockClear();
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          assistantTexts: [],
+          lastAssistant: buildAssistant({
+            stopReason: "error",
+            errorMessage: "You have hit your usage limit. Try again in 3 hours.",
+          }),
+        }),
+      );
+      await runAutoPinnedOpenAiTurn({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:quota",
+        runId: "run:quota",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(getProviderQuotaWindowUntil("openai")).toBeGreaterThan(Date.now() + 2.9 * 3_600_000);
+    });
   });
 
   it("rotates for overloaded assistant failures across auto-pinned profiles", async () => {

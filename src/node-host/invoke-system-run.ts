@@ -5,8 +5,10 @@ import type { GatewayClient } from "../gateway/client.js";
 import {
   addAllowlistEntry,
   recordAllowlistUse,
+  loadExecApprovals,
   resolveAllowAlwaysPatterns,
   resolveExecApprovals,
+  resolveNodeExecPolicy,
   type ExecAllowlistEntry,
   type ExecAsk,
   type ExecCommandSegment,
@@ -82,6 +84,8 @@ type SystemRunParsePhase = {
   needsScreenRecording: boolean;
   approved: boolean;
   suppressNotifyOnExit: boolean;
+  /** Gateway's effective exec policy; applies only where this node has no explicit local setting. */
+  gatewayPolicy: { security?: unknown; ask?: unknown } | undefined;
 };
 
 type SystemRunPolicyPhase = SystemRunParsePhase & {
@@ -133,8 +137,9 @@ export type HandleSystemRunInvokeOptions = {
   skillBins: SkillBinsProvider;
   execHostEnforced: boolean;
   execHostFallbackAllowed: boolean;
-  resolveExecSecurity: (value?: string) => ExecSecurity;
-  resolveExecAsk: (value?: string) => ExecAsk;
+  /** Normalize the node's own configured value; return undefined when the node has no explicit setting. */
+  resolveExecSecurity: (value?: string) => ExecSecurity | undefined;
+  resolveExecAsk: (value?: string) => ExecAsk | undefined;
   isCmdExeInvocation: (argv: string[]) => boolean;
   sanitizeEnv: (overrides?: Record<string, string> | null) => Record<string, string> | undefined;
   runCommand: (
@@ -266,6 +271,10 @@ async function parseSystemRunPhase(
     needsScreenRecording: opts.params.needsScreenRecording === true,
     approved: opts.params.approved === true,
     suppressNotifyOnExit,
+    gatewayPolicy:
+      opts.params.gatewayExecSecurity !== undefined || opts.params.gatewayExecAsk !== undefined
+        ? { security: opts.params.gatewayExecSecurity, ask: opts.params.gatewayExecAsk }
+        : undefined,
   };
 }
 
@@ -277,16 +286,19 @@ async function evaluateSystemRunPolicyPhase(
   const agentExec = parsed.agentId
     ? resolveAgentConfig(cfg, parsed.agentId)?.tools?.exec
     : undefined;
-  const configuredSecurity = opts.resolveExecSecurity(
-    agentExec?.security ?? cfg.tools?.exec?.security,
-  );
-  const configuredAsk = opts.resolveExecAsk(agentExec?.ask ?? cfg.tools?.exec?.ask);
-  const approvals = resolveExecApprovals(parsed.agentId, {
-    security: configuredSecurity,
-    ask: configuredAsk,
+  // Node-local explicit settings win; otherwise the gateway's effective policy; otherwise full/off.
+  const effective = resolveNodeExecPolicy({
+    file: loadExecApprovals(),
+    agentId: parsed.agentId ?? undefined,
+    nodeConfig: {
+      security: opts.resolveExecSecurity(agentExec?.security ?? cfg.tools?.exec?.security),
+      ask: opts.resolveExecAsk(agentExec?.ask ?? cfg.tools?.exec?.ask),
+    },
+    gateway: parsed.gatewayPolicy,
   });
-  const security = approvals.agent.security;
-  const ask = approvals.agent.ask;
+  const approvals = resolveExecApprovals(parsed.agentId, effective);
+  const security = effective.security;
+  const ask = effective.ask;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
   const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
     global: cfg.tools?.exec,

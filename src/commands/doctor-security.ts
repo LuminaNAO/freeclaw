@@ -48,6 +48,25 @@ function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): stri
   return warnings;
 }
 
+function collectHostExecPostureNotes(cfg: OpenClawConfig): string[] {
+  const exec = cfg.tools?.exec;
+  if (exec?.security !== "full" || exec?.ask !== "off") {
+    return [];
+  }
+  // With no sandbox runtime, host "sandbox" (also the default when unset) runs commands on the gateway host.
+  const sandboxOff = (cfg.agents?.defaults?.sandbox?.mode ?? "off") === "off";
+  const host = exec.host ?? "sandbox";
+  const hostRuns = host === "gateway" || host === "node" || (host === "sandbox" && sandboxOff);
+  if (!hostRuns) {
+    return [];
+  }
+  const where = host === "node" ? "node" : "gateway host";
+  return [
+    `- Exec: security="full", ask="off" runs model-issued commands on the ${where} without approval prompts (fresh-install default).`,
+    `  For allowlist mode set tools.exec.security="allowlist" and tools.exec.ask="on-miss" (see ${formatCliCommand("openclaw approvals get --gateway")}).`,
+  ];
+}
+
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnings: string[] = [];
   const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
@@ -61,6 +80,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   }
 
   warnings.push(...collectImplicitHeartbeatDirectPolicyWarnings(cfg));
+  warnings.push(...collectHostExecPostureNotes(cfg));
 
   // ===========================================
   // GATEWAY NETWORK EXPOSURE CHECK

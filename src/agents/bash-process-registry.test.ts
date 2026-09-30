@@ -5,7 +5,9 @@ import {
   addSession,
   appendOutput,
   drainSession,
+  hasLiveProcessForScope,
   listFinishedSessions,
+  onProcessOutput,
   markBackgrounded,
   markExited,
   resetProcessRegistryForTests,
@@ -31,6 +33,54 @@ describe("bash process registry", () => {
 
   beforeEach(() => {
     resetProcessRegistryForTests();
+  });
+
+  it("reports live foreground and background processes per scope", () => {
+    const fg = createRegistrySession({
+      id: "fg",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 100,
+      backgrounded: false,
+    });
+    fg.scopeKey = "agent:main:main";
+    const bg = createRegistrySession({
+      id: "bg",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 100,
+      backgrounded: true,
+    });
+    bg.scopeKey = "agent:main:other";
+    addSession(fg);
+    addSession(bg);
+
+    expect(hasLiveProcessForScope("agent:main:main")).toBe(true);
+    expect(hasLiveProcessForScope("agent:main:other")).toBe(true);
+    expect(hasLiveProcessForScope("agent:main:none")).toBe(false);
+    expect(hasLiveProcessForScope(undefined)).toBe(false);
+
+    markExited(fg, 0, null, "completed");
+    expect(hasLiveProcessForScope("agent:main:main")).toBe(false);
+  });
+
+  it("ignores processes started before the run when sinceMs is given, and reports output", () => {
+    const old = createRegistrySession({
+      id: "old",
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 100,
+      backgrounded: true,
+    });
+    old.scopeKey = "agent:main:main";
+    old.startedAt = 1_000;
+    addSession(old);
+    expect(hasLiveProcessForScope("agent:main:main", 5_000)).toBe(false);
+    expect(hasLiveProcessForScope("agent:main:main", 500)).toBe(true);
+
+    const seen: Array<{ scopeKey: string | undefined; startedAt: number }> = [];
+    const off = onProcessOutput((source) => seen.push(source));
+    appendOutput(old, "stdout", "tick");
+    off();
+    appendOutput(old, "stdout", "tock");
+    expect(seen).toEqual([{ scopeKey: "agent:main:main", startedAt: 1_000 }]);
   });
 
   it("captures output and truncates", () => {

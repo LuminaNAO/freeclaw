@@ -108,6 +108,30 @@ State is stored in `auth-profiles.json` under `usageStats`:
 }
 ```
 
+## Usage limit windows
+
+A usage or quota limit error (for example "You have hit your usage limit", `RESOURCE_EXHAUSTED`, or
+"exceeded your current quota") means the provider will keep refusing until its window resets. Model fallback
+skips that provider until then instead of retrying it later in the same run or in the next run:
+
+- The window ends at the provider's hint when present (the latest one wins): `Retry-After` (seconds or HTTP
+  date), `x-ratelimit-reset*`, `retryDelay`, "try again in 2h", "resets in 45 minutes", "will reset after 2 hours",
+  or "resets at <time>".
+- The same rule applies to image and PDF model fallback, and a provider that just reported an exhausted window
+  is not retried with its other auth profiles in the same run.
+- Without a hint, the provider is skipped for 15 minutes (hints are capped at 7 days).
+- Ordinary per-minute rate limits (requests or tokens per minute) do not open a window.
+- If every candidate is inside a usage window, the run fails with the recorded usage-limit results instead of
+  calling an exhausted provider.
+
+Windows are kept in memory by the gateway process and clear on restart.
+
+## Stall and run-limit aborts
+
+A run stopped by the stall watchdog (`agents.defaults.idleTimeoutSeconds`) or by a configured run limit
+(`agents.defaults.timeoutSeconds`) is not a provider failure. It does not mark cooldowns and does not fall back to
+another model. See [Agent loop](/concepts/agent-loop#timeouts).
+
 ## Billing disables
 
 Billing/credit failures (for example “insufficient credits” / “credit balance too low”) are treated as failover‑worthy, but they’re usually not transient. Instead of a short cooldown, OpenClaw marks the profile as **disabled** (with a longer backoff) and rotates to the next profile/provider.

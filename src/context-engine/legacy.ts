@@ -73,6 +73,7 @@ export class LegacyContextEngine implements ContextEngine {
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
     runtimeContext?: ContextEngineRuntimeContext;
+    abortSignal?: AbortSignal;
   }): Promise<CompactResult> {
     // Import through a dedicated runtime boundary so the lazy edge remains effective.
     const { compactEmbeddedPiSessionDirect } =
@@ -99,6 +100,7 @@ export class LegacyContextEngine implements ContextEngine {
       ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
       force: params.force,
       customInstructions: params.customInstructions,
+      abortSignal: params.abortSignal,
       workspaceDir: (runtimeContext.workspaceDir as string) ?? process.cwd(),
     } as Parameters<typeof compactEmbeddedPiSessionDirect>[0]);
 

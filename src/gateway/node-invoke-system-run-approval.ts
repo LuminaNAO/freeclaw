@@ -24,6 +24,8 @@ type SystemRunParamsLike = {
   approvalDecision?: unknown;
   runId?: unknown;
   suppressNotifyOnExit?: unknown;
+  gatewayExecSecurity?: unknown;
+  gatewayExecAsk?: unknown;
 };
 
 type ApprovalLookup = {
@@ -80,6 +82,9 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
     "sessionKey",
     "runId",
     "suppressNotifyOnExit",
+    // Gateway exec policy for nodes without an explicit local one (only operator-level callers reach here).
+    "gatewayExecSecurity",
+    "gatewayExecAsk",
   ]) {
     if (key in raw) {
       next[key] = raw[key];

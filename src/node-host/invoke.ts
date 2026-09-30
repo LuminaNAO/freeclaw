@@ -75,8 +75,9 @@ export type NodeInvokeRequestPayload = {
 
 export type { SkillBinsProvider } from "./invoke-types.js";
 
-function resolveExecSecurity(value?: string): ExecSecurity {
-  return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
+// Only explicit node-local values; undefined falls through to the gateway policy, then NODE_FALLBACK_*.
+function resolveExecSecurity(value?: string): ExecSecurity | undefined {
+  return value === "deny" || value === "allowlist" || value === "full" ? value : undefined;
 }
 
 function isCmdExeInvocation(argv: string[]): boolean {
@@ -88,8 +89,8 @@ function isCmdExeInvocation(argv: string[]): boolean {
   return base === "cmd.exe" || base === "cmd";
 }
 
-function resolveExecAsk(value?: string): ExecAsk {
-  return value === "off" || value === "on-miss" || value === "always" ? value : "on-miss";
+function resolveExecAsk(value?: string): ExecAsk | undefined {
+  return value === "off" || value === "on-miss" || value === "always" ? value : undefined;
 }
 
 export function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, string> {
@@ -419,7 +420,7 @@ export async function handleInvoke(
   client: GatewayClient,
   skillBins: SkillBinsProvider,
 ) {
-  const command = String(frame.command ?? "");
+  const command = frame.command ?? "";
   if (command === "system.execApprovals.get") {
     try {
       ensureExecApprovals();
@@ -441,7 +442,7 @@ export async function handleInvoke(
 
   if (command === "system.execApprovals.set") {
     try {
-      const params = decodeParams<SystemExecApprovalsSetParams>(frame.paramsJSON);
+      const params = decodeParams(frame.paramsJSON) as SystemExecApprovalsSetParams;
       if (!params.file || typeof params.file !== "object") {
         throw new Error("INVALID_REQUEST: exec approvals file required");
       }
@@ -467,7 +468,7 @@ export async function handleInvoke(
 
   if (command === "system.which") {
     try {
-      const params = decodeParams<SystemWhichParams>(frame.paramsJSON);
+      const params = decodeParams(frame.paramsJSON) as SystemWhichParams;
       if (!Array.isArray(params.bins)) {
         throw new Error("INVALID_REQUEST: bins required");
       }
@@ -492,13 +493,13 @@ export async function handleInvoke(
 
   if (command === "system.run.prepare") {
     try {
-      const params = decodeParams<{
+      const params = decodeParams(frame.paramsJSON) as {
         command?: unknown;
         rawCommand?: unknown;
         cwd?: unknown;
         agentId?: unknown;
         sessionKey?: unknown;
-      }>(frame.paramsJSON);
+      };
       const prepared = buildSystemRunApprovalPlan(params);
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
@@ -520,7 +521,7 @@ export async function handleInvoke(
 
   let params: SystemRunParams;
   try {
-    params = decodeParams<SystemRunParams>(frame.paramsJSON);
+    params = decodeParams(frame.paramsJSON) as SystemRunParams;
   } catch (err) {
     await sendInvalidRequestResult(client, frame, err);
     return;
@@ -555,11 +556,11 @@ export async function handleInvoke(
   });
 }
 
-function decodeParams<T>(raw?: string | null): T {
+function decodeParams(raw?: string | null): unknown {
   if (!raw) {
     throw new Error("INVALID_REQUEST: paramsJSON required");
   }
-  return JSON.parse(raw) as T;
+  return JSON.parse(raw);
 }
 
 export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayload | null {

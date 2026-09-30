@@ -1874,9 +1874,11 @@ describe("handleCommands subagents", () => {
       params: {
         lane: "subagent",
         sessionKey: "agent:main:subagent:abc",
-        timeout: 0,
       },
     });
+    // No sub-agent limit configured: send omits the timeout so the child inherits agents.defaults.timeoutSeconds.
+    const sendParams = (agentCall?.[0] as { params?: { timeout?: unknown } } | undefined)?.params;
+    expect(sendParams?.timeout).toBeUndefined();
 
     const waitCall = callGatewayMock.mock.calls.find(
       (call) =>
@@ -1942,7 +1944,6 @@ describe("handleCommands subagents", () => {
         lane: "subagent",
         sessionKey: "agent:main:subagent:abc",
         sessionId: "child-session-steer",
-        timeout: 0,
       },
     });
     const trackedRuns = listSubagentRunsForRequester("agent:main:main");

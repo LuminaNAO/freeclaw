@@ -10,6 +10,7 @@ vi.mock(import("../../utils.js"), async (importOriginal) => {
   };
 });
 
+import { NO_AGENT_TIMEOUT_MS } from "../timeout.js";
 import { log } from "./logger.js";
 import { runEmbeddedPiAgent } from "./run.js";
 import {
@@ -319,6 +320,168 @@ describe("overflow compaction in run loop", () => {
 
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+  });
+
+  it("reports a stall abort honestly instead of an LLM request timeout", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        abortKind: "stall",
+        abortLimitMs: 600_000,
+        assistantTexts: [],
+        lastAssistant: {
+          stopReason: "error",
+          errorMessage: "request timed out",
+        } as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    const texts = (result.payloads ?? []).map((p) => p.text ?? "");
+    expect(texts).toEqual(["No progress for 600s (stalled); run aborted."]);
+    expect(texts.join("\n")).not.toMatch(/LLM request timed out/i);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a configured run limit honestly and does not fall back to another model", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        abortKind: "run-limit",
+        abortLimitMs: 900_000,
+        assistantTexts: [],
+        lastAssistant: {
+          stopReason: "error",
+          errorMessage: "request timed out",
+        } as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      config: {
+        agents: {
+          defaults: { model: { primary: "anthropic/test-model", fallbacks: ["openai/gpt-5.2"] } },
+        },
+      },
+    });
+
+    const texts = (result.payloads ?? []).map((p) => p.text ?? "");
+    expect(texts).toEqual(["Run exceeded configured limit of 900s and was stopped."]);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("still reports a stall honestly when it lands during compaction", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: true,
+        abortKind: "stall",
+        abortLimitMs: 600_000,
+        assistantTexts: ["partial answer"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    const texts = (result.payloads ?? []).map((p) => p.text ?? "");
+    expect(texts).toContain("No progress for 600s (stalled); run aborted.");
+    expect(texts.join("\n")).not.toMatch(/LLM request timed out/i);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an explicit limit as a whole-run deadline across retry attempts", async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      return makeAttemptResult({ promptError: makeOverflowError() });
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({ summary: "c", firstKeptEntryId: "e", tokensBefore: 1 }),
+    );
+
+    await runEmbeddedPiAgent({ ...baseParams, timeoutMs: 30_000 });
+
+    const [first, second] = mockedRunEmbeddedAttempt.mock.calls.map(
+      (c) => c[0] as { timeoutMs: number; runLimitMs?: number },
+    );
+    expect(first?.runLimitMs).toBe(30_000);
+    expect(second?.runLimitMs).toBe(30_000);
+    expect(first?.timeoutMs).toBeLessThanOrEqual(30_000);
+    expect(second?.timeoutMs).toBeLessThanOrEqual(30_000 - 50);
+  });
+
+  it("stops a hung overflow compaction at the configured run limit and cancels it", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ promptError: makeOverflowError() }),
+    );
+    let compactSignal: AbortSignal | undefined;
+    mockedContextEngine.compact.mockImplementationOnce(
+      (params: unknown) =>
+        new Promise((_, reject) => {
+          compactSignal = (params as { abortSignal?: AbortSignal }).abortSignal;
+          compactSignal?.addEventListener("abort", () => reject(new Error("compaction aborted")));
+        }),
+    );
+
+    const result = await runEmbeddedPiAgent({ ...baseParams, timeoutMs: 200 });
+
+    expect(result.meta.aborted).toBe(true);
+    expect(result.payloads?.map((p) => p.text)).toEqual([
+      "Run exceeded configured limit of 0s and was stopped.",
+    ]);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(compactSignal?.aborted).toBe(true);
+  });
+
+  it("stops an attempt whose setup hangs before its watchdogs are armed", async () => {
+    let setupSignal: AbortSignal | undefined;
+    mockedRunEmbeddedAttempt.mockImplementationOnce(
+      (params) =>
+        new Promise((_, reject) => {
+          setupSignal = (params as { setupAbortSignal?: AbortSignal }).setupAbortSignal;
+          setupSignal?.addEventListener("abort", () => reject(new Error("setup aborted")));
+        }),
+    );
+
+    const result = await runEmbeddedPiAgent({ ...baseParams, timeoutMs: 150, runLimitMs: 60_000 });
+
+    expect(result.meta.aborted).toBe(true);
+    expect(result.payloads?.[0]?.text).toBe(
+      "Run exceeded configured limit of 60s and was stopped.",
+    );
+    expect(setupSignal?.aborted).toBe(true);
+  });
+
+  it("counts time before the run starts (queue wait) against an absolute run deadline", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    // The caller's deadline was fixed 20 s ago (queue wait, earlier fallback candidates).
+    await runEmbeddedPiAgent({
+      ...baseParams,
+      timeoutMs: 60_000,
+      runLimitMs: 60_000,
+      runDeadlineAtMs: Date.now() + 40_000,
+    });
+
+    const call = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as { timeoutMs: number };
+    expect(call.timeoutMs).toBeLessThanOrEqual(40_000);
+    expect(call.timeoutMs).toBeGreaterThan(39_000);
+  });
+
+  it("passes the uncapped sentinel through unchanged when no limit is configured", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({ ...baseParams, timeoutMs: NO_AGENT_TIMEOUT_MS });
+
+    const call = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as { timeoutMs: number };
+    expect(call.timeoutMs).toBe(NO_AGENT_TIMEOUT_MS);
   });
 
   it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {

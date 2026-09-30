@@ -53,4 +53,31 @@ describe("applyOnboardingLocalWorkspaceConfig", () => {
 
     expect(result.tools?.profile).toBe("full");
   });
+
+  it("writes host exec defaults security=full, ask=off on a fresh install", () => {
+    const result = applyOnboardingLocalWorkspaceConfig({}, "/tmp/workspace", {
+      freshInstall: true,
+    });
+    expect(result.tools?.exec?.security).toBe("full");
+    expect(result.tools?.exec?.ask).toBe("off");
+  });
+
+  it("keeps explicit exec values even on a fresh install", () => {
+    const result = applyOnboardingLocalWorkspaceConfig(
+      { tools: { exec: { security: "allowlist", host: "gateway" } } },
+      "/tmp/workspace",
+      { freshInstall: true },
+    );
+    expect(result.tools?.exec?.security).toBe("allowlist");
+    expect(result.tools?.exec?.ask).toBe("off");
+    expect(result.tools?.exec?.host).toBe("gateway");
+  });
+
+  it("never touches exec policy when re-onboarding an existing config", () => {
+    const result = applyOnboardingLocalWorkspaceConfig(
+      { tools: { profile: "coding" } },
+      "/tmp/workspace",
+    );
+    expect(result.tools?.exec).toBeUndefined();
+  });
 });

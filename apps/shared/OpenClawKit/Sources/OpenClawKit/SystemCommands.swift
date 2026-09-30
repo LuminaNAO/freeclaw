@@ -31,6 +31,9 @@ public struct OpenClawSystemRunParams: Codable, Sendable, Equatable {
     public var sessionKey: String?
     public var approved: Bool?
     public var approvalDecision: String?
+    /// Gateway's explicitly configured exec policy; used only where the node has no explicit local policy.
+    public var gatewayExecSecurity: String?
+    public var gatewayExecAsk: String?
 
     public init(
         command: [String],
@@ -42,7 +45,9 @@ public struct OpenClawSystemRunParams: Codable, Sendable, Equatable {
         agentId: String? = nil,
         sessionKey: String? = nil,
         approved: Bool? = nil,
-        approvalDecision: String? = nil)
+        approvalDecision: String? = nil,
+        gatewayExecSecurity: String? = nil,
+        gatewayExecAsk: String? = nil)
     {
         self.command = command
         self.rawCommand = rawCommand
@@ -54,6 +59,8 @@ public struct OpenClawSystemRunParams: Codable, Sendable, Equatable {
         self.sessionKey = sessionKey
         self.approved = approved
         self.approvalDecision = approvalDecision
+        self.gatewayExecSecurity = gatewayExecSecurity
+        self.gatewayExecAsk = gatewayExecAsk
     }
 }
 

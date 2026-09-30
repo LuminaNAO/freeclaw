@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyOnboardingLocalWorkspaceConfig } from "../commands/onboard-config.js";
 import { clearConfigCache } from "../config/config.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
@@ -17,17 +18,8 @@ vi.mock("./tools/nodes-utils.js", () => ({
   resolveNodeIdFromList: vi.fn((nodes: Array<{ nodeId: string }>) => nodes[0]?.nodeId),
 }));
 
-vi.mock("../infra/exec-obfuscation-detect.js", () => ({
-  detectCommandObfuscation: vi.fn(() => ({
-    detected: false,
-    reasons: [],
-    matchedPatterns: [],
-  })),
-}));
-
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
-let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
@@ -206,7 +198,6 @@ describe("exec approvals", () => {
   beforeAll(async () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
     ({ createExecTool } = await import("./bash-tools.exec.js"));
-    ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
   });
 
   beforeEach(async () => {
@@ -250,6 +241,7 @@ describe("exec approvals", () => {
           invokeParams = params;
           return { payload: { success: true, stdout: "ok" } };
         }
+        return undefined;
       },
     });
 
@@ -323,6 +315,7 @@ describe("exec approvals", () => {
     const tool = createExecTool({
       host: "node",
       ask: "on-miss",
+      security: "allowlist",
       approvalRunningNoticeMs: 0,
     });
 
@@ -377,6 +370,86 @@ describe("exec approvals", () => {
       },
       command: "echo ok",
     });
+  });
+
+  it("runs heredoc + base64 on gateway with the fresh-install exec defaults", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const calls: string[] = [];
+    mockGatewayOkCalls(calls);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-default-"));
+    const markerPath = path.join(tempDir, "ran.txt");
+    const fresh = applyOnboardingLocalWorkspaceConfig({}, tempDir, { freshInstall: true });
+    const tool = createExecTool({
+      host: "gateway",
+      security: fresh.tools?.exec?.security,
+      ask: fresh.tools?.exec?.ask,
+      approvalRunningNoticeMs: 0,
+    });
+
+    const encoded = Buffer.from(`touch ${JSON.stringify(markerPath)}\n`).toString("base64");
+    const result = await tool.execute("call-default", {
+      command: `cat <<'EOF' | base64 -d | sh\n${encoded}\nEOF`,
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(calls).not.toContain("exec.approval.request");
+    await expect(fs.access(markerPath)).resolves.toBeUndefined();
+  });
+
+  it("keeps legacy approval behavior for configs that never set exec security/ask", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      calls.push(method);
+      if (method === "exec.approval.request") {
+        return { status: "accepted", id: "approval-id" };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return {};
+      }
+      return { ok: true };
+    });
+    const tool = createExecTool({ host: "gateway", approvalRunningNoticeMs: 0 });
+
+    const result = await tool.execute("call-legacy", { command: "echo aGkK | base64 -d" });
+
+    expect(result.details.status).toBe("approval-pending");
+    expect(calls).toContain("exec.approval.request");
+  });
+
+  it("sends the gateway's explicit exec policy to the node, and nothing when unset", async () => {
+    const invokeParams: Array<Record<string, unknown>> = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string; params?: Record<string, unknown> };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          invokeParams.push(invoke.params ?? {});
+        }
+        return { payload: { success: true, stdout: "ok" } };
+      }
+      return { ok: true };
+    });
+
+    await createExecTool({
+      host: "node",
+      security: "full",
+      ask: "off",
+      approvalRunningNoticeMs: 0,
+    }).execute("call-explicit", { command: "echo ok" });
+    await createExecTool({ host: "node", approvalRunningNoticeMs: 0 }).execute("call-unset", {
+      command: "echo ok",
+    });
+
+    expect(invokeParams[0]).toMatchObject({ gatewayExecSecurity: "full", gatewayExecAsk: "off" });
+    expect(invokeParams[1]?.gatewayExecSecurity).toBeUndefined();
+    expect(invokeParams[1]?.gatewayExecAsk).toBeUndefined();
   });
 
   it("requires approval for elevated ask when allowlist misses", async () => {
@@ -676,23 +749,11 @@ describe("exec approvals", () => {
     expect(text).toContain("Approval required. I sent the allowed approvers DMs.");
   });
 
-  it("denies node obfuscated command when approval request times out", async () => {
-    vi.mocked(detectCommandObfuscation).mockReturnValue({
-      detected: true,
-      reasons: ["Content piped directly to shell interpreter"],
-      matchedPatterns: ["pipe-to-shell"],
-    });
-
+  it("runs encoded/heredoc commands on node host without approval when ask=off", async () => {
     const calls: string[] = [];
     const nodeInvokeCommands: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
-      if (method === "exec.approval.request") {
-        return { status: "accepted", id: "approval-id" };
-      }
-      if (method === "exec.approval.waitDecision") {
-        return {};
-      }
       if (method === "node.invoke") {
         const invoke = params as { command?: string };
         if (invoke.command) {
@@ -701,7 +762,7 @@ describe("exec approvals", () => {
         if (invoke.command === "system.run.prepare") {
           return buildPreparedSystemRunPayload(params);
         }
-        return { payload: { success: true, stdout: "should-not-run" } };
+        return { payload: { success: true, stdout: "hi" } };
       }
       return { ok: true };
     });
@@ -713,23 +774,32 @@ describe("exec approvals", () => {
       approvalRunningNoticeMs: 0,
     });
 
-    const result = await tool.execute("call5", { command: "echo hi | sh" });
-    expect(result.details.status).toBe("approval-pending");
-    await expect.poll(() => nodeInvokeCommands.includes("system.run")).toBe(false);
+    const result = await tool.execute("call5", {
+      command: "echo aGkK | base64 -d | sh",
+    });
+    expect(result.details.status).toBe("completed");
+    expect(calls).not.toContain("exec.approval.request");
+    expect(nodeInvokeCommands).toContain("system.run");
   });
 
-  it("denies gateway obfuscated command when approval request times out", async () => {
+  it("still requires approval for heredoc execution in allowlist mode", async () => {
     if (process.platform === "win32") {
       return;
     }
-
-    vi.mocked(detectCommandObfuscation).mockReturnValue({
-      detected: true,
-      reasons: ["Content piped directly to shell interpreter"],
-      matchedPatterns: ["pipe-to-shell"],
+    const catPath = (await fs.access("/bin/cat").then(
+      () => true,
+      () => false,
+    ))
+      ? "/bin/cat"
+      : "/usr/bin/cat";
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+      agents: { main: { allowlist: [{ pattern: catPath }] } },
     });
-
+    const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      calls.push(method);
       if (method === "exec.approval.request") {
         return { status: "accepted", id: "approval-id" };
       }
@@ -739,7 +809,31 @@ describe("exec approvals", () => {
       return { ok: true };
     });
 
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-obf-"));
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "on-miss",
+      security: "allowlist",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-heredoc", {
+      command: `${catPath} <<'EOF'\nhello\nEOF`,
+    });
+    expect(result.details.status).toBe("approval-pending");
+    expect(calls).toContain("exec.approval.request");
+  });
+
+  it("runs heredoc + base64 on gateway host without approval when ask=off", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      calls.push(method);
+      return { ok: true };
+    });
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-heredoc-"));
     const markerPath = path.join(tempDir, "ran.txt");
     const tool = createExecTool({
       host: "gateway",
@@ -748,19 +842,12 @@ describe("exec approvals", () => {
       approvalRunningNoticeMs: 0,
     });
 
+    const encoded = Buffer.from(`touch ${JSON.stringify(markerPath)}\n`).toString("base64");
     const result = await tool.execute("call6", {
-      command: `echo touch ${JSON.stringify(markerPath)} | sh`,
+      command: `cat <<'EOF' | base64 -d | sh\n${encoded}\nEOF`,
     });
-    expect(result.details.status).toBe("approval-pending");
-    await expect
-      .poll(async () => {
-        try {
-          await fs.access(markerPath);
-          return true;
-        } catch {
-          return false;
-        }
-      })
-      .toBe(false);
+    expect(result.details.status).toBe("completed");
+    expect(calls).not.toContain("exec.approval.request");
+    await expect(fs.access(markerPath)).resolves.toBeUndefined();
   });
 });

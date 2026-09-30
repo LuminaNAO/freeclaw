@@ -23,7 +23,6 @@ import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { formatAgentInternalEventsForPrompt } from "../agents/internal-events.js";
-import { AGENT_LANE_SUBAGENT } from "../agents/lanes.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
 import {
@@ -41,7 +40,13 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { normalizeSpawnedRunMetadata } from "../agents/spawned-context.js";
-import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import {
+  assertRunDeadline,
+  createRunDeadline,
+  type RunDeadline,
+  resolveAgentTimeoutMs,
+  runDeadlineParams,
+} from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
 import {
@@ -331,7 +336,8 @@ function runAgentAttempt(params: {
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
-  timeoutMs: number;
+  /** Shared by every fallback candidate and CLI session retry of this run. */
+  runDeadline: RunDeadline;
   runId: string;
   opts: AgentCommandOpts & { senderIsOwner: boolean };
   runContext: ReturnType<typeof resolveAgentRunContext>;
@@ -369,7 +375,8 @@ function runAgentAttempt(params: {
         provider: params.providerOverride,
         model: params.modelOverride,
         thinkLevel: params.resolvedThinkLevel,
-        timeoutMs: params.timeoutMs,
+        ...runDeadlineParams(params.runDeadline),
+        abortSignal: params.opts.abortSignal,
         runId: params.runId,
         extraSystemPrompt: params.opts.extraSystemPrompt,
         cliSessionId: nextCliSessionId,
@@ -487,7 +494,7 @@ function runAgentAttempt(params: {
     authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
     verboseLevel: params.resolvedVerboseLevel,
-    timeoutMs: params.timeoutMs,
+    ...runDeadlineParams(params.runDeadline),
     runId: params.runId,
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
@@ -583,10 +590,9 @@ async function prepareAgentCommandExecution(
     throw new Error('Invalid verbose level. Use "on", "full", or "off".');
   }
 
-  const laneRaw = typeof opts.lane === "string" ? opts.lane.trim() : "";
-  const isSubagentLane = laneRaw === (AGENT_LANE_SUBAGENT as string);
+  // Subagent runs without an explicit timeout inherit agents.defaults.timeoutSeconds like any other run.
   const timeoutSecondsRaw =
-    opts.timeout !== undefined ? Number.parseInt(opts.timeout, 10) : isSubagentLane ? 0 : undefined;
+    opts.timeout !== undefined ? Number.parseInt(opts.timeout, 10) : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
@@ -1098,6 +1104,7 @@ async function agentCommandInternal(
       // Track model fallback attempts so retries on an existing session don't
       // re-inject the original prompt as a duplicate user message.
       let fallbackAttemptIndex = 0;
+      const runDeadline = createRunDeadline(timeoutMs);
       const fallbackResult = await runWithModelFallback({
         cfg,
         provider,
@@ -1106,6 +1113,7 @@ async function agentCommandInternal(
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
         run: (providerOverride, modelOverride, runOptions) => {
+          assertRunDeadline(runDeadline);
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
           return runAgentAttempt({
@@ -1121,7 +1129,7 @@ async function agentCommandInternal(
             body,
             isFallbackRetry,
             resolvedThinkLevel,
-            timeoutMs,
+            runDeadline,
             runId,
             opts,
             runContext,

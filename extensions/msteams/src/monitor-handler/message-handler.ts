@@ -5,6 +5,7 @@ import {
   dispatchReplyFromConfigWithSettledDispatcher,
   DEFAULT_GROUP_HISTORY_LIMIT,
   createScopedPairingAccess,
+  issuePairingChallenge,
   logInboundDrop,
   evaluateSenderGroupAccessForPolicy,
   resolveSenderScopedGroupPolicy,
@@ -211,16 +212,28 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
       });
       if (access.decision === "pairing") {
-        const request = await pairing.upsertPairingRequest({
-          id: senderId,
+        await issuePairingChallenge({
+          channel: "msteams",
+          senderId,
+          senderIdLine: `Your Teams user id: ${senderId}`,
           meta: { name: senderName },
+          upsertPairingRequest: pairing.upsertPairingRequest,
+          onCreated: () => {
+            log.info("msteams pairing request created", {
+              sender: senderId,
+              label: senderName,
+            });
+          },
+          sendPairingReply: async (text) => {
+            await context.sendActivity(text);
+          },
+          onReplyError: (err) => {
+            log.error("msteams pairing reply failed", {
+              sender: senderId,
+              error: String(err),
+            });
+          },
         });
-        if (request) {
-          log.info("msteams pairing request created", {
-            sender: senderId,
-            label: senderName,
-          });
-        }
       }
       log.debug?.("dropping dm (not allowlisted)", {
         sender: senderId,

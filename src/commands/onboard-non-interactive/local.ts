@@ -71,6 +71,7 @@ export async function runNonInteractiveOnboardingLocal(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  freshInstall?: boolean;
 }) {
   const { opts, runtime, baseConfig } = params;
   const mode = "local" as const;
@@ -81,7 +82,9 @@ export async function runNonInteractiveOnboardingLocal(params: {
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
 
-  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir, {
+    freshInstall: params.freshInstall,
+  });
 
   const inferredAuthChoice = inferAuthChoiceFromFlags(opts);
   if (!opts.authChoice && inferredAuthChoice.matches.length > 1) {

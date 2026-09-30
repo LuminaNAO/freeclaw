@@ -228,6 +228,7 @@ type MutableSession = {
   abort: () => Promise<void>;
   dispose: () => void;
   steer: (text: string) => Promise<void>;
+  subscribe: (listener: (evt: { type: string }) => void) => () => void;
 };
 
 function createSubscriptionMock() {
@@ -316,6 +317,7 @@ function createDefaultEmbeddedSession(params?: {
     abort: async () => {},
     dispose: () => {},
     steer: async () => {},
+    subscribe: () => () => {},
   };
 
   return session;

@@ -151,6 +151,8 @@ export interface ContextEngine {
     customInstructions?: string;
     /** Optional runtime-owned context for engines that need caller state. */
     runtimeContext?: ContextEngineRuntimeContext;
+    /** Aborted when the caller stops waiting (run limit / stall); engines should stop and not mutate further. */
+    abortSignal?: AbortSignal;
   }): Promise<CompactResult>;
 
   /**

@@ -344,6 +344,23 @@ describe("agentCommand", () => {
     });
   });
 
+  it("subagent-lane runs without --timeout inherit agents.defaults.timeoutSeconds", async () => {
+    const call = await runEmbeddedWithTempConfig({
+      args: { message: "hello", to: "+1555", lane: "subagent" },
+      agentOverrides: { timeoutSeconds: 60 },
+    });
+    expect(call?.runLimitMs).toBe(60_000);
+    expect(call?.timeoutMs).toBeLessThanOrEqual(60_000);
+  });
+
+  it("subagent-lane runs with an explicit --timeout 0 stay uncapped", async () => {
+    const call = await runEmbeddedWithTempConfig({
+      args: { message: "hello", to: "+1555", lane: "subagent", timeout: "0" },
+      agentOverrides: { timeoutSeconds: 60 },
+    });
+    expect(call?.runLimitMs).toBe(2_147_000_000);
+  });
+
   it("creates a session entry when deriving from --to", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

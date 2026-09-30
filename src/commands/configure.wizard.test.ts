@@ -135,6 +135,39 @@ describe("runConfigureWizard", () => {
     );
   });
 
+  const runLocalOnly = async (snapshot: { exists: boolean; config: Record<string, unknown> }) => {
+    mocks.writeConfigFile.mockClear();
+    mocks.readConfigFileSnapshot.mockResolvedValue({ ...snapshot, valid: true, issues: [] });
+    mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+    const selectQueue = ["local", "__continue"];
+    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
+    mocks.clackIntro.mockResolvedValue(undefined);
+    mocks.clackOutro.mockResolvedValue(undefined);
+    mocks.clackText.mockResolvedValue("");
+    mocks.clackConfirm.mockResolvedValue(false);
+    await runConfigureWizard(
+      { command: "configure" },
+      { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    );
+    return mocks.writeConfigFile.mock.calls.at(-1)?.[0] as
+      | { tools?: { exec?: { security?: string; ask?: string } } }
+      | undefined;
+  };
+
+  it("first-run configure writes the fresh-install exec defaults", async () => {
+    const written = await runLocalOnly({ exists: false, config: {} });
+    expect(written?.tools?.exec).toMatchObject({ security: "full", ask: "off" });
+  });
+
+  it("configure over an existing config never adds exec defaults", async () => {
+    const written = await runLocalOnly({ exists: true, config: { gateway: { mode: "remote" } } });
+    expect(written?.tools?.exec).toBeUndefined();
+  });
+
   it("exits with code 1 when configure wizard is cancelled", async () => {
     const runtime = {
       log: vi.fn(),

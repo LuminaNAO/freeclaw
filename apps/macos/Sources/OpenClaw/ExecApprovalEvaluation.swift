@@ -21,11 +21,12 @@ enum ExecApprovalEvaluator {
         rawCommand: String?,
         cwd: String?,
         envOverrides: [String: String]?,
-        agentId: String?) async -> ExecApprovalEvaluation
+        agentId: String?,
+        gatewayPolicy: ExecGatewayPolicy? = nil) async -> ExecApprovalEvaluation
     {
         let trimmedAgent = agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedAgentId = (trimmedAgent?.isEmpty == false) ? trimmedAgent : nil
-        let approvals = ExecApprovalsStore.resolve(agentId: normalizedAgentId)
+        let approvals = ExecApprovalsStore.resolve(agentId: normalizedAgentId, gateway: gatewayPolicy)
         let security = approvals.agent.security
         let ask = approvals.agent.ask
         let shellWrapper = ExecShellWrapperParser.extract(command: command, rawCommand: rawCommand).isWrapper

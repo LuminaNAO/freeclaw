@@ -7,6 +7,10 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Hooks: add the `session:patch` internal hook event (ported from upstream) and also fire it on chat-side model switches (`/model`, `/new <model>`), so hooks can react to every session model change.
+- Agents: no whole-run time limit by default. A stall watchdog (`agents.defaults.idleTimeoutSeconds`, default 600s, `0` disables) stops a run only when nothing is happening; `agents.defaults.timeoutSeconds` is now an opt-in whole-run limit that also covers fallback models, retries, and sub-agents. Aborts say what happened (`Run exceeded configured limit of Ns and was stopped.` / `No progress for Ns (stalled); run aborted.`) instead of "LLM request timed out", and never trigger model fallback.
+- Agents: a provider that reports an exhausted usage or quota window is skipped by model fallback (text, image, and PDF) until the window resets, honoring `Retry-After`, `x-ratelimit-reset`, `retryDelay`, and "try again in" hints.
+- Exec: fresh installs (`openclaw onboard`, `openclaw setup`, `openclaw configure` creating a new config) write `tools.exec.security: "full"` and `tools.exec.ask: "off"`. Existing gateway configs keep their current behavior. The command-obfuscation detector no longer forces approval prompts.
+- Security/exec posture change (owner decision): node hosts (headless `openclaw node` and the macOS app) now fall back to `security: "full"`, `ask: "off"` when the node has no explicit exec policy of its own. Existing nodes without an explicit `exec-approvals.json` policy flip to this and run model-issued commands without prompting. The gateway also sends its explicitly configured exec policy with each `system.run`; a node uses it only where it has no explicit local setting, so an explicit node-local `deny`/`allowlist` always wins.
 
 ## 1.1.0 - 2026-05-08
 

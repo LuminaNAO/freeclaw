@@ -5,6 +5,7 @@ import {
   CLI_RESUME_WATCHDOG_DEFAULTS,
   CLI_WATCHDOG_MIN_TIMEOUT_MS,
 } from "../cli-watchdog-defaults.js";
+import { isAgentTimeoutCapped } from "../timeout.js";
 
 function pickWatchdogProfile(
   backend: CliBackendConfig,
@@ -54,16 +55,30 @@ function pickWatchdogProfile(
   };
 }
 
+/**
+ * Idle (no-output) watchdog for CLI backends. Returns 0 when disabled.
+ * - Backend `noOutputTimeoutMs` wins when configured.
+ * - With a configured whole-run cap, keep the legacy ratio-of-cap window (bounded below the cap).
+ * - Without a cap, use the agent idle window (default 600 s) — never a wall-clock limit.
+ */
 export function resolveCliNoOutputTimeoutMs(params: {
   backend: CliBackendConfig;
   timeoutMs: number;
   useResume: boolean;
+  idleTimeoutMs?: number;
 }): number {
   const profile = pickWatchdogProfile(params.backend, params.useResume);
+  const capped = isAgentTimeoutCapped(params.timeoutMs);
   // Keep watchdog below global timeout in normal cases.
-  const cap = Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, params.timeoutMs - 1_000);
+  const cap = capped
+    ? Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, params.timeoutMs - 1_000)
+    : Number.POSITIVE_INFINITY;
   if (profile.noOutputTimeoutMs !== undefined) {
     return Math.min(profile.noOutputTimeoutMs, cap);
+  }
+  if (!capped) {
+    const idle = params.idleTimeoutMs ?? profile.maxMs;
+    return idle > 0 ? Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, idle) : 0;
   }
   const computed = Math.floor(params.timeoutMs * profile.noOutputTimeoutRatio);
   const bounded = Math.min(profile.maxMs, Math.max(profile.minMs, computed));

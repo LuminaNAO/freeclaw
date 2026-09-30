@@ -512,7 +512,6 @@ describe("sessions tools", () => {
   it("sessions_send supports fire-and-forget and wait", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let _historyCallCount = 0;
     let sendCallCount = 0;
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
@@ -546,7 +545,6 @@ describe("sessions tools", () => {
         return { runId: params?.runId ?? "run-1", status: "ok" };
       }
       if (request.method === "chat.history") {
-        _historyCallCount += 1;
         const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
         return {
           messages: [
@@ -1053,7 +1051,6 @@ describe("sessions tools", () => {
           lane: "subagent",
           sessionKey: "agent:main:subagent:steer",
           sessionId: "child-session-steer",
-          timeout: 0,
         },
       });
 

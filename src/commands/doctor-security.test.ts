@@ -136,6 +136,32 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("openclaw approvals get --gateway");
   });
 
+  it("notes host exec running with security=full, ask=off, including the fresh-install shape (host unset)", async () => {
+    for (const exec of [
+      { host: "gateway", security: "full", ask: "off" },
+      { security: "full", ask: "off" },
+    ] as const) {
+      await noteSecurityWarnings({ tools: { exec } } as OpenClawConfig);
+      const message = lastMessage();
+      expect(message).toContain('security="full", ask="off"');
+      expect(message).toContain('tools.exec.security="allowlist"');
+    }
+  });
+
+  it("skips the exec posture note for allowlist mode, unset values, or a real sandbox", async () => {
+    for (const cfg of [
+      { tools: { exec: { host: "gateway", security: "allowlist", ask: "on-miss" } } },
+      { tools: { exec: { host: "gateway" } } },
+      {
+        tools: { exec: { security: "full", ask: "off" } },
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+    ]) {
+      await noteSecurityWarnings(cfg as OpenClawConfig);
+      expect(lastMessage()).not.toContain("Exec:");
+    }
+  });
+
   it("warns when heartbeat delivery relies on implicit directPolicy defaults", async () => {
     const cfg = {
       agents: {

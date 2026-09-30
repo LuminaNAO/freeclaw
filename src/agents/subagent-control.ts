@@ -647,7 +647,7 @@ export async function steerControlledSubagentRun(params: {
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
         lane: AGENT_LANE_SUBAGENT,
-        timeout: 0,
+        timeout: params.entry.runTimeoutSeconds,
       },
       timeoutMs: 10_000,
     });
@@ -670,7 +670,7 @@ export async function steerControlledSubagentRun(params: {
     previousRunId: params.entry.runId,
     nextRunId: runId,
     fallback: params.entry,
-    runTimeoutSeconds: params.entry.runTimeoutSeconds ?? 0,
+    runTimeoutSeconds: params.entry.runTimeoutSeconds,
   });
 
   return {
@@ -711,7 +711,6 @@ export async function sendControlledSubagentMessage(params: {
       deliver: false,
       channel: INTERNAL_MESSAGE_CHANNEL,
       lane: AGENT_LANE_SUBAGENT,
-      timeout: 0,
     },
     timeoutMs: 10_000,
   });

@@ -30,7 +30,12 @@ import {
   countActiveDescendantRuns,
   listDescendantRunsForRequester,
 } from "../../agents/subagent-registry.js";
-import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import {
+  assertRunDeadline,
+  createRunDeadline,
+  resolveAgentTimeoutMs,
+  runDeadlineParams,
+} from "../../agents/timeout.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import {
@@ -551,6 +556,8 @@ export async function runCronIsolatedAgentTurn(params: {
       cronSession.sessionEntry.systemPromptReport,
     );
 
+    // One deadline for the whole job: fallback candidates and the continuation prompt share it.
+    const runDeadline = createRunDeadline(timeoutMs);
     const runPrompt = async (promptText: string) => {
       const fallbackResult = await runWithModelFallback({
         cfg: cfgWithAgentDefaults,
@@ -564,6 +571,7 @@ export async function runCronIsolatedAgentTurn(params: {
           if (abortSignal?.aborted) {
             throw new Error(abortReason());
           }
+          assertRunDeadline(runDeadline);
           const bootstrapPromptWarningSignature =
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
           if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
@@ -586,7 +594,8 @@ export async function runCronIsolatedAgentTurn(params: {
               provider: providerOverride,
               model: modelOverride,
               thinkLevel,
-              timeoutMs,
+              ...runDeadlineParams(runDeadline),
+              abortSignal,
               runId: cronSession.sessionEntry.sessionId,
               cliSessionId,
               bootstrapPromptWarningSignaturesSeen,
@@ -626,7 +635,7 @@ export async function runCronIsolatedAgentTurn(params: {
               sessionEntry: cronSession.sessionEntry,
             }).enabled,
             verboseLevel: resolvedVerboseLevel,
-            timeoutMs,
+            ...runDeadlineParams(runDeadline),
             bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
             bootstrapContextRunKind: "cron",
             runId: cronSession.sessionEntry.sessionId,

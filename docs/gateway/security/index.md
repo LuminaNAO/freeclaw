@@ -372,6 +372,10 @@ If a macOS node is paired, the Gateway can invoke `system.run` on that node. Thi
 
 - Requires node pairing (approval + token).
 - Controlled on the Mac via **Settings → Exec approvals** (security + ask + allowlist).
+- Default posture (owner decision): a node with no explicit exec policy of its own uses the gateway's explicitly
+  configured policy, otherwise `security: "full"`, `ask: "off"`. Existing nodes that never set a policy now run
+  commands without prompting. An explicit node-local setting always wins. See
+  [Exec approvals](/tools/exec-approvals).
 - Approval mode binds exact request context and, when possible, one concrete local script/file operand. If OpenClaw cannot identify exactly one direct local file for an interpreter/runtime command, approval-backed execution is denied rather than promising full semantic coverage.
 - If you don’t want remote execution, set security to **deny** and remove node pairing for that Mac.
 

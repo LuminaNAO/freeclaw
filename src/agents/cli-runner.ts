@@ -32,6 +32,7 @@ import {
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
   writeCliImages,
+  type CliOutput,
 } from "./cli-runner/helpers.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
@@ -44,9 +45,26 @@ import {
 } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
+import { createRunDeadline, isAgentTimeoutCapped, resolveAgentIdleTimeoutMs } from "./timeout.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
+
+type CliRunAbortKind = "run-limit" | "stall" | "aborted";
+
+class CliRunAborted extends Error {
+  constructor(
+    readonly kind: CliRunAbortKind,
+    message: string,
+  ) {
+    super(message);
+    this.name = "CliRunAborted";
+  }
+}
+
+function formatCliRunLimitText(limitMs: number): string {
+  return `CLI run exceeded configured limit of ${Math.round(limitMs / 1000)}s and was stopped.`;
+}
 
 export async function runCliAgent(params: {
   sessionId: string;
@@ -59,7 +77,17 @@ export async function runCliAgent(params: {
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
+  /** What remains of the whole-run limit (or the uncapped sentinel). */
   timeoutMs: number;
+  /** Configured whole-run limit for user-facing text; defaults to `timeoutMs`. */
+  runLimitMs?: number;
+  /**
+   * Absolute epoch-ms deadline for the whole run when the caller shares one across fallback/retries. Queue wait
+   * counts against it. Defaults to now + timeoutMs at entry.
+   */
+  runDeadlineAtMs?: number;
+  /** Aborts before the CLI process starts (for example an outer cron limit while queued) or kills it. */
+  abortSignal?: AbortSignal;
   runId: string;
   extraSystemPrompt?: string;
   streamParams?: import("../commands/agent/types.js").AgentStreamParams;
@@ -71,6 +99,20 @@ export async function runCliAgent(params: {
   images?: ImageContent[];
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
+  const deadline = createRunDeadline(params.timeoutMs, Date.now, params.runDeadlineAtMs);
+  const runLimitMs = params.runLimitMs ?? params.timeoutMs;
+  const cliAbortResult = (abort: CliRunAborted): EmbeddedPiRunResult => ({
+    payloads: [{ text: abort.message, isError: true }],
+    meta: {
+      durationMs: Date.now() - started,
+      aborted: true,
+      agentMeta: {
+        sessionId: params.sessionId ?? "",
+        provider: params.provider,
+        model: params.model ?? "",
+      },
+    },
+  });
   const workspaceResolution = resolveRunWorkspaceDir({
     workspaceDir: params.workspaceDir,
     sessionKey: params.sessionKey,
@@ -245,6 +287,13 @@ export async function runCliAgent(params: {
 
     try {
       const output = await enqueueCliRun(queueKey, async () => {
+        // The queue may have been busy: never start work after the caller gave up or the limit ran out.
+        if (params.abortSignal?.aborted) {
+          throw new CliRunAborted("aborted", "CLI run aborted before it started.");
+        }
+        if (deadline.expired()) {
+          throw new CliRunAborted("run-limit", formatCliRunLimitText(runLimitMs));
+        }
         log.info(
           `cli exec: provider=${params.provider} model=${normalizedModel} promptChars=${params.prompt.length}`,
         );
@@ -292,10 +341,12 @@ export async function runCliAgent(params: {
           }
           return next;
         })();
+        const remainingMs = deadline.remainingMs();
         const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
           backend,
-          timeoutMs: params.timeoutMs,
+          timeoutMs: remainingMs,
           useResume,
+          idleTimeoutMs: resolveAgentIdleTimeoutMs({ cfg: params.config }),
         });
         const supervisor = getProcessSupervisor();
         const scopeKey = buildCliSupervisorScopeKey({
@@ -311,13 +362,27 @@ export async function runCliAgent(params: {
           replaceExistingScope: Boolean(useResume && scopeKey),
           mode: "child",
           argv: [backend.command, ...args],
-          timeoutMs: params.timeoutMs,
+          timeoutMs: isAgentTimeoutCapped(remainingMs) ? remainingMs : undefined,
           noOutputTimeoutMs,
           cwd: workspaceDir,
           env,
           input: stdinPayload,
         });
-        const result = await managedRun.wait();
+        // The caller (for example an explicit cron limit) can give up while the child is running: stop it.
+        const cancelOnAbort = () => managedRun.cancel("manual-cancel");
+        params.abortSignal?.addEventListener("abort", cancelOnAbort, { once: true });
+        if (params.abortSignal?.aborted) {
+          cancelOnAbort();
+        }
+        let result: Awaited<ReturnType<typeof managedRun.wait>>;
+        try {
+          result = await managedRun.wait();
+        } finally {
+          params.abortSignal?.removeEventListener("abort", cancelOnAbort);
+        }
+        if (params.abortSignal?.aborted) {
+          throw new CliRunAborted("aborted", "CLI run aborted by the caller.");
+        }
 
         const stdout = result.stdout.trim();
         const stderr = result.stderr.trim();
@@ -340,13 +405,13 @@ export async function runCliAgent(params: {
 
         if (result.exitCode !== 0 || result.reason !== "exit") {
           if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
-            const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
+            const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s (stalled) and was terminated.`;
             log.warn(
               `cli watchdog timeout: provider=${params.provider} model=${modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
             );
             if (params.sessionKey) {
               const stallNotice = [
-                `CLI agent (${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
+                `CLI agent (${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s (stalled) and was terminated.`,
                 "It may have been waiting for interactive input or an approval prompt.",
                 "For Claude Code, prefer --permission-mode bypassPermissions --print.",
               ].join(" ");
@@ -355,21 +420,11 @@ export async function runCliAgent(params: {
                 scopedHeartbeatWakeOptions(params.sessionKey, { reason: "cli:watchdog:stall" }),
               );
             }
-            throw new FailoverError(timeoutReason, {
-              reason: "timeout",
-              provider: params.provider,
-              model: modelId,
-              status: resolveFailoverStatus("timeout"),
-            });
+            // Our own stall abort, not a provider failure: surface it, do not fall back.
+            throw new CliRunAborted("stall", timeoutReason);
           }
           if (result.reason === "overall-timeout") {
-            const timeoutReason = `CLI exceeded timeout (${Math.round(params.timeoutMs / 1000)}s) and was terminated.`;
-            throw new FailoverError(timeoutReason, {
-              reason: "timeout",
-              provider: params.provider,
-              model: modelId,
-              status: resolveFailoverStatus("timeout"),
-            });
+            throw new CliRunAborted("run-limit", formatCliRunLimitText(runLimitMs));
           }
           const err = stderr || stdout || "CLI failed.";
           const reason = classifyFailoverReason(err) ?? "unknown";
@@ -424,6 +479,9 @@ export async function runCliAgent(params: {
       },
     };
   } catch (err) {
+    if (err instanceof CliRunAborted) {
+      return cliAbortResult(err);
+    }
     if (err instanceof FailoverError) {
       // Check if this is a session expired error and we have a session to clear
       if (err.reason === "session_expired" && params.cliSessionId && params.sessionKey) {
@@ -435,8 +493,16 @@ export async function runCliAgent(params: {
         // This requires access to the session store, which we don't have here
         // We'll need to modify the caller to handle this case
 
-        // For now, retry without the session ID to create a new session
-        const output = await executeCliWithSession(undefined);
+        // For now, retry without the session ID to create a new session. It shares the run deadline.
+        let output: CliOutput;
+        try {
+          output = await executeCliWithSession(undefined);
+        } catch (retryErr) {
+          if (retryErr instanceof CliRunAborted) {
+            return cliAbortResult(retryErr);
+          }
+          throw retryErr;
+        }
         const text = output.text?.trim();
         const payloads = text ? [{ text }] : undefined;
 

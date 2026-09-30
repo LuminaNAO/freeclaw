@@ -7,6 +7,7 @@ import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
+import { applyFreshInstallExecDefaults } from "./onboard-config.js";
 
 async function readConfigFileRaw(configPath: string): Promise<{
   exists: boolean;
@@ -41,8 +42,10 @@ export async function setupCommand(
 
   const workspace = desiredWorkspace ?? defaults.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
 
+  // A config file created here is a fresh install: it gets the fresh-install host exec defaults.
+  const base = existingRaw.exists ? cfg : applyFreshInstallExecDefaults(cfg);
   const next: OpenClawConfig = {
-    ...cfg,
+    ...base,
     agents: {
       ...cfg.agents,
       defaults: {

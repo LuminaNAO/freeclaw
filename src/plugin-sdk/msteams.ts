@@ -109,6 +109,7 @@ export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-di
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
 export {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,

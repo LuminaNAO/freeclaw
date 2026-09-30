@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { NO_AGENT_TIMEOUT_MS } from "../agents/timeout.js";
 import {
   abortChatRunById,
   isChatStopCommandText,
+  resolveChatRunExpiresAtMs,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
 } from "./chat-abort.js";
@@ -137,5 +139,24 @@ describe("abortChatRunById", () => {
         content: [{ type: "text", text: "streamed text" }],
       }),
     );
+  });
+});
+
+describe("resolveChatRunExpiresAtMs", () => {
+  it("never expires an uncapped run", () => {
+    expect(resolveChatRunExpiresAtMs({ now: 1_000, timeoutMs: NO_AGENT_TIMEOUT_MS })).toBe(
+      Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("honors an explicit limit longer than 24 hours", () => {
+    const fortyEightHours = 48 * 3_600_000;
+    expect(resolveChatRunExpiresAtMs({ now: 0, timeoutMs: fortyEightHours })).toBe(
+      fortyEightHours + 60_000,
+    );
+  });
+
+  it("expires a capped run at limit plus grace", () => {
+    expect(resolveChatRunExpiresAtMs({ now: 0, timeoutMs: 900_000 })).toBe(960_000);
   });
 });

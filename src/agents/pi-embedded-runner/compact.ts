@@ -104,6 +104,8 @@ import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.j
 
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
+  /** Stops an in-flight compaction when the caller gives up (run limit / stall). */
+  abortSignal?: AbortSignal;
   runId?: string;
   sessionKey?: string;
   messageChannel?: string;
@@ -913,9 +915,26 @@ export async function compactEmbeddedPiSessionDirect(
           // If token estimation throws on a malformed message, fall back to 0 so
           // the sanity check below becomes a no-op instead of crashing compaction.
         }
-        const result = await compactWithSafetyTimeout(() =>
-          session.compact(params.customInstructions),
-        );
+        if (params.abortSignal?.aborted) {
+          throw new Error("compaction aborted by caller");
+        }
+        const onCallerAbort = () => {
+          try {
+            session.abortCompaction();
+          } catch {
+            // Best effort: the caller already stopped waiting.
+          }
+        };
+        params.abortSignal?.addEventListener("abort", onCallerAbort, { once: true });
+        let result: Awaited<ReturnType<typeof session.compact>>;
+        try {
+          result = await compactWithSafetyTimeout(() => session.compact(params.customInstructions));
+        } finally {
+          params.abortSignal?.removeEventListener("abort", onCallerAbort);
+        }
+        if (params.abortSignal?.aborted) {
+          throw new Error("compaction aborted by caller");
+        }
         await runPostCompactionSideEffects({
           config: params.config,
           sessionKey: params.sessionKey,

@@ -95,6 +95,42 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("waits without a wall-clock cap when no timeout is configured", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-cli-"));
+    try {
+      configSpy.mockReturnValue({
+        session: { store: path.join(dir, "sessions.json"), mainKey: "main" },
+      });
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
+        timeoutMs?: number;
+        params?: { timeout?: number };
+      };
+      expect(request.timeoutMs).toBe(2_147_000_000);
+      expect(request.params?.timeout).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an explicitly configured run limit", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
+        timeoutMs?: number;
+        params?: { timeout?: number };
+      };
+      expect(request.params?.timeout).toBe(600);
+      expect(request.timeoutMs).toBe(630_000);
+    });
+  });
+
   it("uses gateway by default", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();

@@ -470,7 +470,10 @@ actor MacNodeRuntime {
             rawCommand: params.rawCommand,
             cwd: params.cwd,
             envOverrides: params.env,
-            agentId: params.agentId)
+            agentId: params.agentId,
+            gatewayPolicy: ExecGatewayPolicy(
+                security: params.gatewayExecSecurity,
+                ask: params.gatewayExecAsk))
 
         if evaluation.security == .deny {
             await self.emitExecEvent(

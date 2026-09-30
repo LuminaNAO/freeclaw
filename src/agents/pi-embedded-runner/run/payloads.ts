@@ -165,6 +165,8 @@ export function buildEmbeddedRunPayloads(params: {
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
+  /** Replaces the assistant error text when the run was aborted by our own watchdog. */
+  abortErrorText?: string;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -194,12 +196,13 @@ export function buildEmbeddedRunPayloads(params: {
     params.lastAssistant && lastAssistantErrored
       ? suppressAssistantArtifacts
         ? undefined
-        : formatAssistantErrorText(params.lastAssistant, {
+        : (params.abortErrorText ??
+          formatAssistantErrorText(params.lastAssistant, {
             cfg: params.config,
             sessionKey: params.sessionKey,
             provider: params.provider,
             model: params.model,
-          })
+          }))
       : undefined;
   const rawErrorMessage = lastAssistantErrored
     ? params.lastAssistant?.errorMessage?.trim() || undefined

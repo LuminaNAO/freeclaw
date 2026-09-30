@@ -884,7 +884,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       thinkingDefault: "low",
       verboseDefault: "off",
       elevatedDefault: "on",
-      timeoutSeconds: 600,
+      idleTimeoutSeconds: 600,
       mediaMaxMb: 5,
       contextTokens: 200000,
       maxConcurrent: 3,
@@ -904,6 +904,9 @@ Time format in system prompt. Default: `auto` (OS preference).
   - If omitted, the PDF tool falls back to `imageModel`, then to best-effort provider defaults.
 - `pdfMaxBytesMb`: default PDF size limit for the `pdf` tool when `maxBytesMb` is not passed at call time.
 - `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
+- `idleTimeoutSeconds`: stall watchdog. A run is aborted only after this many seconds with no progress: no streamed tokens, no tool start or finish, no exec output, and no exec process started by this run still running (a long `exec` or a background job counts as alive). Default: `600`. `0` disables it. The error reads `No progress for <N>s (stalled); run aborted.`
+- `timeoutSeconds`: optional whole-run wall-clock limit. Unset by default, so healthy long runs are never cut off by elapsed time. When set, the run stops at that limit with `Run exceeded configured limit of <N>s and was stopped.` Per-run overrides (`openclaw agent --timeout`, cron `timeoutSeconds`, `chat.send` `timeoutMs`) still apply; `0` means no limit.
+- Our own run-limit and stall aborts never trigger model fallback. A real provider request timeout still reports `LLM request timed out.` and can fail over. A provider that returns a usage or quota limit error is skipped by fallback until its window resets (the `retry-after`, `try again in`, or `resets at` hint when present, otherwise 15 minutes).
 - `model.primary`: format `provider/model` (e.g. `anthropic/claude-opus-4-6`). If you omit the provider, OpenClaw assumes `anthropic` (deprecated).
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
 - `params` merge precedence (config): `agents.defaults.models["provider/model"].params` is the base, then `agents.list[].params` (matching agent id) overrides by key.
@@ -1973,7 +1976,7 @@ Notes:
 ```
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
-- `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
+- `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout. When unset, sub-agents inherit `agents.defaults.timeoutSeconds`.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 
 ---

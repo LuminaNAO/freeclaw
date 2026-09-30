@@ -20,6 +20,8 @@ describe("setupCommand", () => {
 
       expect(raw).toContain('"mode": "local"');
       expect(raw).toContain('"workspace"');
+      const parsed = JSON.parse(raw) as { tools?: { exec?: { security?: string; ask?: string } } };
+      expect(parsed.tools?.exec).toEqual({ security: "full", ask: "off" });
     });
   });
 
@@ -55,6 +57,7 @@ describe("setupCommand", () => {
 
       expect(raw.agents?.defaults?.workspace).toBe(workspace);
       expect(raw.gateway?.mode).toBe("local");
+      expect((raw as { tools?: unknown }).tools).toBeUndefined();
     });
   });
 });

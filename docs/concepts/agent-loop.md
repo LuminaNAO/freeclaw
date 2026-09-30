@@ -32,7 +32,7 @@ wired end-to-end.
    - serializes runs via per-session + global queues
    - resolves model + auth profile and builds the pi session
    - subscribes to pi events and streams assistant/tool deltas
-   - enforces timeout -> aborts run if exceeded
+   - runs a stall watchdog (aborts only when there is no progress) and an optional configured run limit
    - returns payloads + usage metadata
 4. `subscribeEmbeddedPiSession` bridges pi-agent-core events to OpenClaw `agent` stream:
    - tool events => `stream: "tool"`
@@ -138,11 +138,25 @@ See [Plugins](/tools/plugin#plugin-hooks) for the hook API and registration deta
 ## Timeouts
 
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
-- Agent runtime: `agents.defaults.timeoutSeconds` default 600s; enforced in `runEmbeddedPiAgent` abort timer.
+- Stall watchdog: `agents.defaults.idleTimeoutSeconds` (default 600s, `0` disables). The run is aborted only after
+  that long with no progress. Progress means streamed tokens, a tool starting or finishing, exec output
+  (foreground or background), or an exec process started by this run that is still running (a long foreground
+  `exec`, or a background job the model is waiting on). Background jobs left over from earlier runs do not count.
+  Error: `No progress for <N>s (stalled); run aborted.`
+- Run limit: `agents.defaults.timeoutSeconds` is unset by default, so there is no whole-run wall-clock cap. Set it
+  (or pass a per-run timeout) to opt in. Error: `Run exceeded configured limit of <N>s and was stopped.`
+- A per-request provider timeout is reported as `LLM request timed out.` Stall and run-limit aborts are not
+  provider failures and never trigger model fallback.
+- A configured limit is a whole-run deadline: retries, compaction retries, and profile rotation share it.
+  It applies to local providers as well.
+- Gateway `chat.send` runs and cron agent turns add no wall-clock ceiling of their own when no limit is set.
+- CLI backends follow the same rule: the no-output watchdog uses the idle window unless the backend sets
+  `reliability.watchdog.*.noOutputTimeoutMs`, and there is no wall-clock cap unless a run limit is configured.
 
 ## Where things can end early
 
-- Agent timeout (abort)
+- Stall watchdog (no progress for `idleTimeoutSeconds`)
+- Configured run limit (`timeoutSeconds`, opt-in)
 - AbortSignal (cancel)
 - Gateway disconnect or RPC timeout
 - `agent.wait` timeout (wait-only, does not stop agent)

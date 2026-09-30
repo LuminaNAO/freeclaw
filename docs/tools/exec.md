@@ -53,8 +53,8 @@ Notes:
 - `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.
 - `tools.exec.approvalRunningNoticeMs` (default: 10000): emit a single “running” notice when an approval-gated exec runs longer than this (0 disables).
 - `tools.exec.host` (default: `sandbox`)
-- `tools.exec.security` (default: `deny` for sandbox, `allowlist` for gateway + node when unset)
-- `tools.exec.ask` (default: `on-miss`)
+- `tools.exec.security`: fresh installs get `full` written by onboarding. When unset: `deny` for sandbox, `allowlist` for gateway + node (older configs keep this). Set `allowlist` to opt in to allowlist mode.
+- `tools.exec.ask`: fresh installs get `off` written by onboarding. When unset: `on-miss` (older configs keep this). Set `on-miss` or `always` to opt in to approval prompts.
 - `tools.exec.node` (default: unset)
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
 - `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals#safe-bins-stdin-only).
@@ -110,8 +110,8 @@ Example:
 
 `/exec` is only honored for **authorized senders** (channel allowlists/pairing plus `commands.useAccessGroups`).
 It updates **session state only** and does not write config. To hard-disable exec, deny it via tool
-policy (`tools.deny: ["exec"]` or per-agent). Host approvals still apply unless you explicitly set
-`security=full` and `ask=off`.
+policy (`tools.deny: ["exec"]` or per-agent). Fresh installs run host exec with `security=full` and `ask=off`;
+host approvals apply once you configure `security=allowlist` and/or an `ask` mode in config or `exec-approvals.json`.
 
 ## Exec approvals (companion app / node host)
 

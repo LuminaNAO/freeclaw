@@ -1003,6 +1003,10 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return isBillingErrorMessage(raw) ? "billing" : "rate_limit";
   }
+  // Rolling/subscription quota windows reset on their own: treat as a (long) rate limit, not unknown.
+  if (/subscription quota|(?:rolling|quota) (?:time )?window/i.test(raw)) {
+    return "rate_limit";
+  }
   if (isRateLimitErrorMessage(raw)) {
     return "rate_limit";
   }

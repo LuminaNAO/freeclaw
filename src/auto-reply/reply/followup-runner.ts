@@ -5,6 +5,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { assertRunDeadline, createRunDeadline, runDeadlineParams } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -154,6 +155,7 @@ export function createFollowupRunner(params: {
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+      const runDeadline = createRunDeadline(queued.run.timeoutMs);
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -167,6 +169,7 @@ export function createFollowupRunner(params: {
             sessionKey: queued.run.sessionKey,
           }),
           run: async (provider, model, runOptions) => {
+            assertRunDeadline(runDeadline);
             const authProfile = resolveRunAuthProfile(queued.run, provider);
             const result = await runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
@@ -207,7 +210,7 @@ export function createFollowupRunner(params: {
               suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
               execOverrides: queued.run.execOverrides,
               bashElevated: queued.run.bashElevated,
-              timeoutMs: queued.run.timeoutMs,
+              ...runDeadlineParams(runDeadline),
               runId,
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               blockReplyBreak: queued.run.blockReplyBreak,

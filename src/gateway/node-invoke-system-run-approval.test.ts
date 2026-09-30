@@ -93,6 +93,23 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(result.details?.code).toBe(code);
   }
 
+  test("forwards the gateway exec policy fields to the node", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "hi"],
+        gatewayExecSecurity: "full",
+        gatewayExecAsk: "off",
+      },
+      client,
+      nowMs: now,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.params).toMatchObject({ gatewayExecSecurity: "full", gatewayExecAsk: "off" });
+  });
+
   test("rejects cmd.exe /c trailing-arg mismatch against rawCommand", () => {
     const result = sanitizeSystemRunParamsForForwarding({
       rawParams: {

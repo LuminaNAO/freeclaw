@@ -640,8 +640,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
+    // A run limit above the 2.5 s retry delay, so the single transient retry fits inside it.
     const { run } = createMinimalRun({
       typingMode: "message",
+      runOverrides: { timeoutMs: 60_000 },
     });
     const runPromise = run();
 

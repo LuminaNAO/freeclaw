@@ -30,7 +30,13 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
-import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+import { classifyFailoverReason, isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+import {
+  getProviderQuotaWindowUntil,
+  markProviderQuotaExhausted,
+  shouldOpenQuotaWindow,
+} from "./provider-quota-window.js";
+import { RunDeadlineExceededError } from "./timeout.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -144,6 +150,24 @@ async function runFallbackCandidate<T>(params: {
       throw err;
     }
     return { ok: false, error: err };
+  }
+}
+
+function describeQuotaWindowSkip(provider: string): string | undefined {
+  const until = getProviderQuotaWindowUntil(provider);
+  return until === undefined
+    ? undefined
+    : `Provider ${provider} usage limit reached (skipping until ${new Date(until).toISOString()})`;
+}
+
+function recordQuotaWindowFromError(provider: string, err: unknown): void {
+  const described = describeFailoverError(
+    coerceToFailoverError(err, { provider, model: "" }) ?? err,
+  );
+  const message = err instanceof Error ? err.message : described.message;
+  const reason = described.reason ?? classifyFailoverReason(message);
+  if (shouldOpenQuotaWindow(reason, message)) {
+    markProviderQuotaExhausted({ provider, message });
   }
 }
 
@@ -552,6 +576,34 @@ export async function runWithModelFallback<T>(params: {
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
+    // A provider whose usage/quota window is exhausted is skipped until the window resets. If every
+    // candidate is exhausted, the run fails with the recorded quota results instead of calling one.
+    const quotaSkip = describeQuotaWindowSkip(candidate.provider);
+    if (quotaSkip) {
+      const error = quotaSkip;
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error,
+        reason: "rate_limit",
+      });
+      logModelFallbackDecision({
+        decision: "skip_candidate",
+        runId: params.runId,
+        requestedProvider: params.provider,
+        requestedModel: params.model,
+        candidate,
+        attempt: i + 1,
+        total: candidates.length,
+        reason: "rate_limit",
+        error,
+        nextCandidate: candidates[i + 1],
+        isPrimary,
+        requestedModelMatched: requestedModel,
+        fallbackConfigured: hasFallbackCandidates,
+      });
+      continue;
+    }
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -721,6 +773,10 @@ export async function runWithModelFallback<T>(params: {
       if (isLikelyContextOverflowError(errMessage)) {
         throw err;
       }
+      // The whole-run limit is spent: no further candidate may start.
+      if (err instanceof RunDeadlineExceededError) {
+        throw err;
+      }
       const normalized =
         coerceToFailoverError(err, {
           provider: candidate.provider,
@@ -737,6 +793,7 @@ export async function runWithModelFallback<T>(params: {
 
       lastError = isKnownFailover ? normalized : err;
       const described = describeFailoverError(normalized);
+      recordQuotaWindowFromError(candidate.provider, normalized);
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
@@ -806,6 +863,16 @@ export async function runWithImageModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    const quotaSkip = describeQuotaWindowSkip(candidate.provider);
+    if (quotaSkip) {
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error: quotaSkip,
+        reason: "rate_limit",
+      });
+      continue;
+    }
     const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
     if ("success" in attemptRun) {
       return attemptRun.success;
@@ -813,6 +880,7 @@ export async function runWithImageModelFallback<T>(params: {
     {
       const err = attemptRun.error;
       lastError = err;
+      recordQuotaWindowFromError(candidate.provider, err);
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,

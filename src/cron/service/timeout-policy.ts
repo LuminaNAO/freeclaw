@@ -8,18 +8,16 @@ import type { CronJob } from "../types.js";
 export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
 
 /**
- * Agent turns can legitimately run much longer than generic cron jobs.
- * Use a larger safety ceiling when no explicit timeout is set.
+ * Agent turns have no outer wall-clock ceiling unless the job sets `timeoutSeconds`: the embedded run
+ * applies agents.defaults.timeoutSeconds (opt-in) and the stall watchdog ends runs that stop progressing.
  */
-export const AGENT_TURN_SAFETY_TIMEOUT_MS = 60 * 60_000; // 60 minutes
-
 export function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
-  const configuredTimeoutMs =
-    job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
-      ? Math.floor(job.payload.timeoutSeconds * 1_000)
-      : undefined;
-  if (configuredTimeoutMs === undefined) {
-    return job.payload.kind === "agentTurn" ? AGENT_TURN_SAFETY_TIMEOUT_MS : DEFAULT_JOB_TIMEOUT_MS;
+  if (job.payload.kind !== "agentTurn") {
+    return DEFAULT_JOB_TIMEOUT_MS;
   }
+  if (typeof job.payload.timeoutSeconds !== "number") {
+    return undefined;
+  }
+  const configuredTimeoutMs = Math.floor(job.payload.timeoutSeconds * 1_000);
   return configuredTimeoutMs <= 0 ? undefined : configuredTimeoutMs;
 }

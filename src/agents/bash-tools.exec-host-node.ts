@@ -8,10 +8,8 @@ import {
   requiresExecApproval,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
-import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
-import { logInfo } from "../logger.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -42,6 +40,8 @@ export type ExecuteNodeHostCommandParams = {
   agentId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
+  /** Explicitly configured/requested gateway policy forwarded to the node (absent fields are not sent). */
+  explicitPolicy?: { security?: ExecSecurity; ask?: ExecAsk };
   timeoutSec?: number;
   defaultTimeoutSec: number;
   approvalRunningNoticeMs: number;
@@ -163,20 +163,12 @@ export async function executeNodeHostCommand(
       // Fall back to requiring approval if node approvals cannot be fetched.
     }
   }
-  const obfuscation = detectCommandObfuscation(params.command);
-  if (obfuscation.detected) {
-    logInfo(
-      `exec: obfuscation detected (node=${nodeQuery ?? "default"}): ${obfuscation.reasons.join(", ")}`,
-    );
-    params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
-  }
-  const requiresAsk =
-    requiresExecApproval({
-      ask: hostAsk,
-      security: hostSecurity,
-      analysisOk,
-      allowlistSatisfied,
-    }) || obfuscation.detected;
+  const requiresAsk = requiresExecApproval({
+    ask: hostAsk,
+    security: hostSecurity,
+    analysisOk,
+    allowlistSatisfied,
+  });
   const invokeTimeoutMs = Math.max(
     10_000,
     (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) * 1000 +
@@ -203,6 +195,9 @@ export async function executeNodeHostCommand(
         approvalDecision: approvalDecision ?? undefined,
         runId: runId ?? undefined,
         suppressNotifyOnExit: suppressNotifyOnExit === true ? true : undefined,
+        // The node applies these only where it has no explicit local policy of its own.
+        gatewayExecSecurity: params.explicitPolicy?.security,
+        gatewayExecAsk: params.explicitPolicy?.ask,
       },
       idempotencyKey: crypto.randomUUID(),
     }) satisfies Record<string, unknown>;
@@ -274,7 +269,6 @@ export async function executeNodeHostCommand(
       } = execHostShared.createExecApprovalDecisionState({
         decision,
         askFallback,
-        obfuscationDetected: obfuscation.detected,
       });
       let approvedByAsk = initialApprovedByAsk;
       let approvalDecision: "allow-once" | "allow-always" | null = null;

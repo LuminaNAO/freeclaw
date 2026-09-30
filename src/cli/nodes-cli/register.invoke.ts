@@ -5,6 +5,8 @@ import { randomIdempotencyKey } from "../../gateway/call.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   type ExecApprovalsFile,
+  DEFAULT_EXEC_ASK,
+  DEFAULT_EXEC_SECURITY,
   type ExecAsk,
   type ExecSecurity,
   loadExecApprovals,
@@ -92,14 +94,14 @@ function requirePreparedRunPayload(payload: unknown) {
 }
 
 function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | undefined) {
-  const configuredSecurity = normalizeExecSecurity(execDefaults?.security) ?? "allowlist";
+  const configuredSecurity = normalizeExecSecurity(execDefaults?.security) ?? DEFAULT_EXEC_SECURITY;
   const requestedSecurity = normalizeExecSecurity(opts.security);
   if (opts.security && !requestedSecurity) {
     throw new Error("invalid --security (use deny|allowlist|full)");
   }
   // Keep local exec defaults in sync with exec-approvals.json when tools.exec.ask is unset.
   const configuredAsk =
-    normalizeExecAsk(execDefaults?.ask) ?? loadExecApprovals().defaults?.ask ?? "on-miss";
+    normalizeExecAsk(execDefaults?.ask) ?? loadExecApprovals().defaults?.ask ?? DEFAULT_EXEC_ASK;
   const requestedAsk = normalizeExecAsk(opts.ask);
   if (opts.ask && !requestedAsk) {
     throw new Error("invalid --ask (use off|on-miss|always)");
@@ -275,7 +277,7 @@ function buildSystemRunInvokeParams(params: {
       timeoutMs: params.timeoutMs,
       needsScreenRecording: params.needsScreenRecording,
     },
-    idempotencyKey: String(params.idempotencyKey ?? randomIdempotencyKey()),
+    idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
   };
   if (params.approvalPlan.agentId ?? params.fallbackAgentId) {
     (invokeParams.params as Record<string, unknown>).agentId =
@@ -309,24 +311,24 @@ export function registerNodesInvokeCommands(nodes: Command) {
       .option("--idempotency-key <key>", "Idempotency key (optional)")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("invoke", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const command = String(opts.command ?? "").trim();
+          const nodeId = await resolveNodeId(opts, opts.node ?? "");
+          const command = (opts.command ?? "").trim();
           if (!nodeId || !command) {
             const { error } = getNodesTheme();
             defaultRuntime.error(error("--node and --command required"));
             defaultRuntime.exit(1);
             return;
           }
-          const params = JSON.parse(String(opts.params ?? "{}")) as unknown;
+          const params = JSON.parse(opts.params ?? "{}") as unknown;
           const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
+            ? Number.parseInt(opts.invokeTimeout, 10)
             : undefined;
 
           const invokeParams: Record<string, unknown> = {
             nodeId,
             command,
             params,
-            idempotencyKey: String(opts.idempotencyKey ?? randomIdempotencyKey()),
+            idempotencyKey: opts.idempotencyKey ?? randomIdempotencyKey(),
           };
           if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
             invokeParams.timeoutMs = timeoutMs;
@@ -348,7 +350,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
       .option(
         "--env <key=val>",
         "Environment override (repeatable)",
-        (value: string, prev: string[] = []) => [...prev, value],
+        (value: string, prev: string[]) => [...prev, value],
       )
       .option("--raw <command>", "Run a raw shell command string (sh -lc / cmd.exe /c)")
       .option("--agent <id>", "Agent id (default: configured default agent)")
@@ -371,7 +373,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             throw new Error("command required");
           }
 
-          const nodeQuery = String(opts.node ?? "").trim() || execDefaults?.node?.trim() || "";
+          const nodeQuery = (opts.node ?? "").trim() || execDefaults?.node?.trim() || "";
           if (!nodeQuery) {
             throw new Error("node required (set --node or tools.exec.node)");
           }

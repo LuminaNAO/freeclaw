@@ -95,7 +95,20 @@ export type RunEmbeddedPiAgentParams = {
   bootstrapPromptWarningSignature?: string;
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
   bashElevated?: ExecElevatedDefaults;
+  /** Whole-run wall-clock cap; NO_AGENT_TIMEOUT_MS when uncapped (the default). */
   timeoutMs: number;
+  /**
+   * Configured whole-run limit when `timeoutMs` is only what remains of it (outer fallback/retry drew from the
+   * same deadline). Used for user-facing text; defaults to `timeoutMs`.
+   */
+  runLimitMs?: number;
+  /**
+   * Absolute epoch-ms deadline for the whole run (set by callers that share one deadline across fallback and
+   * retries). Queue wait, backoff, and recovery all count against it. Defaults to now + timeoutMs at call time.
+   */
+  runDeadlineAtMs?: number;
+  /** Per-run stall window override (ms, 0 disables); defaults to agents.defaults.idleTimeoutSeconds. */
+  idleTimeoutMs?: number;
   runId: string;
   abortSignal?: AbortSignal;
   shouldEmitToolResult?: () => boolean;

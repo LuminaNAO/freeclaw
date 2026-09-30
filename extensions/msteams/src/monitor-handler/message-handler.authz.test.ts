@@ -59,6 +59,53 @@ describe("msteams monitor handler authz", () => {
     return { conversationStore, deps, readAllowFromStore };
   }
 
+  it("replies with a pairing code to an unknown DM sender", async () => {
+    const { conversationStore, deps } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+        },
+      },
+    } as OpenClawConfig);
+    const upsert = vi.fn(async () => ({ code: "ZZTEST42", created: true }));
+    const runtime = (await import("../runtime.js")).getMSTeamsRuntime() as unknown as {
+      channel: { pairing: { upsertPairingRequest: typeof upsert } };
+    };
+    runtime.channel.pairing.upsertPairingRequest = upsert;
+    const sendActivity = vi.fn(async () => undefined);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-dm-1",
+        type: "message",
+        text: "hi",
+        from: {
+          id: "new-user-id",
+          aadObjectId: "new-user-aad",
+          name: "New User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:dm-conversation",
+          conversationType: "personal",
+        },
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity,
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(sendActivity).toHaveBeenCalledTimes(1);
+    expect(String((sendActivity.mock.calls[0] as unknown[])[0])).toContain("ZZTEST42");
+    expect(conversationStore.upsert).not.toHaveBeenCalled();
+  });
+
   it("does not treat DM pairing-store entries as group allowlist entries", async () => {
     const { conversationStore, deps, readAllowFromStore } = createDeps({
       channels: {

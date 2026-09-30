@@ -176,7 +176,9 @@ Common `agentTurn` fields:
 
 - `message`: required text prompt.
 - `model` / `thinking`: optional overrides (see below).
-- `timeoutSeconds`: optional timeout override.
+- `timeoutSeconds`: optional whole-run limit for this job (`0` = none). Without it, an agent turn has no
+  wall-clock cap (unless `agents.defaults.timeoutSeconds` is set) and is only stopped by the stall watchdog
+  (`agents.defaults.idleTimeoutSeconds`). Non-agent jobs keep a 10 minute ceiling.
 - `lightContext`: optional lightweight bootstrap mode for jobs that do not need workspace bootstrap file injection.
 
 Delivery config:

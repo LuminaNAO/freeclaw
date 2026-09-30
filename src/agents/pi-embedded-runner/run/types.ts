@@ -8,6 +8,7 @@ import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
+import type { RunAbortKind } from "./stall-watchdog.js";
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedPiAgentParams,
@@ -15,6 +16,11 @@ type EmbeddedRunAttemptBase = Omit<
 >;
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Called once the attempt has installed its own run-limit/stall watchdogs (setup is over). */
+  onWatchdogArmed?: () => void;
+  /** Aborted when the setup phase overran its bounds; setup stops at its next checkpoint. */
+  setupAbortSignal?: AbortSignal;
+
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
@@ -37,6 +43,10 @@ export type EmbeddedRunAttemptResult = {
   timedOut: boolean;
   /** True if the timeout occurred while compaction was in progress or pending. */
   timedOutDuringCompaction: boolean;
+  /** Set when the run was aborted by our own watchdogs (configured cap or stall), not a provider. */
+  abortKind?: RunAbortKind;
+  /** Stall window / wall-clock cap that applied, for user-facing messages. */
+  abortLimitMs?: number;
   promptError: unknown;
   sessionIdUsed: string;
   bootstrapPromptWarningSignaturesSeen?: string[];

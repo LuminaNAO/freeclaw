@@ -53,11 +53,18 @@ export type AgentCliOpts = {
   local?: boolean;
 };
 
-function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
+// Undefined means no run cap requested: the gateway applies config (no cap unless configured).
+function parseTimeoutSeconds(opts: {
+  cfg: ReturnType<typeof loadConfig>;
+  timeout?: string;
+}): number | undefined {
   const raw =
     opts.timeout !== undefined
-      ? Number.parseInt(String(opts.timeout), 10)
-      : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
+      ? Number.parseInt(opts.timeout, 10)
+      : opts.cfg.agents?.defaults?.timeoutSeconds;
+  if (raw === undefined) {
+    return undefined;
+  }
   if (Number.isNaN(raw) || raw < 0) {
     throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
   }
@@ -106,7 +113,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
   const gatewayTimeoutMs =
-    timeoutSeconds === 0
+    timeoutSeconds === undefined || timeoutSeconds === 0
       ? NO_GATEWAY_TIMEOUT_MS // no timeout (timer-safe max)
       : Math.max(10_000, (timeoutSeconds + 30) * 1000);
 
@@ -163,7 +170,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   const payloads = result?.payloads ?? [];
 
   if (payloads.length === 0) {
-    runtime.log(response?.summary ? String(response.summary) : "No reply from agent.");
+    runtime.log(response?.summary || "No reply from agent.");
     return response;
   }
 

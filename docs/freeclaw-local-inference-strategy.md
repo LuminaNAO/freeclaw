@@ -64,6 +64,12 @@ openclaw stops responding. Exact mechanism unknown but hypotheses:
 
 ## Timeout Architecture (as understood)
 
+> Update: the 600s default is gone. There is no whole-run cap unless `agents.defaults.timeoutSeconds` (or a
+> per-run timeout) is set; runs are stopped only by the stall watchdog (`agents.defaults.idleTimeoutSeconds`,
+> default 600s, local providers included; slow first tokens are fine as long as the provider keeps streaming
+> within that window, otherwise raise or disable it). An explicitly configured limit now aborts local providers
+> too. See [Agent loop](/concepts/agent-loop#timeouts). The diagram below is historical.
+
 ```
 openclaw agent --timeout <seconds>    ← CLI override (default 600s)
     └── resolveAgentTimeoutMs()       ← src/agents/timeout.ts

@@ -93,8 +93,9 @@ describe("resolveAgentTimeoutMs", () => {
     expect(resolveAgentTimeoutMs({ overrideMs: 0 })).toBe(2_147_000_000);
   });
 
-  it("clamps very large timeout overrides to timer-safe values", () => {
-    expect(resolveAgentTimeoutMs({ overrideSeconds: 9_999_999 })).toBe(2_147_000_000);
-    expect(resolveAgentTimeoutMs({ overrideMs: 9_999_999_999 })).toBe(2_147_000_000);
+  it("clamps very large timeout overrides to timer-safe values that are still limits", () => {
+    // Just below the no-limit sentinel, so an explicit huge limit is not silently "no limit" (audit A18).
+    expect(resolveAgentTimeoutMs({ overrideSeconds: 9_999_999 })).toBe(2_146_999_999);
+    expect(resolveAgentTimeoutMs({ overrideMs: 9_999_999_999 })).toBe(2_146_999_999);
   });
 });

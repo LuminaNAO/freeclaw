@@ -43,6 +43,7 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { hasLiveProcessForScope, onProcessOutput } from "../../bash-process-registry.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -99,7 +100,11 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
-import { isLocalInferenceProvider } from "../../timeout.js";
+import {
+  isAgentTimeoutCapped,
+  isLocalInferenceProvider,
+  resolveAgentIdleTimeoutMs,
+} from "../../timeout.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
@@ -151,7 +156,24 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { createStallWatchdog, type RunAbortKind } from "./stall-watchdog.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+/** Exec output counts as progress only for processes this run started in its own scope. */
+export function isOutputFromThisRun(
+  source: { scopeKey: string | undefined; startedAt: number },
+  scopeKey: string,
+  runStartMs: number,
+): boolean {
+  return source.scopeKey === scopeKey && source.startedAt >= runStartMs;
+}
+
+/** Stall window for an attempt: per-run override, else config (default 600 s) for every provider. */
+export function resolveAttemptIdleTimeoutMs(
+  params: Pick<EmbeddedRunAttemptParams, "idleTimeoutMs" | "config">,
+): number {
+  return params.idleTimeoutMs ?? resolveAgentIdleTimeoutMs({ cfg: params.config });
+}
 
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
@@ -1383,6 +1405,12 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
+function throwIfSetupAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error("attempt setup aborted");
+  }
+}
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -1735,6 +1763,7 @@ export async function runEmbeddedAttempt(
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
 
+    throwIfSetupAborted(params.setupAbortSignal);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
@@ -1762,6 +1791,7 @@ export async function runEmbeddedAttempt(
       });
 
       await prewarmSessionFile(params.sessionFile);
+      throwIfSetupAborted(params.setupAbortSignal);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
@@ -1855,6 +1885,7 @@ export async function runEmbeddedAttempt(
 
       const allCustomTools = [...customTools, ...clientToolDefs];
 
+      throwIfSetupAborted(params.setupAbortSignal);
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
@@ -2195,6 +2226,7 @@ export async function runEmbeddedAttempt(
             );
           }
         }
+        throwIfSetupAborted(params.setupAbortSignal);
       } catch (err) {
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
@@ -2209,6 +2241,8 @@ export async function runEmbeddedAttempt(
       let yieldAborted = false;
       let timedOut = false;
       let timedOutDuringCompaction = false;
+      let abortKind: RunAbortKind | undefined;
+      let abortLimitMs: number | undefined;
       const getAbortReason = (signal: AbortSignal): unknown =>
         "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
       const makeTimeoutAbortReason = (): Error => {
@@ -2242,7 +2276,9 @@ export async function runEmbeddedAttempt(
         ["ollama", "vllm", "llama.cpp", "local", "ollama.cpp"].some((p) =>
           params.provider.toLowerCase().includes(p),
         );
-      const abortRun = (isTimeout = false, reason?: unknown) => {
+      // `force`: our own watchdog aborts (explicit run limit / stall) apply to local providers too; only
+      // externally signaled timeouts keep the local-provider suppression.
+      const abortRun = (isTimeout = false, reason?: unknown, force = false) => {
         aborted = true;
         if (isTimeout) {
           timedOut = true;
@@ -2253,7 +2289,7 @@ export async function runEmbeddedAttempt(
         if (isTimeout) {
           // For local providers, don't abort the session on timeout — let them run to completion
           // This prevents premature "srv stop: cancel task" in llama.cpp
-          if (!isLocalProvider) {
+          if (!isLocalProvider || force) {
             runAbortController.abort(reason ?? makeTimeoutAbortReason());
             abortCompaction();
             void activeSession.abort();
@@ -2349,39 +2385,74 @@ export async function runEmbeddedAttempt(
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-      const abortTimer = setTimeout(
-        () => {
-          if (!isProbeSession) {
-            log.warn(
-              `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
-            );
-            logInferenceTimeout(params.timeoutMs, params.provider, `runId=${params.runId}`);
-          }
-          if (
-            shouldFlagCompactionTimeout({
-              isTimeout: true,
-              isCompactionPendingOrRetrying: subscription.isCompacting(),
-              isCompactionInFlight: activeSession.isCompacting,
-            })
-          ) {
-            timedOutDuringCompaction = true;
-          }
-          abortRun(true);
-          if (!abortWarnTimer) {
-            abortWarnTimer = setTimeout(() => {
-              if (!activeSession.isStreaming) {
-                return;
-              }
-              if (!isProbeSession) {
-                log.warn(
-                  `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
-                );
-              }
-            }, 10_000);
-          }
-        },
-        Math.max(1, params.timeoutMs),
-      );
+      const onWatchdogAbort = (kind: RunAbortKind, limitMs: number, detail: string) => {
+        if (aborted) {
+          return;
+        }
+        abortKind = kind;
+        abortLimitMs = limitMs;
+        if (!isProbeSession) {
+          log.warn(
+            `embedded run ${kind}: runId=${params.runId} sessionId=${params.sessionId} ${detail}`,
+          );
+        }
+        if (
+          shouldFlagCompactionTimeout({
+            isTimeout: true,
+            isCompactionPendingOrRetrying: subscription.isCompacting(),
+            isCompactionInFlight: activeSession.isCompacting,
+          })
+        ) {
+          timedOutDuringCompaction = true;
+        }
+        abortRun(true, undefined, true);
+        if (!abortWarnTimer) {
+          abortWarnTimer = setTimeout(() => {
+            if (!activeSession.isStreaming) {
+              return;
+            }
+            if (!isProbeSession) {
+              log.warn(
+                `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }
+          }, 10_000);
+        }
+      };
+      // Whole-run wall-clock cap: only when explicitly configured (opt-in).
+      const abortTimer = isAgentTimeoutCapped(params.timeoutMs)
+        ? setTimeout(
+            () =>
+              onWatchdogAbort(
+                "run-limit",
+                params.runLimitMs ?? params.timeoutMs,
+                `timeoutMs=${params.timeoutMs} runLimitMs=${params.runLimitMs ?? params.timeoutMs}`,
+              ),
+            Math.max(1, params.timeoutMs),
+          )
+        : undefined;
+      const idleTimeoutMs = resolveAttemptIdleTimeoutMs(params);
+      const stallWatchdog = createStallWatchdog({
+        idleTimeoutMs,
+        isToolAlive: () => hasLiveProcessForScope(sandboxSessionKey, runStartMs),
+        onStall: (idleMs) =>
+          onWatchdogAbort(
+            "stall",
+            idleTimeoutMs,
+            `idleMs=${idleMs} idleTimeoutMs=${idleTimeoutMs}`,
+          ),
+      });
+      params.onWatchdogArmed?.();
+      // Only output from processes this run started counts; a leftover job from an earlier run must not keep
+      // this run alive forever.
+      const unsubscribeProcessOutput = onProcessOutput((source) => {
+        if (isOutputFromThisRun(source, sandboxSessionKey, runStartMs)) {
+          stallWatchdog.touch();
+        }
+      });
+      const unsubscribeStallWatchdog = activeSession.subscribe(() => {
+        stallWatchdog.touch();
+      });
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
@@ -2818,7 +2889,12 @@ export async function runEmbeddedAttempt(
             });
         }
       } finally {
-        clearTimeout(abortTimer);
+        if (abortTimer) {
+          clearTimeout(abortTimer);
+        }
+        stallWatchdog.stop();
+        unsubscribeStallWatchdog();
+        unsubscribeProcessOutput();
         if (abortWarnTimer) {
           clearTimeout(abortWarnTimer);
         }
@@ -2884,6 +2960,8 @@ export async function runEmbeddedAttempt(
         aborted,
         timedOut,
         timedOutDuringCompaction,
+        abortKind,
+        abortLimitMs,
         promptError,
         sessionIdUsed,
         bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,

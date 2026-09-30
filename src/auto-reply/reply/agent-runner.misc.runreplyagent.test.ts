@@ -1525,8 +1525,8 @@ describe("runReplyAgent response usage footer", () => {
     const sessionKey = "agent:main:whatsapp:dm:+1000";
     const res = await createRun({ responseUsage: "full", sessionKey });
     const payload = Array.isArray(res) ? res[0] : res;
-    expect(String(payload?.text ?? "")).toContain("Usage:");
-    expect(String(payload?.text ?? "")).toContain(`· session \`${sessionKey}\``);
+    expect(payload?.text ?? "").toContain("Usage:");
+    expect(payload?.text ?? "").toContain(`· session \`${sessionKey}\``);
   });
 
   it("does not append session key when responseUsage=tokens", async () => {
@@ -1544,8 +1544,8 @@ describe("runReplyAgent response usage footer", () => {
     const sessionKey = "agent:main:whatsapp:dm:+1000";
     const res = await createRun({ responseUsage: "tokens", sessionKey });
     const payload = Array.isArray(res) ? res[0] : res;
-    expect(String(payload?.text ?? "")).toContain("Usage:");
-    expect(String(payload?.text ?? "")).not.toContain("· session ");
+    expect(payload?.text ?? "").toContain("Usage:");
+    expect(payload?.text ?? "").not.toContain("· session ");
   });
 });
 
@@ -1591,7 +1591,7 @@ describe("runReplyAgent transient HTTP retry", () => {
           allowed: false,
           defaultLevel: "off",
         },
-        timeoutMs: 1_000,
+        timeoutMs: 60_000,
         blockReplyBreak: "message_end",
       },
     } as unknown as FollowupRun;
@@ -1626,6 +1626,83 @@ describe("runReplyAgent transient HTTP retry", () => {
 
     const payload = Array.isArray(result) ? result[0] : result;
     expect(payload?.text).toContain("Recovered response");
+  });
+  it("does not retry a transient failure when the retry delay would pass the run limit", async () => {
+    vi.useFakeTimers();
+    runEmbeddedPiAgentMock
+      .mockRejectedValueOnce(
+        new Error(
+          `521 <!DOCTYPE html><html lang="en-US"><head><title>Web server is down</title></head><body>Cloudflare</body></html>`,
+        ),
+      )
+      .mockResolvedValueOnce({
+        payloads: [{ text: "Recovered response" }],
+        meta: {},
+      });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 2_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const runPromise = runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude-opus-4-5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const result = await runPromise;
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runtimeErrorMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("Transient HTTP provider error before reply"),
+    );
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).not.toContain("Recovered response");
+    // The queued success was never consumed; do not leak it into the next test.
+    runEmbeddedPiAgentMock.mockReset();
   });
 });
 
@@ -1667,7 +1744,7 @@ describe("runReplyAgent billing error classification", () => {
           allowed: false,
           defaultLevel: "off",
         },
-        timeoutMs: 1_000,
+        timeoutMs: 60_000,
         blockReplyBreak: "message_end",
       },
     } as unknown as FollowupRun;

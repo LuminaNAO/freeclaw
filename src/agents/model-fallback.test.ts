@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -10,6 +10,7 @@ import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
+import { resetProviderQuotaWindowsForTest } from "./provider-quota-window.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 const makeCfg = makeModelFallbackCfg;
@@ -190,6 +191,10 @@ const MODEL_COOLDOWN_MESSAGE = "model_cooldown: All credentials for model gpt-5 
 const CONNECTION_ERROR_MESSAGE = "Connection error.";
 
 describe("runWithModelFallback", () => {
+  beforeEach(() => {
+    resetProviderQuotaWindowsForTest();
+  });
+
   it("keeps openai gpt-5.3 codex on the openai provider before running", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockResolvedValueOnce("ok");

@@ -1,3 +1,4 @@
+import { isAgentTimeoutCapped } from "../agents/timeout.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort.js";
 
 export type ChatAbortControllerEntry = {
@@ -21,12 +22,17 @@ export function resolveChatRunExpiresAtMs(params: {
   minMs?: number;
   maxMs?: number;
 }): number {
-  const { now, timeoutMs, graceMs = 60_000, minMs = 2 * 60_000, maxMs = 24 * 60 * 60_000 } = params;
+  const { now, timeoutMs, graceMs = 60_000, minMs = 2 * 60_000, maxMs } = params;
+  // Uncapped runs (the default) never expire here; the embedded stall watchdog ends stuck runs instead.
+  if (!isAgentTimeoutCapped(timeoutMs)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  // An explicit limit is honored as given (plus grace); `maxMs` only applies when a caller passes one.
   const boundedTimeoutMs = Math.max(0, timeoutMs);
   const target = now + boundedTimeoutMs + graceMs;
   const min = now + minMs;
-  const max = now + maxMs;
-  return Math.min(max, Math.max(min, target));
+  const withFloor = Math.max(min, target);
+  return maxMs === undefined ? withFloor : Math.min(now + maxMs, withFloor);
 }
 
 export type ChatAbortOps = {

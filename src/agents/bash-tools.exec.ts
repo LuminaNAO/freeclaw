@@ -1,7 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import {
+  DEFAULT_EXEC_ASK,
+  DEFAULT_EXEC_SECURITY,
+  type ExecHost,
+  NODE_FALLBACK_EXEC_ASK,
+  NODE_FALLBACK_EXEC_SECURITY,
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
+} from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getShellPathFromLoginShell,
@@ -29,11 +38,7 @@ import {
   execSchema,
   validateHostEnv,
 } from "./bash-tools.exec-runtime.js";
-import type {
-  ExecElevatedDefaults,
-  ExecToolDefaults,
-  ExecToolDetails,
-} from "./bash-tools.exec-types.js";
+import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import {
   buildSandboxEnv,
   clampWithDefault,
@@ -318,14 +323,24 @@ export function createExecTool(
         host = "gateway";
       }
 
-      const configuredSecurity = defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
+      // Nodes fall back to full/off (owner decision); gateway/sandbox keep their own fallbacks.
+      const configuredSecurity =
+        defaults?.security ??
+        (host === "sandbox"
+          ? "deny"
+          : host === "node"
+            ? NODE_FALLBACK_EXEC_SECURITY
+            : DEFAULT_EXEC_SECURITY);
       const requestedSecurity = normalizeExecSecurity(params.security);
       let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
       // Keep local exec defaults in sync with exec-approvals.json when tools.exec.ask is unset.
-      const configuredAsk = defaults?.ask ?? loadExecApprovals().defaults?.ask ?? "on-miss";
+      const configuredAsk =
+        defaults?.ask ??
+        loadExecApprovals().defaults?.ask ??
+        (host === "node" ? NODE_FALLBACK_EXEC_ASK : DEFAULT_EXEC_ASK);
       const requestedAsk = normalizeExecAsk(params.ask);
       let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
       const bypassApprovals = elevatedRequested && elevatedMode === "full";
@@ -415,6 +430,15 @@ export function createExecTool(
           agentId,
           security,
           ask,
+          // Only what the gateway explicitly configured (or this call requested) is sent to the node;
+          // otherwise the node applies its own policy or its full/off fallback.
+          explicitPolicy: {
+            security:
+              defaults?.security != null || requestedSecurity != null || bypassApprovals
+                ? security
+                : undefined,
+            ask: defaults?.ask != null || requestedAsk != null || bypassApprovals ? ask : undefined,
+          },
           timeoutSec: params.timeout,
           defaultTimeoutSec,
           approvalRunningNoticeMs,

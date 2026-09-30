@@ -339,8 +339,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     rawCommand?: string | null;
     systemRunPlan?: SystemRunApprovalPlan | null;
     cwd?: string;
-    security?: "full" | "allowlist";
-    ask?: "off" | "on-miss" | "always";
+    /** "unset" = the node has no explicit local tools.exec value. */
+    security?: "full" | "allowlist" | "deny" | "unset";
+    ask?: "off" | "on-miss" | "always" | "unset";
+    gatewayExecSecurity?: string;
+    gatewayExecAsk?: string;
     approved?: boolean;
     runCommand?: HandleSystemRunInvokeOptions["runCommand"];
     runViaMacAppExecHost?: HandleSystemRunInvokeOptions["runViaMacAppExecHost"];
@@ -396,14 +399,17 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         cwd: params.cwd,
         approved: params.approved ?? false,
         sessionKey: "agent:main:main",
+        gatewayExecSecurity: params.gatewayExecSecurity,
+        gatewayExecAsk: params.gatewayExecAsk,
       },
       skillBins: {
         current: params.skillBinsCurrent ?? (async () => []),
       },
       execHostEnforced: false,
       execHostFallbackAllowed: true,
-      resolveExecSecurity: () => params.security ?? "full",
-      resolveExecAsk: () => params.ask ?? "off",
+      resolveExecSecurity: () =>
+        params.security === "unset" ? undefined : (params.security ?? "full"),
+      resolveExecAsk: () => (params.ask === "unset" ? undefined : (params.ask ?? "off")),
       isCmdExeInvocation: () => false,
       sanitizeEnv: () => undefined,
       runCommand,
@@ -1166,6 +1172,78 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       depth: 5,
       markerName: "pwned.txt",
       errorLabel: "runCommand should not be called for nested env depth overflow",
+    });
+  });
+
+  describe("runcap A6: node exec policy precedence", () => {
+    const HEREDOC_BASE64 = ["bash", "-lc", "bash <<'SH'\necho ZWNobyBPSwo= | base64 -d | bash\nSH"];
+
+    it("with no explicit node policy and no gateway policy, runs heredoc+base64 without approval", async () => {
+      await withTempApprovalsHome({
+        approvals: { version: 1, agents: {} },
+        run: async () => {
+          const { runCommand, sendInvokeResult } = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: HEREDOC_BASE64,
+            security: "unset",
+            ask: "unset",
+          });
+          expect(runCommand).toHaveBeenCalledTimes(1);
+          expect(JSON.stringify(sendInvokeResult.mock.calls)).not.toMatch(/approval required/i);
+        },
+      });
+    });
+
+    it("inherits an explicit gateway allowlist policy when the node has none", async () => {
+      await withTempApprovalsHome({
+        approvals: { version: 1, agents: {} },
+        run: async () => {
+          const { runCommand, sendInvokeResult } = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: HEREDOC_BASE64,
+            security: "unset",
+            ask: "unset",
+            gatewayExecSecurity: "allowlist",
+            gatewayExecAsk: "on-miss",
+          });
+          expect(runCommand).not.toHaveBeenCalled();
+          expect(JSON.stringify(sendInvokeResult.mock.calls)).toMatch(/approval required|DENIED/i);
+        },
+      });
+    });
+
+    it("an explicit node-local deny wins over the gateway's full/off", async () => {
+      await withTempApprovalsHome({
+        approvals: { version: 1, defaults: { security: "deny" }, agents: {} },
+        run: async () => {
+          const { runCommand } = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: ["echo", "ok"],
+            security: "unset",
+            ask: "unset",
+            gatewayExecSecurity: "full",
+            gatewayExecAsk: "off",
+          });
+          expect(runCommand).not.toHaveBeenCalled();
+        },
+      });
+    });
+
+    it("an explicit node config allowlist wins over the gateway's full/off", async () => {
+      await withTempApprovalsHome({
+        approvals: { version: 1, agents: {} },
+        run: async () => {
+          const { runCommand } = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: HEREDOC_BASE64,
+            security: "allowlist",
+            ask: "on-miss",
+            gatewayExecSecurity: "full",
+            gatewayExecAsk: "off",
+          });
+          expect(runCommand).not.toHaveBeenCalled();
+        },
+      });
     });
   });
 });

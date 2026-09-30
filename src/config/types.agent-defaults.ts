@@ -206,7 +206,10 @@ export type AgentDefaultsConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
+  /** Optional whole-run wall-clock cap (seconds). Unset = no cap. */
   timeoutSeconds?: number;
+  /** Abort after this many seconds without progress (default 600; 0 disables). */
+  idleTimeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   /**

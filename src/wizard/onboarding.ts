@@ -82,6 +82,7 @@ export async function runOnboardingWizard(
 
   const snapshot = await readConfigFileSnapshot();
   let baseConfig: OpenClawConfig = snapshot.valid ? (snapshot.exists ? snapshot.config : {}) : {};
+  let freshInstall = !snapshot.exists;
 
   if (snapshot.exists && !snapshot.valid) {
     await prompter.note(onboardHelpers.summarizeExistingConfig(baseConfig), "Invalid config");
@@ -172,6 +173,7 @@ export async function runOnboardingWizard(
       })) as ResetScope;
       await onboardHelpers.handleReset(resetScope, resolveUserPath(workspaceDefault), runtime);
       baseConfig = {};
+      freshInstall = true;
     }
   }
 
@@ -407,7 +409,9 @@ export async function runOnboardingWizard(
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
   const { applyOnboardingLocalWorkspaceConfig } = await import("../commands/onboard-config.js");
-  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir, {
+    freshInstall,
+  });
 
   const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
   const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");

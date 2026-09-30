@@ -81,6 +81,32 @@ struct ExecApprovalsStoreRefactorTests {
         }
     }
 
+    @Test
+    func `node without explicit policy falls back to full and off`() async throws {
+        try await self.withTempStateDir { _ in
+            let resolved = ExecApprovalsStore.resolve(agentId: "main")
+            #expect(resolved.agent.security == .full)
+            #expect(resolved.agent.ask == .off)
+        }
+    }
+
+    @Test
+    func `gateway policy applies only where the node has no explicit value`() async throws {
+        try await self.withTempStateDir { _ in
+            let gateway = ExecGatewayPolicy(security: "allowlist", ask: "on-miss")
+            let inherited = ExecApprovalsStore.resolve(agentId: "main", gateway: gateway)
+            #expect(inherited.agent.security == .allowlist)
+            #expect(inherited.agent.ask == .onMiss)
+
+            ExecApprovalsStore.saveDefaults(ExecApprovalsDefaults(security: .deny))
+            let local = ExecApprovalsStore.resolve(
+                agentId: "main",
+                gateway: ExecGatewayPolicy(security: "full", ask: "off"))
+            #expect(local.agent.security == .deny)
+            #expect(local.agent.ask == .off)
+        }
+    }
+
     private static func modificationDate(at url: URL) throws -> Date {
         let attributes = try FileManager().attributesOfItem(atPath: url.path)
         guard let date = attributes[.modificationDate] as? Date else {

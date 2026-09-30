@@ -30,6 +30,7 @@ import {
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
+import { resolveSubagentRunTimeoutSeconds } from "./timeout.js";
 import { readStringParam } from "./tools/common.js";
 import {
   resolveDisplaySessionKey,
@@ -302,18 +303,7 @@ export async function spawnSubagentDirect(
   const hookRunner = getGlobalHookRunner();
   const cfg = loadConfig();
 
-  // When agent omits runTimeoutSeconds, use the config default.
-  // Falls back to 0 (no timeout) if config key is also unset,
-  // preserving current behavior for existing deployments.
-  const cfgSubagentTimeout =
-    typeof cfg?.agents?.defaults?.subagents?.runTimeoutSeconds === "number" &&
-    Number.isFinite(cfg.agents.defaults.subagents.runTimeoutSeconds)
-      ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.runTimeoutSeconds))
-      : 0;
-  const runTimeoutSeconds =
-    typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
-      ? Math.max(0, Math.floor(params.runTimeoutSeconds))
-      : cfgSubagentTimeout;
+  const runTimeoutSeconds = resolveSubagentRunTimeoutSeconds(cfg, params.runTimeoutSeconds);
   let modelApplied = false;
   let threadBindingReady = false;
   const { mainKey, alias } = resolveMainSessionAlias(cfg);

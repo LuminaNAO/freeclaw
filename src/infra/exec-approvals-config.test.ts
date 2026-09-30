@@ -3,7 +3,14 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
+  DEFAULT_EXEC_ASK,
+  DEFAULT_EXEC_SECURITY,
+  FRESH_INSTALL_EXEC_ASK,
+  FRESH_INSTALL_EXEC_SECURITY,
   isSafeBinUsage,
+  NODE_FALLBACK_EXEC_ASK,
+  NODE_FALLBACK_EXEC_SECURITY,
+  resolveNodeExecPolicy,
   matchAllowlist,
   normalizeExecApprovals,
   normalizeSafeBins,
@@ -279,5 +286,93 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
         expectNoSpreadStringArtifacts(entries ?? []);
       }
     }
+  });
+});
+
+describe("exec approvals defaults", () => {
+  it("keeps the legacy fallback for configs that never set security/ask", () => {
+    expect(DEFAULT_EXEC_SECURITY).toBe("allowlist");
+    expect(DEFAULT_EXEC_ASK).toBe("on-miss");
+    const resolved = resolveExecApprovalsFromFile({ file: { version: 1 } });
+    expect(resolved.agent.security).toBe("deny");
+    expect(resolved.agent.ask).toBe("on-miss");
+  });
+
+  it("fresh-install defaults are full/off and flow through when passed as config overrides", () => {
+    expect(FRESH_INSTALL_EXEC_SECURITY).toBe("full");
+    expect(FRESH_INSTALL_EXEC_ASK).toBe("off");
+    const resolved = resolveExecApprovalsFromFile({
+      file: { version: 1 },
+      overrides: { security: FRESH_INSTALL_EXEC_SECURITY, ask: FRESH_INSTALL_EXEC_ASK },
+    });
+    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.ask).toBe("off");
+  });
+
+  it("keeps explicitly configured allowlist mode and prompts from the approvals file", () => {
+    const resolved = resolveExecApprovalsFromFile({
+      file: {
+        version: 1,
+        defaults: { security: "allowlist", ask: "on-miss" },
+      },
+      overrides: { security: "full", ask: "off" },
+    });
+    expect(resolved.agent.security).toBe("allowlist");
+    expect(resolved.agent.ask).toBe("on-miss");
+  });
+});
+
+describe("resolveNodeExecPolicy (node precedence)", () => {
+  const empty = { version: 1 } as const;
+
+  it("falls back to full/off when neither node nor gateway sets a policy", () => {
+    expect(NODE_FALLBACK_EXEC_SECURITY).toBe("full");
+    expect(NODE_FALLBACK_EXEC_ASK).toBe("off");
+    expect(resolveNodeExecPolicy({ file: empty })).toEqual({ security: "full", ask: "off" });
+  });
+
+  it("inherits the gateway's explicit policy when the node has none", () => {
+    expect(
+      resolveNodeExecPolicy({ file: empty, gateway: { security: "allowlist", ask: "on-miss" } }),
+    ).toEqual({ security: "allowlist", ask: "on-miss" });
+    expect(
+      resolveNodeExecPolicy({ file: empty, gateway: { security: "full", ask: "off" } }),
+    ).toEqual({ security: "full", ask: "off" });
+  });
+
+  it("an explicit node-local approvals entry wins over the gateway (can tighten)", () => {
+    const file = { version: 1, defaults: { security: "deny" } } as const;
+    expect(resolveNodeExecPolicy({ file, gateway: { security: "full", ask: "off" } })).toEqual({
+      security: "deny",
+      ask: "off",
+    });
+    const agentFile = {
+      version: 1,
+      agents: { main: { security: "allowlist", ask: "always" } },
+    } as const;
+    expect(
+      resolveNodeExecPolicy({
+        file: agentFile,
+        agentId: "main",
+        gateway: { security: "full", ask: "off" },
+      }),
+    ).toEqual({ security: "allowlist", ask: "always" });
+  });
+
+  it("explicit node config wins over its approvals file and the gateway", () => {
+    expect(
+      resolveNodeExecPolicy({
+        file: { version: 1, defaults: { security: "full" } },
+        nodeConfig: { security: "allowlist" },
+        gateway: { security: "full" },
+      }).security,
+    ).toBe("allowlist");
+  });
+
+  it("ignores malformed gateway values", () => {
+    expect(resolveNodeExecPolicy({ file: empty, gateway: { security: "root", ask: 3 } })).toEqual({
+      security: "full",
+      ask: "off",
+    });
   });
 });

@@ -16,6 +16,12 @@ import {
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
+  assertRunDeadline,
+  createRunDeadline,
+  RunDeadlineExceededError,
+  runDeadlineParams,
+} from "../../agents/timeout.js";
+import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
@@ -141,6 +147,8 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
+  // One deadline for the whole reply: fallback candidates, CLI retries, and the transient retry share it.
+  const runDeadline = createRunDeadline(params.followupRun.run.timeoutMs);
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
@@ -219,6 +227,7 @@ export async function runAgentTurnWithFallback(params: {
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
         run: (provider, model, runOptions) => {
+          assertRunDeadline(runDeadline);
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -253,7 +262,7 @@ export async function runAgentTurnWithFallback(params: {
                   provider,
                   model,
                   thinkLevel: params.followupRun.run.thinkLevel,
-                  timeoutMs: params.followupRun.run.timeoutMs,
+                  ...runDeadlineParams(runDeadline),
                   runId,
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                   ownerNumbers: params.followupRun.run.ownerNumbers,
@@ -345,6 +354,7 @@ export async function runAgentTurnWithFallback(params: {
               groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
               ...senderContext,
               ...runBaseParams,
+              ...runDeadlineParams(runDeadline),
               prompt: params.commandBody,
               extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
               toolResultFormat: (() => {
@@ -610,7 +620,16 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (isTransientHttp && !didRetryTransientHttpError) {
+      // Whole-run limit spent (before a fallback candidate or retry could start): say so honestly.
+      if (err instanceof RunDeadlineExceededError) {
+        return { kind: "final", payload: { text: err.message, isError: true } };
+      }
+
+      if (
+        isTransientHttp &&
+        !didRetryTransientHttpError &&
+        runDeadline.remainingMs() > TRANSIENT_HTTP_RETRY_DELAY_MS
+      ) {
         didRetryTransientHttpError = true;
         // Retry the full runWithModelFallback() cycle — transient errors
         // (502/521/etc.) typically affect the whole provider, so falling

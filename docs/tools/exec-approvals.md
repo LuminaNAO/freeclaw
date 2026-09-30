@@ -12,6 +12,28 @@ title: "Exec Approvals"
 Exec approvals are the **companion app / node host guardrail** for letting a sandboxed agent run
 commands on a real host (`gateway` or `node`). Think of it like a safety interlock:
 commands are allowed only when policy + allowlist + (optional) user approval all agree.
+
+Fresh installs (`openclaw onboard`, `openclaw setup`, or `openclaw configure` creating a new config) write
+`tools.exec.security: "full"` and `tools.exec.ask: "off"`: host commands run without an
+allowlist and without approval prompts. Allowlist mode and prompts are opt-in: set
+`tools.exec.security: "allowlist"` and `tools.exec.ask: "on-miss"` (or the same fields in
+`exec-approvals.json`). Explicitly configured values are always kept, and configs created before this default
+that never set these fields keep the previous behavior (`allowlist` + `on-miss`).
+
+Node hosts (the headless `openclaw node` and the macOS app) resolve their policy per field in this order:
+
+1. The node's own explicit setting (its `tools.exec.*` config, or its `exec-approvals.json` agent, `*`, or
+   `defaults` entry).
+2. The policy the gateway explicitly configured, sent with each `system.run`.
+3. The node fallback: `security: "full"`, `ask: "off"`.
+
+This is a posture change by owner decision: existing nodes that never set an explicit approvals policy now run
+commands without prompting. To lock a node down, set `security` (and `ask`) explicitly in that node's
+`exec-approvals.json`; an explicit node-local value always wins over the gateway.
+
+Security note: the model is not a trusted principal. With `full`/`off`, a prompt injection or a mistaken tool
+call runs on the host with the gateway user's permissions and nothing asks first. Use allowlist mode (or the
+sandbox host) for bots that read untrusted content or serve shared channels. See [Security](/gateway/security).
 Exec approvals are **in addition** to tool policy and elevated gating (unless elevated is set to `full`, which skips approvals).
 Effective policy is the **stricter** of `tools.exec.*` and approvals defaults; if an approvals field is omitted, the `tools.exec` value is used.
 
@@ -91,13 +113,16 @@ Example schema:
 
 - **deny**: block all host exec requests.
 - **allowlist**: allow only allowlisted commands.
-- **full**: allow everything (equivalent to elevated).
+- **full** (fresh-install default): allow everything (equivalent to elevated).
 
 ### Ask (`exec.ask`)
 
-- **off**: never prompt.
+- **off** (fresh-install default): never prompt.
 - **on-miss**: prompt only when allowlist does not match.
 - **always**: prompt on every command.
+
+In allowlist mode, heredoc commands (`<<EOF`) still require explicit approval even when every segment is
+allowlisted.
 
 ### Ask fallback (`askFallback`)
 

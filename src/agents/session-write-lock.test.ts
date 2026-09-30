@@ -210,6 +210,36 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("watchdog refreshes a long-held live lock so it is not reclaimed as too-old", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    try {
+      const sessionFile = path.join(root, "session.jsonl");
+      const lockPath = `${sessionFile}.lock`;
+      const lock = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 500,
+        maxHoldMs: 2_147_000_000,
+      });
+      const before = JSON.parse(await fs.readFile(lockPath, "utf8")) as { createdAt: string };
+
+      const later = Date.now() + 45 * 60_000;
+      const released = await __testing.runLockWatchdogCheck(later);
+      expect(released).toBe(0);
+      const after = JSON.parse(await fs.readFile(lockPath, "utf8")) as {
+        createdAt: string;
+        pid: number;
+      };
+      expect(after.pid).toBe(process.pid);
+      expect(Date.parse(after.createdAt)).toBe(later);
+      expect(Date.parse(after.createdAt)).toBeGreaterThan(Date.parse(before.createdAt));
+
+      await lock.release();
+      await expect(fs.access(lockPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("derives max hold from timeout plus grace", () => {
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 600_000 })).toBe(720_000);
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(121_000);

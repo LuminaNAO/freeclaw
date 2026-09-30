@@ -309,9 +309,9 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.host":
     "Selects execution host strategy for shell commands, typically controlling local vs delegated execution environment. Use the safest host mode that still satisfies your automation requirements.",
   "tools.exec.security":
-    "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
+    'Controls host exec (gateway/node) security: "deny", "allowlist", or "full". Fresh installs are written with "full"; the default when unset is "allowlist" (sandbox host: "deny"). Use "allowlist" for untrusted prompts or shared channels.',
   "tools.exec.ask":
-    "Approval strategy for when exec commands require human confirmation before running. Use stricter ask behavior in shared channels and lower-friction settings in private operator contexts.",
+    'Approval prompts for host exec: "off", "on-miss", or "always". Fresh installs are written with "off"; when unset: "on-miss". Use "on-miss" with allowlist mode in shared channels.',
   "tools.exec.node":
     "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
   "tools.agentToAgent":
@@ -1012,6 +1012,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
+  "agents.defaults.timeoutSeconds":
+    "Optional whole-run wall-clock cap in seconds. Unset (default) or 0 means no cap; stalled runs are caught by agents.defaults.idleTimeoutSeconds instead.",
+  "agents.defaults.idleTimeoutSeconds":
+    "Stall watchdog: abort a run only after this many seconds with no progress (streamed tokens, tool start/finish/output, or a live tool process). Default: 600. Set 0 to disable.",
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",

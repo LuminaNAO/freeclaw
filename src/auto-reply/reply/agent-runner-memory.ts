@@ -7,6 +7,7 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { assertRunDeadline, createRunDeadline, runDeadlineParams } from "../../agents/timeout.js";
 import {
   derivePromptTokens,
   hasNonzeroUsage,
@@ -476,11 +477,13 @@ export async function runMemoryFlushIfNeeded(params: {
   ]
     .filter(Boolean)
     .join("\n\n");
+  const runDeadline = createRunDeadline(params.followupRun.run.timeoutMs);
   try {
     await runWithModelFallback({
       ...resolveModelFallbackOptions(params.followupRun.run),
       runId: flushRunId,
       run: async (provider, model, runOptions) => {
+        assertRunDeadline(runDeadline);
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
           run: params.followupRun.run,
           sessionCtx: params.sessionCtx,
@@ -494,6 +497,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          ...runDeadlineParams(runDeadline),
           trigger: "memory",
           memoryFlushWritePath,
           prompt: resolveMemoryFlushPromptForRun({

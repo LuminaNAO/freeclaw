@@ -146,8 +146,54 @@ export type ExecApprovalsResolved = {
 // Keep CLI + gateway defaults in sync.
 export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 120_000;
 
+// Host exec (gateway/node) fallback when a config never set tools.exec.security/ask. Existing configs keep
+// this behavior; fresh installs get FRESH_INSTALL_EXEC_* written explicitly by onboarding.
+export const DEFAULT_EXEC_SECURITY: ExecSecurity = "allowlist";
+export const DEFAULT_EXEC_ASK: ExecAsk = "on-miss";
+export const FRESH_INSTALL_EXEC_SECURITY: ExecSecurity = "full";
+export const FRESH_INSTALL_EXEC_ASK: ExecAsk = "off";
+// Node hosts (headless + macOS app) fall back to full/off when neither the node's own config/approvals file nor
+// the gateway supplies a policy. Owner decision: existing nodes without an explicit policy flip to this too.
+export const NODE_FALLBACK_EXEC_SECURITY: ExecSecurity = "full";
+export const NODE_FALLBACK_EXEC_ASK: ExecAsk = "off";
+
+/**
+ * Effective node-host exec policy. Precedence per field: the node's own explicit setting (its config
+ * tools.exec, or its exec-approvals.json agent/wildcard/defaults entry) > the gateway's effective policy sent
+ * with system.run > NODE_FALLBACK_*. An explicit node-local value always wins, so an operator can lock a node
+ * down (or open it) regardless of the gateway.
+ */
+export function resolveNodeExecPolicy(params: {
+  file: ExecApprovalsFile;
+  agentId?: string;
+  nodeConfig?: { security?: ExecSecurity; ask?: ExecAsk };
+  gateway?: { security?: unknown; ask?: unknown };
+}): { security: ExecSecurity; ask: ExecAsk } {
+  const file = normalizeExecApprovals(params.file);
+  const agent = file.agents?.[params.agentId ?? DEFAULT_AGENT_ID] ?? {};
+  const wildcard = file.agents?.["*"] ?? {};
+  const pickSecurity = (v: unknown): ExecSecurity | undefined =>
+    v === "deny" || v === "allowlist" || v === "full" ? v : undefined;
+  const pickAsk = (v: unknown): ExecAsk | undefined =>
+    v === "off" || v === "on-miss" || v === "always" ? v : undefined;
+  const localSecurity =
+    pickSecurity(params.nodeConfig?.security) ??
+    pickSecurity(agent.security) ??
+    pickSecurity(wildcard.security) ??
+    pickSecurity(file.defaults?.security);
+  const localAsk =
+    pickAsk(params.nodeConfig?.ask) ??
+    pickAsk(agent.ask) ??
+    pickAsk(wildcard.ask) ??
+    pickAsk(file.defaults?.ask);
+  return {
+    security:
+      localSecurity ?? pickSecurity(params.gateway?.security) ?? NODE_FALLBACK_EXEC_SECURITY,
+    ask: localAsk ?? pickAsk(params.gateway?.ask) ?? NODE_FALLBACK_EXEC_ASK,
+  };
+}
 const DEFAULT_SECURITY: ExecSecurity = "deny";
-const DEFAULT_ASK: ExecAsk = "on-miss";
+const DEFAULT_ASK: ExecAsk = DEFAULT_EXEC_ASK;
 const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
@@ -448,7 +494,7 @@ export function resolveExecApprovalsFromFile(params: {
       defaults.askFallback ?? fallbackAskFallback,
       fallbackAskFallback,
     ),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? fallbackAutoAllowSkills),
+    autoAllowSkills: defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
   };
   const resolvedAgent: Required<ExecApprovalsDefaults> = {
     security: normalizeSecurity(
@@ -460,9 +506,8 @@ export function resolveExecApprovalsFromFile(params: {
       agent.askFallback ?? wildcard.askFallback ?? resolvedDefaults.askFallback,
       resolvedDefaults.askFallback,
     ),
-    autoAllowSkills: Boolean(
+    autoAllowSkills:
       agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
-    ),
   };
   const allowlist = [
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
