@@ -1,30 +1,16 @@
 import { resolveFetch } from "../infra/fetch.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import type { SignalRpcResponse, SignalSseEvent } from "./client-types.js";
+import { socketCheck, socketRpcRequest, streamSocketEvents } from "./socket-client.js";
+import { parseSignalUnixEndpoint } from "./transport.js";
 
 export type SignalRpcOptions = {
   baseUrl: string;
   timeoutMs?: number;
 };
 
-export type SignalRpcError = {
-  code?: number;
-  message?: string;
-  data?: unknown;
-};
-
-export type SignalRpcResponse<T> = {
-  jsonrpc?: string;
-  result?: T;
-  error?: SignalRpcError;
-  id?: string | number | null;
-};
-
-export type SignalSseEvent = {
-  event?: string;
-  data?: string;
-  id?: string;
-};
+export type { SignalRpcError, SignalRpcResponse, SignalSseEvent } from "./client-types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -35,6 +21,11 @@ function normalizeBaseUrl(url: string): string {
   }
   if (/^https?:\/\//i.test(trimmed)) {
     return trimmed.replace(/\/+$/, "");
+  }
+  // Any other explicit scheme (including unix:, which must be dispatched before this) is an
+  // error; prefixing http:// would silently turn a socket endpoint into a TCP one.
+  if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(trimmed)) {
+    throw new Error(`Unsupported Signal endpoint scheme: ${trimmed}`);
   }
   return `http://${trimmed}`.replace(/\/+$/, "");
 }
@@ -72,6 +63,10 @@ export async function signalRpcRequest<T = unknown>(
   params: Record<string, unknown> | undefined,
   opts: SignalRpcOptions,
 ): Promise<T> {
+  const socketPath = parseSignalUnixEndpoint(opts.baseUrl);
+  if (socketPath !== undefined) {
+    return await socketRpcRequest<T>(socketPath, method, params, { timeoutMs: opts.timeoutMs });
+  }
   const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const id = generateSecureUuid();
   const body = JSON.stringify({
@@ -110,7 +105,16 @@ export async function signalCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
-  const normalized = normalizeBaseUrl(baseUrl);
+  let normalized: string;
+  try {
+    const socketPath = parseSignalUnixEndpoint(baseUrl);
+    if (socketPath !== undefined) {
+      return await socketCheck(socketPath, timeoutMs);
+    }
+    normalized = normalizeBaseUrl(baseUrl);
+  } catch (err) {
+    return { ok: false, status: null, error: err instanceof Error ? err.message : String(err) };
+  }
   try {
     const res = await fetchWithTimeout(
       `${normalized}/api/v1/check`,
@@ -136,7 +140,19 @@ export async function streamSignalEvents(params: {
   account?: string;
   abortSignal?: AbortSignal;
   onEvent: (event: SignalSseEvent) => void;
+  log?: (message: string) => void;
 }): Promise<void> {
+  const socketPath = parseSignalUnixEndpoint(params.baseUrl);
+  if (socketPath !== undefined) {
+    await streamSocketEvents({
+      socketPath,
+      account: params.account,
+      abortSignal: params.abortSignal,
+      onEvent: params.onEvent,
+      log: params.log,
+    });
+    return;
+  }
   const baseUrl = normalizeBaseUrl(params.baseUrl);
   const url = new URL(`${baseUrl}/api/v1/events`);
   if (params.account) {

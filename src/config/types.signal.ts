@@ -54,6 +54,16 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
    * FreeClaw auto-selects and persists a free loopback port on local auto-start.
    */
   httpPort?: number;
+  /**
+   * Daemon transport. Default: "socket" for daemons freeclaw spawns (unix socket in a
+   * per-uid 0700 directory). "http" keeps the legacy loopback HTTP daemon (no auth; any
+   * local user can read and send as this account).
+   */
+  transport?: "socket" | "http";
+  /** Absolute unix socket path for the signal-cli daemon (managed or external). Leading `~/` is expanded. */
+  socketPath?: string;
+  /** Optional consumer group (name or gid) granted access to the socket (dir 0710, socket 0660). */
+  socketGroup?: string;
   /** signal-cli binary path (default: signal-cli). */
   cliPath?: string;
   /** Auto-start signal-cli daemon (default: true if httpUrl not set). */

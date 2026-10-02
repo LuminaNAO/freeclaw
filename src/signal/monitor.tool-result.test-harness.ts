@@ -15,6 +15,12 @@ type SignalToolResultTestMocks = {
   signalCheckMock: MockFn;
   signalRpcRequestMock: MockFn;
   spawnSignalDaemonMock: MockFn;
+  socketDirMocks: {
+    ensureSignalSocketDir: MockFn;
+    clearStaleSignalSocket: MockFn;
+    enforceSignalSocketMode: MockFn;
+    assertExternalSocketDirSafe: MockFn;
+  };
 };
 
 const waitForTransportReadyMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
@@ -27,6 +33,13 @@ const streamMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalCheckMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalRpcRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+// The daemon is mocked and binds no socket, so filesystem side effects are mocked too.
+const socketDirMocks = vi.hoisted(() => ({
+  ensureSignalSocketDir: vi.fn(),
+  clearStaleSignalSocket: vi.fn(),
+  enforceSignalSocketMode: vi.fn(),
+  assertExternalSocketDirSafe: vi.fn(),
+})) as unknown as SignalToolResultTestMocks["socketDirMocks"];
 
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
@@ -40,6 +53,7 @@ export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
     signalCheckMock,
     signalRpcRequestMock,
     spawnSignalDaemonMock,
+    socketDirMocks,
   };
 }
 
@@ -112,6 +126,19 @@ vi.mock("./daemon.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./socket-dir.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./socket-dir.js")>();
+  return {
+    ...actual,
+    ensureSignalSocketDir: (...args: unknown[]) => socketDirMocks.ensureSignalSocketDir(...args),
+    clearStaleSignalSocket: (...args: unknown[]) => socketDirMocks.clearStaleSignalSocket(...args),
+    enforceSignalSocketMode: (...args: unknown[]) =>
+      socketDirMocks.enforceSignalSocketMode(...args),
+    assertExternalSocketDirSafe: (...args: unknown[]) =>
+      socketDirMocks.assertExternalSocketDirSafe(...args),
+  };
+});
+
 vi.mock("../infra/transport-ready.js", () => ({
   waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
 }));
@@ -133,6 +160,10 @@ export function installSignalToolResultTestHooks() {
     signalCheckMock.mockReset().mockResolvedValue({});
     signalRpcRequestMock.mockReset().mockResolvedValue({});
     spawnSignalDaemonMock.mockReset().mockReturnValue(createMockSignalDaemonHandle());
+    socketDirMocks.ensureSignalSocketDir.mockReset().mockResolvedValue({ gid: undefined });
+    socketDirMocks.clearStaleSignalSocket.mockReset().mockResolvedValue(undefined);
+    socketDirMocks.enforceSignalSocketMode.mockReset().mockResolvedValue(undefined);
+    socketDirMocks.assertExternalSocketDirSafe.mockReset().mockResolvedValue(undefined);
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);
     upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);

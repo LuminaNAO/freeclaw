@@ -1,3 +1,4 @@
+import { createSignalTrustGate } from "../trust/gate.js";
 import type { SignalEventHandlerDeps, SignalReactionMessage } from "./event-handler.types.js";
 
 export function createBaseSignalEventHandlerDeps(
@@ -6,6 +7,12 @@ export function createBaseSignalEventHandlerDeps(
   return {
     // oxlint-disable-next-line typescript/no-explicit-any
     runtime: { log: () => {}, error: () => {} } as any,
+    // Gate off (env unset): pre-gate behavior, so existing handler tests are unaffected.
+    trustGate: createSignalTrustGate({
+      accountId: "default",
+      runtime: { log: () => {}, error: () => {}, exit: () => {} },
+      env: {},
+    }),
     cfg: {},
     baseUrl: "http://localhost",
     accountId: "default",

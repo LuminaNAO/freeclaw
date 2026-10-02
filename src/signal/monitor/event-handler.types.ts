@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { DmPolicy, GroupPolicy, SignalReactionNotificationMode } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { SignalSender } from "../identity.js";
+import type { SignalTrustGate } from "../trust/gate.js";
 
 export type SignalEnvelope = {
   sourceNumber?: string | null;
@@ -69,6 +70,8 @@ export type SignalReceivePayload = {
 
 export type SignalEventHandlerDeps = {
   runtime: RuntimeEnv;
+  /** Ingress trust gate (ARCH §4.4); runs before every other access or sink decision. */
+  trustGate: SignalTrustGate;
   cfg: OpenClawConfig;
   baseUrl: string;
   account?: string;

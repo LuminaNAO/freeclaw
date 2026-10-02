@@ -6,6 +6,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SignalAccountConfig } from "../config/types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import { resolveDefaultSignalSocketDir, resolveSignalSocketPath } from "./socket-dir.js";
+import {
+  formatSignalUnixEndpoint,
+  resolveSignalTransport,
+  type ResolvedSignalTransport,
+} from "./transport.js";
 
 function expandUserPath(path: string): string {
   if (path === "~") {
@@ -63,6 +69,12 @@ export type ResolvedSignalAccount = {
   baseUrl: string;
   configured: boolean;
   config: SignalAccountConfig;
+  /** Resolved daemon transport; undefined when transportError is set. */
+  transport?: ResolvedSignalTransport;
+  /** Config conflict that prevents this account from using any transport (fail closed). */
+  transportError?: string;
+  /** Socket path in use (socket transport only). */
+  socketPath?: string;
 };
 
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal");
@@ -104,12 +116,30 @@ export function resolveSignalAccount(params: {
   const archiveRawDeferred =
     merged.archiveRaw === true ||
     (typeof merged.archiveRaw === "object" && merged.archiveRaw?.enabled !== false);
-  const baseUrl =
-    (merged.httpEndpointFile?.trim() && !archiveRawDeferred
-      ? readEndpointFile(merged.httpEndpointFile)
-      : undefined) ||
-    merged.httpUrl?.trim() ||
-    `http://${host}:${port}`;
+  let transport: ResolvedSignalTransport | undefined;
+  let transportError: string | undefined;
+  try {
+    transport = resolveSignalTransport(merged);
+  } catch (err) {
+    transportError = err instanceof Error ? err.message : String(err);
+  }
+  let socketPath: string | undefined;
+  let baseUrl: string;
+  if (transportError) {
+    // Fail closed: no endpoint at all rather than a guessed (possibly TCP) one.
+    baseUrl = "";
+  } else if (transport?.kind === "socket") {
+    socketPath =
+      transport.socketPath ?? resolveSignalSocketPath(resolveDefaultSignalSocketDir(), accountId);
+    baseUrl = formatSignalUnixEndpoint(socketPath);
+  } else {
+    baseUrl =
+      (merged.httpEndpointFile?.trim() && !archiveRawDeferred
+        ? readEndpointFile(merged.httpEndpointFile)
+        : undefined) ||
+      merged.httpUrl?.trim() ||
+      `http://${host}:${port}`;
+  }
   const configured = Boolean(
     merged.account?.trim() ||
     merged.httpUrl?.trim() ||
@@ -117,6 +147,9 @@ export function resolveSignalAccount(params: {
     merged.cliPath?.trim() ||
     merged.httpHost?.trim() ||
     typeof merged.httpPort === "number" ||
+    merged.transport !== undefined ||
+    Boolean(merged.socketPath?.trim()) ||
+    Boolean(merged.socketGroup?.trim()) ||
     typeof merged.autoStart === "boolean" ||
     merged.archiveRaw !== undefined,
   );
@@ -127,6 +160,9 @@ export function resolveSignalAccount(params: {
     baseUrl,
     configured,
     config: merged,
+    transport,
+    transportError,
+    socketPath,
   };
 }
 

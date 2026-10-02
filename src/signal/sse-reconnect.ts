@@ -47,6 +47,7 @@ export async function runSignalSseLoop({
         baseUrl,
         account,
         abortSignal,
+        log: (message) => runtime.log?.(message),
         onEvent: (event) => {
           reconnectAttempts = 0;
           onEvent(event);

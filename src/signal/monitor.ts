@@ -1,3 +1,4 @@
+import path from "node:path";
 import { chunkTextWithMode, resolveChunkMode, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -36,7 +37,17 @@ import type {
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
 import { sendMessageSignal } from "./send.js";
+import {
+  assertExternalSocketDirSafe,
+  assertSocketPathLength,
+  clearStaleSignalSocket,
+  enforceSignalSocketMode,
+  ensureSignalSocketDir,
+  resolveGroupId,
+} from "./socket-dir.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
+import { parseSignalUnixEndpoint } from "./transport.js";
+import { createSignalTrustGate } from "./trust/gate.js";
 
 export type MonitorSignalOpts = {
   runtime?: RuntimeEnv;
@@ -134,6 +145,25 @@ function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
     abortSignal: mergedAbort.signal,
     dispose: mergedAbort.dispose,
   };
+}
+
+// The trust gate trusts sender ids reported by the daemon endpoint, so it needs to know
+// whether that endpoint is local. A unix socket is local by construction (and, unlike
+// loopback TCP, reachable only through file permissions).
+export function classifySignalEndpoint(baseUrl: string): "unix-socket" | "loopback" | "remote" {
+  try {
+    if (parseSignalUnixEndpoint(baseUrl) !== undefined) {
+      return "unix-socket";
+    }
+    const host = new URL(/^https?:\/\//i.test(baseUrl) ? baseUrl : `http://${baseUrl}`).hostname
+      .replace(/^\[|\]$/g, "")
+      .toLowerCase();
+    return host === "localhost" || host === "::1" || /^127\.\d+\.\d+\.\d+$/.test(host)
+      ? "loopback"
+      : "remote";
+  } catch {
+    return "remote";
+  }
 }
 
 function normalizeAllowList(raw?: Array<string | number>): string[] {
@@ -341,6 +371,34 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     cfg,
     accountId: opts.accountId,
   });
+  if (accountInfo.transportError) {
+    throw new Error(accountInfo.transportError);
+  }
+  // Explicit HTTP endpoint opts from a programmatic caller are HTTP intent: never combine them
+  // with the socket default (that would silently ignore them) and never widen a socket config.
+  const explicitHttpOpts = [
+    opts.baseUrl?.trim() ? "baseUrl" : undefined,
+    opts.httpHost !== undefined ? "httpHost" : undefined,
+    opts.httpPort !== undefined ? "httpPort" : undefined,
+  ].filter((key): key is string => Boolean(key));
+  if (explicitHttpOpts.length > 0 && accountInfo.config.transport === "socket") {
+    throw new Error(
+      `signal: monitor options ${explicitHttpOpts.join(", ")} conflict with channels.signal.transport="socket"`,
+    );
+  }
+  if (
+    explicitHttpOpts.length > 0 &&
+    accountInfo.transport?.kind === "socket" &&
+    accountInfo.config.socketPath?.trim()
+  ) {
+    throw new Error(
+      `signal: monitor options ${explicitHttpOpts.join(", ")} conflict with channels.signal.socketPath`,
+    );
+  }
+  const socketTransport =
+    explicitHttpOpts.length === 0 && accountInfo.transport?.kind === "socket"
+      ? accountInfo.transport
+      : undefined;
   const historyLimit = Math.max(
     0,
     accountInfo.config.historyLimit ??
@@ -350,7 +408,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(cfg, "signal", accountInfo.accountId);
   const chunkMode = resolveChunkMode(cfg, "signal", accountInfo.accountId);
-  let baseUrl = opts.baseUrl?.trim() || accountInfo.baseUrl;
+  let baseUrl =
+    opts.baseUrl?.trim() ||
+    (socketTransport || accountInfo.transport?.kind !== "socket"
+      ? accountInfo.baseUrl
+      : `http://${opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1"}:${opts.httpPort ?? accountInfo.config.httpPort ?? 8080}`);
   const account = opts.account?.trim() || accountInfo.config.account?.trim();
   const dmPolicy = accountInfo.config.dmPolicy ?? "pairing";
   const allowFrom = normalizeAllowList(opts.allowFrom ?? accountInfo.config.allowFrom);
@@ -384,7 +446,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const autoStart =
     opts.autoStart ??
     accountInfo.config.autoStart ??
-    !(accountInfo.config.httpUrl || accountInfo.config.httpEndpointFile);
+    (socketTransport ? true : !(accountInfo.config.httpUrl || accountInfo.config.httpEndpointFile));
   const startupTimeoutMs = Math.min(
     120_000,
     Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
@@ -392,6 +454,13 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const readReceiptsViaDaemon = autoStart && sendReadReceipts;
   const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
   let daemonHandle: SignalDaemonHandle | null = null;
+  let socketGid: number | undefined;
+  const socketPath = socketTransport ? accountInfo.socketPath : undefined;
+  if (socketTransport?.ignoredHttpKeys) {
+    runtime.log?.(
+      `signal[${accountInfo.accountId}]: ignoring httpHost/httpPort; socket is the default transport (set channels.signal.transport="http" to keep HTTP)`,
+    );
+  }
   // Auto-started daemons must always receive in "manual" mode: with
   // "on-start" signal-cli drains the server-side queue the moment the JVM
   // boots — before our SSE listener attaches — and --no-receive-stdout sends
@@ -404,7 +473,36 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     );
   }
 
-  if (autoStart) {
+  if (socketTransport && socketPath) {
+    assertSocketPathLength(socketPath, process.platform);
+    if (autoStart) {
+      const prepared = await ensureSignalSocketDir({
+        dir: path.dirname(socketPath),
+        group: socketTransport.socketGroup,
+        deps: { resolveGid: resolveGroupId, log: (m) => runtime.log?.(m) },
+      });
+      socketGid = prepared.gid;
+      await clearStaleSignalSocket({
+        socketPath,
+        accountId: accountInfo.accountId,
+        deps: { log: (m) => runtime.log?.(m) },
+      });
+      daemonHandle = spawnSignalDaemon({
+        cliPath: opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli",
+        account,
+        listener: { kind: "socket", path: socketPath },
+        receiveMode: "manual",
+        ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
+        ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
+        sendReadReceipts,
+        runtime,
+      });
+      daemonLifecycle.attach(daemonHandle);
+      runtime.log?.(`signal: auto-started local daemon on unix socket ${socketPath}`);
+    } else {
+      await assertExternalSocketDirSafe(socketPath);
+    }
+  } else if (autoStart) {
     if (archiveRawSettings.enabled) {
       // Spawn signalcli-archive-raw, which itself spawns signal-cli on a
       // randomised backend port and exposes the tee proxy at another
@@ -418,7 +516,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       });
       runtime.log?.(`signal: archive-raw proxy attached at ${baseUrl}`);
     } else {
-      // TODO(signal): add UNIX socket transport support for multi-user hosts.
       const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
       const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
       const managedLocalHttp =
@@ -454,11 +551,13 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       } else if (managedLocalHttp && !hasExplicitHttpPort) {
         runtime.log?.(`signal: using persisted local daemon port ${httpHost}:${httpPort}`);
       }
+      runtime.error?.(
+        `signal[${accountInfo.accountId}]: HTTP transport has no authentication; any local user can read and send as this account`,
+      );
       daemonHandle = spawnSignalDaemon({
         cliPath,
         account,
-        httpHost,
-        httpPort,
+        listener: { kind: "http", host: httpHost, port: httpPort },
         receiveMode: "manual",
         ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
         ignoreStories: opts.ignoreStories ?? accountInfo.config.ignoreStories,
@@ -488,10 +587,25 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       if (daemonExitError) {
         throw daemonExitError;
       }
+      if (socketTransport && socketPath) {
+        await enforceSignalSocketMode({ socketPath, gid: socketGid });
+      }
+    }
+
+    const trustGate = createSignalTrustGate({ accountId: accountInfo.accountId, runtime });
+    if (trustGate.enforced) {
+      const endpointKind = classifySignalEndpoint(baseUrl);
+      runtime.log?.(await trustGate.describe(endpointKind));
+      if (endpointKind === "remote") {
+        runtime.error?.(
+          "signal trust gate: daemon endpoint is not loopback; the gate trusts sender ids reported by that endpoint, so anything able to serve it can impersonate trusted senders",
+        );
+      }
     }
 
     const handleEvent = createSignalEventHandler({
       runtime,
+      trustGate,
       cfg,
       baseUrl,
       account,

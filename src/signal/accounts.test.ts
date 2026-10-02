@@ -85,3 +85,48 @@ describe("resolveSignalAccount httpEndpointFile", () => {
     ).toThrow(/missing a string "baseUrl"/);
   });
 });
+
+describe("resolveSignalAccount transport", () => {
+  it("defaults to a unix endpoint under the per-uid socket dir, keyed by account id", () => {
+    const resolved = resolveSignalAccount({
+      cfg: makeCfg({ account: "+15550001111" }),
+      accountId: "Work",
+    });
+    expect(resolved.transport?.kind).toBe("socket");
+    expect(resolved.socketPath).toMatch(/\/work\.sock$/);
+    expect(resolved.baseUrl).toBe(`unix:${resolved.socketPath}`);
+  });
+
+  it("keeps explicit HTTP as an http endpoint", () => {
+    const resolved = resolveSignalAccount({
+      cfg: makeCfg({ transport: "http", httpPort: 56123 }),
+      accountId: undefined,
+    });
+    expect(resolved.baseUrl).toBe("http://127.0.0.1:56123");
+  });
+
+  it("fails closed with no endpoint on a conflict, per account", () => {
+    const cfg = makeCfg({
+      accounts: {
+        bad: { socketPath: "/x/d.sock", httpUrl: "http://127.0.0.1:8080" },
+        good: { socketPath: "/x/g.sock" },
+      },
+    });
+    const bad = resolveSignalAccount({ cfg, accountId: "bad" });
+    expect(bad.transportError).toMatch(/configure exactly one transport/);
+    expect(bad.baseUrl).toBe("");
+    expect(resolveSignalAccount({ cfg, accountId: "good" }).baseUrl).toBe("unix:/x/g.sock");
+  });
+
+  it("counts transport-only accounts as configured", () => {
+    for (const signal of [
+      { socketPath: "/x/s.sock" },
+      { transport: "socket" },
+      { socketGroup: "sig" },
+    ]) {
+      expect(resolveSignalAccount({ cfg: makeCfg(signal), accountId: undefined }).configured).toBe(
+        true,
+      );
+    }
+  });
+});

@@ -916,6 +916,7 @@
                   "channels/nextcloud-talk",
                   "channels/nostr",
                   "channels/signal",
+                  "channels/signal-isolation",
                   "channels/synology-chat",
                   "channels/slack",
                   "channels/telegram",

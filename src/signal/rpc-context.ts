@@ -15,6 +15,9 @@ export function resolveSignalRpcContext(
           accountId: opts.accountId,
         })
       : undefined);
+  if (!hasBaseUrl && resolvedAccount?.transportError) {
+    throw new Error(resolvedAccount.transportError);
+  }
   const baseUrl = opts.baseUrl?.trim() || resolvedAccount?.baseUrl;
   if (!baseUrl) {
     throw new Error("Signal base URL is required");

@@ -9,7 +9,6 @@ import {
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
-  recordPendingHistoryEntryIfEnabled,
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
@@ -28,7 +27,6 @@ import { createTypingCallbacks } from "../../channels/typing.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { kindFromMime } from "../../media/mime.js";
 import {
   DM_GROUP_ACCESS_REASON,
@@ -48,6 +46,7 @@ import {
 } from "../identity.js";
 import { resolveSignalInboundRoute } from "../inbound-route.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
+import type { SignalTrustedSender } from "../trust/gate.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
   SignalEnvelope,
@@ -56,6 +55,10 @@ import type {
   SignalReceivePayload,
 } from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
+import {
+  enqueueTrustedSignalSystemEvent,
+  recordTrustedSignalPendingHistory,
+} from "./trusted-sinks.js";
 
 function formatAttachmentKindCount(kind: string, count: number): string {
   if (kind === "attachment") {
@@ -95,9 +98,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
+    trusted: SignalTrustedSender;
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
+    // Defense in depth: the trust store may have changed while the entry sat in the debouncer.
+    if (
+      !(await deps.trustGate.recheck(entry.trusted, {
+        kind: entry.isGroup ? "group" : "dm",
+        groupId: entry.groupId,
+      }))
+    ) {
+      return;
+    }
     const fromLabel = formatInboundFromLabel({
       isGroup: entry.isGroup,
       groupLabel: entry.groupName ?? undefined,
@@ -132,7 +145,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       envelope: envelopeOptions,
     });
     let combinedBody = body;
-    const historyKey = entry.isGroup ? String(entry.groupId ?? "unknown") : undefined;
+    const historyKey = entry.isGroup ? (entry.groupId ?? "unknown") : undefined;
     if (entry.isGroup && historyKey) {
       combinedBody = buildPendingHistoryContextFromMap({
         historyMap: deps.groupHistories,
@@ -337,7 +350,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         hasMedia: Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length),
       });
     },
-    onFlush: async (entries) => {
+    onFlush: async (flushed) => {
+      const entries: SignalInboundEntry[] = [];
+      for (const entry of flushed) {
+        if (
+          await deps.trustGate.recheck(entry.trusted, {
+            kind: entry.isGroup ? "group" : "dm",
+            groupId: entry.groupId,
+          })
+        ) {
+          entries.push(entry);
+        }
+      }
       const last = entries.at(-1);
       if (!last) {
         return;
@@ -367,8 +391,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     },
   });
 
-  function handleReactionOnlyInbound(params: {
+  async function handleReactionOnlyInbound(params: {
     envelope: SignalEnvelope;
+    trusted: SignalTrustedSender;
     sender: SignalSender;
     senderDisplay: string;
     reaction: SignalReactionMessage;
@@ -377,7 +402,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       decision: "allow" | "block" | "pairing";
       reason: string;
     };
-  }): boolean {
+  }): Promise<boolean> {
     if (params.hasBodyContent) {
       return false;
     }
@@ -440,7 +465,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     ]
       .filter(Boolean)
       .join(":");
-    enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+    await enqueueTrustedSignalSystemEvent({
+      gate: deps.trustGate,
+      trusted: params.trusted,
+      groupId,
+      text,
+      options: { sessionKey: route.sessionKey, contextKey },
+    });
     return true;
   }
 
@@ -490,6 +521,32 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
+
+    // Trust gate choke point (ARCH §4.4): identity comes only from sourceNumber/sourceUuid.
+    // A denied sender gets nothing: no access-policy evaluation, pairing reply, receipt,
+    // attachment fetch, reaction event, pending history, or dispatch.
+    const gateGroupId =
+      dataMessage?.groupInfo?.groupId ??
+      envelope.reactionMessage?.groupInfo?.groupId ??
+      dataMessage?.reaction?.groupInfo?.groupId ??
+      undefined;
+    const gateKind =
+      envelope.reactionMessage || dataMessage?.reaction
+        ? "reaction"
+        : gateGroupId
+          ? "group"
+          : dataMessage
+            ? "dm"
+            : "other";
+    const gateResult = await deps.trustGate.evaluate({
+      envelope,
+      kind: gateKind,
+      groupId: gateGroupId,
+    });
+    if (!gateResult.allow) {
+      return;
+    }
+    const trusted = gateResult.trusted;
     const reaction = deps.isSignalReactionMessage(envelope.reactionMessage)
       ? envelope.reactionMessage
       : deps.isSignalReactionMessage(dataMessage?.reaction)
@@ -518,14 +575,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     if (
       reaction &&
-      handleReactionOnlyInbound({
+      (await handleReactionOnlyInbound({
         envelope,
+        trusted,
         sender,
         senderDisplay,
         reaction,
         hasBodyContent,
         resolveAccessDecision,
-      })
+      }))
     ) {
       return;
     }
@@ -626,7 +684,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const canDetectMention = mentionRegexes.length > 0;
     const mentionGate = resolveMentionGatingWithBypass({
       isGroup,
-      requireMention: Boolean(requireMention),
+      requireMention,
       canDetectMention,
       wasMentioned,
       implicitMention: false,
@@ -665,7 +723,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       })();
       const pendingBodyText = messageText || pendingPlaceholder || quoteText;
       const historyKey = groupId ?? "unknown";
-      recordPendingHistoryEntryIfEnabled({
+      await recordTrustedSignalPendingHistory({
+        gate: deps.trustGate,
+        trusted,
         historyMap: deps.groupHistories,
         historyKey,
         limit: deps.historyLimit,
@@ -778,6 +838,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
+      trusted,
     });
   };
 }

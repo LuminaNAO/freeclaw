@@ -1451,6 +1451,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow WhatsApp to write config in response to channel events/commands (default: true).",
   "channels.signal.configWrites":
     "Allow Signal to write config in response to channel events/commands (default: true).",
+  "channels.signal.transport":
+    'signal-cli daemon transport. Default "socket": a unix socket in a per-uid 0700 directory, reachable only by the gateway user (or socketGroup). "http" keeps the legacy loopback HTTP daemon, which has no authentication: any local user can read and send as the account.',
+  "channels.signal.socketPath":
+    "Absolute unix socket path for the signal-cli daemon. Defaults to $XDG_RUNTIME_DIR/openclaw-signal/<accountId>.sock (or <stateDir>/signal-sockets). Set with autoStart=false to attach to an external socket daemon.",
+  "channels.signal.socketGroup":
+    "Optional group (name or gid) granted access to the Signal socket (directory 0710, socket 0660). The gateway user must be a member. Leave unset for owner-only access.",
   "channels.signal.account":
     "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
   "channels.imessage.configWrites":

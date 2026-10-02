@@ -215,6 +215,7 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "httpUrl",
   "httpHost",
   "httpPort",
+  "socketPath",
   "webhookPath",
   "webhookUrl",
   "webhookSecret",

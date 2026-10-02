@@ -999,8 +999,27 @@ export const SignalAccountSchemaBase = z
     account: z.string().optional(),
     accountUuid: z.string().optional(),
     httpUrl: z.string().optional(),
+    httpEndpointFile: z.string().optional(),
     httpHost: z.string().optional(),
     httpPort: z.number().int().positive().optional(),
+    transport: z.enum(["socket", "http"]).optional(),
+    socketPath: z.string().optional(),
+    socketGroup: z.string().optional(),
+    archiveRaw: z
+      .union([
+        z.boolean(),
+        z
+          .object({
+            enabled: z.boolean().optional(),
+            binary: z.string().optional(),
+            endpointFile: z.string().optional(),
+            log: z.string().optional(),
+            portMin: z.number().int().positive().optional(),
+            portMax: z.number().int().positive().optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
     cliPath: ExecutableTokenSchema.optional(),
     autoStart: z.boolean().optional(),
     startupTimeoutMs: z.number().int().min(1000).max(120000).optional(),
@@ -1041,6 +1060,57 @@ export const SignalAccountSchemaBase = z
 // Validation is enforced at the top-level SignalConfigSchema instead.
 export const SignalAccountSchema = SignalAccountSchemaBase;
 
+type SignalTransportKeys = {
+  transport?: "socket" | "http";
+  socketPath?: string;
+  socketGroup?: string;
+  httpUrl?: string;
+  httpEndpointFile?: string;
+  archiveRaw?: unknown;
+};
+
+// Same-object transport conflicts only; inherited conflicts are caught at runtime by
+// resolveSignalTransport. Never resolve a conflict by picking the TCP transport.
+function refineSignalTransportConflicts(
+  value: SignalTransportKeys,
+  ctx: z.RefinementCtx,
+  basePath: (string | number)[],
+): void {
+  const archiveRaw =
+    value.archiveRaw === true ||
+    (typeof value.archiveRaw === "object" &&
+      value.archiveRaw !== null &&
+      (value.archiveRaw as { enabled?: boolean }).enabled !== false);
+  const httpOnly = [
+    value.httpUrl?.trim() ? "httpUrl" : undefined,
+    value.httpEndpointFile?.trim() ? "httpEndpointFile" : undefined,
+    archiveRaw ? "archiveRaw" : undefined,
+  ].filter((key): key is string => Boolean(key));
+  const socketKeys = [
+    value.socketPath?.trim() ? "socketPath" : undefined,
+    value.socketGroup?.trim() ? "socketGroup" : undefined,
+  ].filter((key): key is string => Boolean(key));
+  if (value.transport === "socket" && httpOnly.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...basePath, "transport"],
+      message: `transport "socket" conflicts with ${httpOnly.join(", ")}`,
+    });
+  } else if (value.transport === "http" && socketKeys.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...basePath, "transport"],
+      message: `transport "http" conflicts with ${socketKeys.join(", ")}`,
+    });
+  } else if (socketKeys.length > 0 && httpOnly.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...basePath, socketKeys[0]],
+      message: `${socketKeys.join(", ")} conflicts with ${httpOnly.join(", ")}; configure exactly one transport`,
+    });
+  }
+}
+
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
   accounts: z.record(z.string(), SignalAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
@@ -1060,6 +1130,7 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
     message:
       'channels.signal.dmPolicy="allowlist" requires channels.signal.allowFrom to contain at least one sender ID',
   });
+  refineSignalTransportConflicts(value, ctx, []);
 
   if (!value.accounts) {
     return;
@@ -1086,6 +1157,7 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
       message:
         'channels.signal.accounts.*.dmPolicy="allowlist" requires channels.signal.accounts.*.allowFrom (or channels.signal.allowFrom) to contain at least one sender ID',
     });
+    refineSignalTransportConflicts(account, ctx, ["accounts", accountId]);
   }
 });
 

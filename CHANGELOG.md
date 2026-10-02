@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - Agents: a provider that reports an exhausted usage or quota window is skipped by model fallback (text, image, and PDF) until the window resets, honoring `Retry-After`, `x-ratelimit-reset`, `retryDelay`, and "try again in" hints.
 - Exec: fresh installs (`openclaw onboard`, `openclaw setup`, `openclaw configure` creating a new config) write `tools.exec.security: "full"` and `tools.exec.ask: "off"`. Existing gateway configs keep their current behavior. The command-obfuscation detector no longer forces approval prompts.
 - Security/exec posture change (owner decision): node hosts (headless `openclaw node` and the macOS app) now fall back to `security: "full"`, `ask: "off"` when the node has no explicit exec policy of its own. Existing nodes without an explicit `exec-approvals.json` policy flip to this and run model-issued commands without prompting. The gateway also sends its explicitly configured exec policy with each `system.run`; a node uses it only where it has no explicit local setting, so an explicit node-local `deny`/`allowlist` always wins.
+- Signal: add an opt-in ingress trust gate (`OPENCLAW_SIGNAL_TRUST_GATE=enforce`) backed by a per-account trust store managed with `openclaw signal trust`. Untrusted senders never reach the agent, and denied attempts are logged and flagged.
 
 ## 1.1.0 - 2026-05-08
 
@@ -30,6 +31,7 @@ Docs: https://docs.openclaw.ai
 - Browser/act automation: add batched actions, selector targeting, and delayed clicks for browser act requests with normalized batch dispatch. Thanks @vincentkoc.
 - Docker/timezone override: add `OPENCLAW_TZ` so `docker-setup.sh` can pin gateway and CLI containers to a chosen IANA timezone instead of inheriting the daemon default. (#34119) Thanks @Lanfei.
 - Dependencies/pi: bump `@mariozechner/pi-agent-core`, `@mariozechner/pi-ai`, `@mariozechner/pi-coding-agent`, and `@mariozechner/pi-tui` to `0.58.0`.
+- Signal: the gateway now runs `signal-cli` on a unix socket by default (per-user `0700` directory, `0600` socket, no TCP port), so other local users can no longer read or send as the account. Auto-started HTTP daemons move to the socket on the next restart; anything else that used the old HTTP port must move to the socket, or keep HTTP with `channels.signal.transport: "http"`. External daemons configured with `httpUrl`, `httpEndpointFile`, `archiveRaw` or `autoStart: false` are unchanged. New keys `transport`, `socketPath` and `socketGroup`, `openclaw channels add --socket-path`, and a read-only host check `scripts/signal-isolation-check.mjs`. See https://docs.openclaw.ai/channels/signal-isolation.
 
 ### Fixes
 

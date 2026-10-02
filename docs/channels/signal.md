@@ -1,5 +1,5 @@
 ---
-summary: "Signal support via signal-cli (JSON-RPC + SSE), setup paths, and number model"
+summary: "Signal support via signal-cli (JSON-RPC over a unix socket by default), setup paths, and number model"
 read_when:
   - Setting up Signal support
   - Debugging Signal send/receive
@@ -8,7 +8,7 @@ title: "Signal"
 
 # Signal (signal-cli)
 
-Status: external CLI integration. Gateway talks to `signal-cli` over HTTP JSON-RPC + SSE.
+Status: external CLI integration. Gateway talks to `signal-cli` over JSON-RPC on a unix socket (default) or, for legacy setups, HTTP JSON-RPC + SSE.
 
 ## Prerequisites
 
@@ -162,9 +162,40 @@ Upstream references:
 - Captcha flow: `https://github.com/AsamK/signal-cli/wiki/Registration-with-captcha`
 - Linking flow: `https://github.com/AsamK/signal-cli/wiki/Linking-other-devices-(Provisioning)`
 
-## External daemon mode (httpUrl)
+## Transport (socket default)
 
-If you want to manage `signal-cli` yourself (slow JVM cold starts, container init, or shared CPUs), run the daemon separately and point OpenClaw at it:
+The `signal-cli` daemon has no authentication. Socket mode is the recommended and default transport, because it makes the account reachable only by the gateway user:
+
+- OpenClaw starts `signal-cli daemon --socket <path>` with no TCP listener.
+- Default path: `$XDG_RUNTIME_DIR/openclaw-signal/<accountId>.sock`. If the runtime directory is missing or not private, the fallback is `~/.openclaw/signal-sockets/<accountId>.sock`.
+- The directory is created and checked as `0700` and owned by the gateway user before the daemon starts. The socket is set to `0600` once the daemon is ready. A stale socket left by a crash is removed. A socket that another live daemon is serving makes startup fail instead of starting a second daemon.
+- Isolation is per OS user. All Signal accounts served by one gateway share that user and trust each other. To isolate agents from each other, run each agent's gateway as a different user.
+- `channels.signal.socketGroup` grants a group access (directory `0710`, socket `0660`). The gateway user must be a member.
+
+Legacy HTTP is still supported, but only when you ask for it: set `channels.signal.transport: "http"`, or use `httpUrl`, `httpEndpointFile` or `archiveRaw`. Any local user can then read and send as the account, and the gateway logs a warning at start. A saved `httpPort` on its own does not select HTTP. OpenClaw wrote that value itself, so it is ignored, with a log line.
+
+Conflicting settings (for example `socketPath` together with `httpUrl`) stop the account with an error. OpenClaw never falls back to HTTP.
+
+Migration, the cutover runbook, and the conformance check: [Signal daemon isolation](/channels/signal-isolation).
+
+## External daemon mode
+
+If you want to manage `signal-cli` yourself (slow JVM cold starts, container init, or shared CPUs), run the daemon separately and point OpenClaw at it.
+
+Socket (recommended). Run `signal-cli -a <number> daemon --socket <path> --receive-mode manual` with the socket in a `0700` directory owned by the gateway user:
+
+```json5
+{
+  channels: {
+    signal: {
+      socketPath: "/run/user/1001/signal-cli/socket",
+      autoStart: false,
+    },
+  },
+}
+```
+
+HTTP (legacy, unauthenticated):
 
 ```json5
 {
@@ -177,9 +208,8 @@ If you want to manage `signal-cli` yourself (slow JVM cold starts, container ini
 }
 ```
 
-This skips auto-spawn and the startup wait inside OpenClaw. For slow starts when auto-spawning, set `channels.signal.startupTimeoutMs`.
-When OpenClaw auto-starts a local HTTP daemon, it picks a free loopback port and writes it back to config instead of reusing `8080`.
-TODO: add UNIX socket transport support for hosts where shared loopback ports are still a concern.
+Both skip auto-spawn and the startup wait inside OpenClaw. For slow starts when auto-spawning, set `channels.signal.startupTimeoutMs`.
+In HTTP mode, a locally auto-started daemon gets a free loopback port, which is written back to config instead of reusing `8080`.
 
 ## Access control (DMs + groups)
 
@@ -201,9 +231,35 @@ Groups:
 - Use `channels.signal.accounts.<id>.groups` for per-account overrides in multi-account setups.
 - Runtime note: if `channels.signal` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
+## Trust gate (ingress allowlist)
+
+The trust gate is an optional, code-enforced allowlist in front of all Signal ingress. When it is enforcing, a sender who is not in the trust store never reaches the agent: no inference, session record, group history, reaction event, attachment download, read receipt, typing indicator, or pairing reply. The decision is a set-membership check in code, so it does not depend on the model refusing anything.
+
+The gate composes with `dmPolicy`, `groupPolicy`, `allowFrom`, and pairing: a message must pass both. `dmPolicy: "open"`, `"*"`, `groupAllowFrom`, pairing approvals, and group membership never widen the gate. In groups, each sender is checked individually.
+
+Set up the store, then enable the gate:
+
+```bash
+openclaw signal trust add +15551234567                # or a uuid; pass both to bind them
+openclaw signal trust import-allowfrom                # optional one-shot copy of allowFrom (skips "*")
+openclaw signal trust list
+```
+
+Then set `OPENCLAW_SIGNAL_TRUST_GATE=enforce` in the gateway service environment and restart the gateway. The startup log shows `signal trust gate: enforcing (account=<id>, trusted=<n>, endpoint=unix-socket)` (or `endpoint=loopback` for an HTTP daemon on loopback).
+
+- The switch is an environment variable, not a config key, so `/config set` and config writes from chat cannot turn it off.
+- The store is `<state dir>/credentials/signal-trust-<account>.json`, one file per account. Only `openclaw signal trust` and hand edits write it. Pairing approval and `/allowlist add` do not.
+- Revoke with `openclaw signal trust remove <id>`. The change applies on the next inbound message.
+- If the store is missing, invalid, a symlink, or group/world-writable, the gate denies everyone and logs an error. It never falls back to `allowFrom`.
+- Ids must be canonical: E.164 (`+15551234567`) or a hyphenated uuid. Formatted numbers such as `+1 (555) 123-4567` are rejected, not coerced.
+- New contacts cannot pair while the gate is enforcing. Check `openclaw signal trust attempts` for denied senders, then add them.
+- Denials are logged at warn level, coalesced per sender, and flagged to `<state dir>/security/signal-trust-attempts.jsonl` (capped at 1 MiB plus one backup). Message bodies and display names are never logged.
+
+Trust boundary: the gate trusts the sender ids that the `signal-cli` daemon reports, so anything that can serve or reach the daemon endpoint can impersonate trusted senders. The default unix socket transport limits that to the gateway's OS user (see [Transport](#transport-socket-default)). On HTTP, any local user can reach a loopback daemon. With a remote `httpUrl` anything that can serve that endpoint can, and the gate logs a startup warning.
+
 ## How it works (behavior)
 
-- `signal-cli` runs as a daemon; the gateway reads events via SSE.
+- `signal-cli` runs as a daemon. The gateway subscribes to incoming messages over the unix socket (or via SSE in HTTP mode).
 - Inbound messages are normalized into the shared channel envelope.
 - Replies always route back to the same number or group.
 
@@ -293,6 +349,7 @@ For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
 - `signal-cli` stores account keys locally (typically `~/.local/share/signal-cli/data/`).
 - Back up Signal account state before server migration or rebuild.
 - Keep `channels.signal.dmPolicy: "pairing"` unless you explicitly want broader DM access.
+- Prefer the default socket transport. HTTP mode lets any local user read and send as the account. See [Signal daemon isolation](/channels/signal-isolation).
 - SMS verification is only needed for registration or recovery flows, but losing control of the number/account can complicate re-registration.
 
 ## Configuration reference (Signal)
@@ -304,9 +361,12 @@ Provider options:
 - `channels.signal.enabled`: enable/disable channel startup.
 - `channels.signal.account`: E.164 for the bot account.
 - `channels.signal.cliPath`: path to `signal-cli`.
-- `channels.signal.httpUrl`: full daemon URL (overrides host/port).
-- `channels.signal.httpHost`, `channels.signal.httpPort`: daemon bind. Local auto-start picks and saves a free loopback port instead of using `8080`.
-- `channels.signal.autoStart`: auto-spawn daemon (default true if `httpUrl` unset).
+- `channels.signal.transport`: `socket` (default) or `http` (legacy, unauthenticated).
+- `channels.signal.socketPath`: absolute daemon socket path. Default: `$XDG_RUNTIME_DIR/openclaw-signal/<accountId>.sock`. With `autoStart: false`, connects to an external socket daemon.
+- `channels.signal.socketGroup`: optional group (name or gid) granted socket access.
+- `channels.signal.httpUrl`: full HTTP daemon URL (selects HTTP; overrides host/port).
+- `channels.signal.httpHost`, `channels.signal.httpPort`: HTTP daemon bind (HTTP mode only). Local auto-start picks and saves a free loopback port instead of using `8080`.
+- `channels.signal.autoStart`: auto-spawn daemon (default true unless `httpUrl` or `httpEndpointFile` is set).
 - `channels.signal.startupTimeoutMs`: startup wait timeout in ms (cap 120000).
 - `channels.signal.receiveMode`: deprecated and ignored — the daemon always runs in `manual` receive mode. `on-start` made signal-cli drain the server-side message queue at daemon boot, before the gateway's event listener attached, permanently dropping messages sent while the channel was disabled.
 - `channels.signal.ignoreAttachments`: skip attachment downloads.

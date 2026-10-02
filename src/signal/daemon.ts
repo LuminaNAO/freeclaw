@@ -1,11 +1,15 @@
 import { spawn } from "node:child_process";
 import type { RuntimeEnv } from "../runtime.js";
 
+export type SignalDaemonListener =
+  | { kind: "socket"; path: string }
+  | { kind: "http"; host: string; port: number };
+
 export type SignalDaemonOpts = {
   cliPath: string;
   account?: string;
-  httpHost: string;
-  httpPort: number;
+  /** Exactly one listener; socket mode can never also open a TCP port. */
+  listener: SignalDaemonListener;
   receiveMode?: "on-start" | "manual";
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
@@ -27,7 +31,7 @@ export type SignalDaemonExitEvent = {
 };
 
 export function formatSignalDaemonExit(exit: SignalDaemonExitEvent): string {
-  return `signal daemon exited (source=${exit.source} code=${String(exit.code ?? "null")} signal=${String(exit.signal ?? "null")})`;
+  return `signal daemon exited (source=${exit.source} code=${String(exit.code ?? "null")} signal=${exit.signal ?? "null"})`;
 }
 
 export function classifySignalCliLogLine(line: string): "log" | "error" | null {
@@ -63,13 +67,17 @@ function bindSignalCliOutput(params: {
   });
 }
 
-function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
+export function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
   const args: string[] = [];
   if (opts.account) {
     args.push("-a", opts.account);
   }
   args.push("daemon");
-  args.push("--http", `${opts.httpHost}:${opts.httpPort}`);
+  if (opts.listener.kind === "socket") {
+    args.push("--socket", opts.listener.path);
+  } else {
+    args.push("--http", `${opts.listener.host}:${opts.listener.port}`);
+  }
   args.push("--no-receive-stdout");
 
   if (opts.receiveMode) {

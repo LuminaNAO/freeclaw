@@ -65,6 +65,7 @@ function buildSignalSetupPatch(input: {
   httpUrl?: string;
   httpHost?: string;
   httpPort?: string;
+  socketPath?: string;
 }) {
   return {
     ...(input.signalNumber ? { account: input.signalNumber } : {}),
@@ -72,6 +73,12 @@ function buildSignalSetupPatch(input: {
     ...(input.httpUrl ? { httpUrl: input.httpUrl } : {}),
     ...(input.httpHost ? { httpHost: input.httpHost } : {}),
     ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
+    ...(input.socketPath ? { socketPath: input.socketPath } : {}),
+    // HTTP flags on `channels add` are explicit HTTP intent; without this the socket default
+    // would write them and then ignore them.
+    ...(!input.socketPath && (input.httpUrl || input.httpHost || input.httpPort)
+      ? { transport: "http" as const }
+      : {}),
   };
 }
 
@@ -143,7 +150,17 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         cfg,
         sectionKey: "signal",
         accountId,
-        clearBaseFields: ["account", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
+        clearBaseFields: [
+          "account",
+          "httpUrl",
+          "httpHost",
+          "httpPort",
+          "transport",
+          "socketPath",
+          "socketGroup",
+          "cliPath",
+          "name",
+        ],
       }),
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({
@@ -203,9 +220,13 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         !input.httpUrl &&
         !input.httpHost &&
         !input.httpPort &&
+        !input.socketPath &&
         !input.cliPath
       ) {
-        return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
+        return "Signal requires --signal-number or --socket-path/--http-url/--http-host/--http-port/--cli-path.";
+      }
+      if (input.socketPath && (input.httpUrl || input.httpHost || input.httpPort)) {
+        return "Signal: --socket-path cannot be combined with --http-url/--http-host/--http-port.";
       }
       return null;
     },

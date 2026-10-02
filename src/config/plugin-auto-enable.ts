@@ -98,9 +98,9 @@ const STRUCTURED_CHANNEL_CONFIG_SPECS: Record<string, StructuredChannelConfigSpe
     accountStringKeys: ["botToken", "appToken", "userToken"],
   },
   signal: {
-    stringKeys: ["account", "httpUrl", "httpHost", "cliPath"],
+    stringKeys: ["account", "httpUrl", "httpHost", "cliPath", "socketPath"],
     numberKeys: ["httpPort"],
-    accountStringKeys: ["account", "httpUrl", "httpHost", "cliPath"],
+    accountStringKeys: ["account", "httpUrl", "httpHost", "cliPath", "socketPath"],
   },
   imessage: {
     stringKeys: ["cliPath"],
@@ -256,7 +256,7 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
       if (!isRecord(profile)) {
         continue;
       }
-      const provider = normalizeProviderId(String(profile.provider ?? ""));
+      const provider = normalizeProviderId(profile.provider ?? "");
       if (provider === normalized) {
         return true;
       }

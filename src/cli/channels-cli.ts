@@ -35,6 +35,7 @@ const optionNamesAdd = [
   "httpUrl",
   "httpHost",
   "httpPort",
+  "socketPath",
   "webhookPath",
   "webhookUrl",
   "audienceType",
@@ -180,6 +181,7 @@ export function registerChannelsCli(program: Command) {
     .option("--http-url <url>", "Signal HTTP daemon base URL")
     .option("--http-host <host>", "Signal HTTP host")
     .option("--http-port <port>", "Signal HTTP port")
+    .option("--socket-path <path>", "Signal daemon unix socket path")
     .option("--webhook-path <path>", "Webhook path (Google Chat/BlueBubbles)")
     .option("--webhook-url <url>", "Google Chat webhook URL")
     .option("--audience-type <type>", "Google Chat audience type (app-url|project-number)")

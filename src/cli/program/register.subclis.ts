@@ -231,6 +231,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "signal",
+    description: "Signal channel operator tools (ingress trust store)",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../signal-trust-cli.js");
+      mod.registerSignalTrustCli(program);
+    },
+  },
+  {
     name: "plugins",
     description: "Manage OpenClaw plugins and extensions",
     hasSubcommands: true,
