@@ -33,7 +33,6 @@ onlyBuiltDependencies:
   - esbuild
   - node-llama-cpp
   - protobufjs
-  - sharp
 
 allowBuilds:
   "@google/genai": true
@@ -45,7 +44,7 @@ allowBuilds:
   koffi: true
   node-llama-cpp: true
   protobufjs: true
-  sharp: true
+  sharp: false
 
 packageExtensions:
   "@mariozechner/pi-coding-agent":
