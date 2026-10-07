@@ -403,6 +403,8 @@ export type GatewayConfig = {
   bind?: GatewayBindMode;
   /** Custom IP address for bind="custom" mode. Fallback: 0.0.0.0. */
   customBindHost?: string;
+  /** Operator label for this gateway, sent as X-OpenClaw-Instance on model requests. */
+  instanceName?: string;
   controlUi?: GatewayControlUiConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;

@@ -12,8 +12,8 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const distFile = resolve(__dirname, "..", "dist", "plugin-sdk", "index.js");
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const distFile = resolve(scriptDir, "..", "dist", "plugin-sdk", "index.js");
 
 if (!existsSync(distFile)) {
   console.error("ERROR: dist/plugin-sdk/index.js not found. Run `pnpm build` first.");
@@ -74,6 +74,7 @@ const requiredSubpathEntries = [
   "open-prose",
   "phone-control",
   "qwen-portal-auth",
+  "swarm",
   "synology-chat",
   "talk-voice",
   "test-utils",
@@ -125,8 +126,8 @@ for (const name of requiredExports) {
 }
 
 for (const entry of requiredSubpathEntries) {
-  const jsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.js`);
-  const dtsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.d.ts`);
+  const jsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.js`);
+  const dtsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.d.ts`);
   if (!existsSync(jsPath)) {
     console.error(`MISSING SUBPATH JS: dist/plugin-sdk/${entry}.js`);
     missing += 1;
@@ -138,7 +139,7 @@ for (const entry of requiredSubpathEntries) {
 }
 
 for (const entry of requiredRuntimeShimEntries) {
-  const shimPath = resolve(__dirname, "..", "dist", "plugin-sdk", entry);
+  const shimPath = resolve(scriptDir, "..", "dist", "plugin-sdk", entry);
   if (!existsSync(shimPath)) {
     console.error(`MISSING RUNTIME SHIM: dist/plugin-sdk/${entry}`);
     missing += 1;

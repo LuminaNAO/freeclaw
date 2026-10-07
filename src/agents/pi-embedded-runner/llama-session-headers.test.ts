@@ -53,6 +53,57 @@ describe("OpenClaw llama session headers", () => {
     });
   });
 
+  it("adds the instance header only when an instance name is set", () => {
+    const base = {
+      sessionId: "session-1",
+      sessionKey: "agent:beta:main",
+      agentId: "beta",
+      agentKind: "main" as const,
+      runId: "run-1",
+      trigger: "user",
+    };
+
+    expect(buildOpenClawLlamaHeaders(base)).toEqual({
+      "X-OpenClaw-Session-Id": "session-1",
+      "X-OpenClaw-Session-Key": "agent:beta:main",
+      "X-OpenClaw-Agent-Id": "beta",
+      "X-OpenClaw-Agent-Kind": "main",
+      "X-OpenClaw-Run-Id": "run-1",
+      "X-OpenClaw-Trigger": "user",
+    });
+    expect(buildOpenClawLlamaHeaders({ ...base, instanceName: "alpha" })).toEqual({
+      "X-OpenClaw-Session-Id": "session-1",
+      "X-OpenClaw-Session-Key": "agent:beta:main",
+      "X-OpenClaw-Agent-Id": "beta",
+      "X-OpenClaw-Agent-Kind": "main",
+      "X-OpenClaw-Run-Id": "run-1",
+      "X-OpenClaw-Trigger": "user",
+      "X-OpenClaw-Instance": "alpha",
+    });
+    expect(buildOpenClawLlamaHeaders({ ...base, instanceName: "  " })).not.toHaveProperty(
+      "X-OpenClaw-Instance",
+    );
+  });
+
+  it("sends the cache-policy header only when one is supplied", () => {
+    expect(
+      buildOpenClawLlamaHeaders({ sessionId: "s", cachePolicy: "hdd" })["X-OpenClaw-Cache-Policy"],
+    ).toBe("hdd");
+    expect(buildOpenClawLlamaHeaders({ sessionId: "s" })).not.toHaveProperty(
+      "X-OpenClaw-Cache-Policy",
+    );
+  });
+
+  it("cleans the instance header like every other value", () => {
+    const headers = buildOpenClawLlamaHeaders({
+      sessionId: "s",
+      instanceName: ` dev\r\n${"x".repeat(600)}`,
+    });
+
+    expect(headers["X-OpenClaw-Instance"]).toBe(`dev  ${"x".repeat(600)}`.slice(0, 512));
+    expect(headers["X-OpenClaw-Instance"]).toHaveLength(512);
+  });
+
   it("sanitizes header values", () => {
     const headers = buildOpenClawLlamaHeaders({
       sessionId: "session\n1",

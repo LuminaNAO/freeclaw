@@ -2013,15 +2013,16 @@ export async function runEmbeddedAttempt(
         sessionAgentId,
       );
 
-      if (
-        shouldInjectOpenClawLlamaHeaders({
-          provider: params.provider,
-          model: params.model,
-        })
-      ) {
+      // Attribution headers go to every provider (ARCH model-request-attribution §3);
+      // the cache-policy header stays llama.cpp / loopback only.
+      {
         const agentKind = isSubagentSessionKey(params.sessionKey ?? params.sessionId)
           ? "subagent"
           : "main";
+        const injectCachePolicy = shouldInjectOpenClawLlamaHeaders({
+          provider: params.provider,
+          model: params.model,
+        });
         activeSession.agent.streamFn = createOpenClawLlamaHeadersWrapper(
           activeSession.agent.streamFn,
           {
@@ -2033,12 +2034,15 @@ export async function runEmbeddedAttempt(
             sessionKey: params.sessionKey,
             agentId: sessionAgentId,
             agentKind,
-            cachePolicy: resolveOpenClawLlamaCachePolicy({
-              agentKind,
-              trigger: params.trigger,
-            }),
+            cachePolicy: injectCachePolicy
+              ? resolveOpenClawLlamaCachePolicy({
+                  agentKind,
+                  trigger: params.trigger,
+                })
+              : undefined,
             runId: params.runId,
             trigger: params.trigger,
+            instanceName: params.config?.gateway?.instanceName,
           },
         );
       }

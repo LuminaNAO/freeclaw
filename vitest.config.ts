@@ -42,6 +42,7 @@ const pluginSdkSubpaths = [
   "open-prose",
   "phone-control",
   "qwen-portal-auth",
+  "swarm",
   "synology-chat",
   "talk-voice",
   "test-utils",

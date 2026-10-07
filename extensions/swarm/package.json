@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/swarm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Swarm orchestration plugin: run one task as a set of sessions that hand work to each other by message.",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "yaml": "^2.8.2"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

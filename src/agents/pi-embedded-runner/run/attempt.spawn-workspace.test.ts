@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
+import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import type {
   AuthStorage,
   ExtensionContext,
@@ -28,6 +29,7 @@ const hoisted = vi.hoisted(() => {
   const resolveSandboxContextMock = vi.fn();
   const subscribeEmbeddedPiSessionMock = vi.fn();
   const acquireSessionWriteLockMock = vi.fn();
+  const applyExtraParamsToAgentMock = vi.fn();
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     branch: vi.fn(),
@@ -42,6 +44,7 @@ const hoisted = vi.hoisted(() => {
     resolveSandboxContextMock,
     subscribeEmbeddedPiSessionMock,
     acquireSessionWriteLockMock,
+    applyExtraParamsToAgentMock,
     sessionManager,
   };
 });
@@ -187,7 +190,7 @@ vi.mock("../system-prompt.js", () => ({
 }));
 
 vi.mock("../extra-params.js", () => ({
-  applyExtraParamsToAgent: () => {},
+  applyExtraParamsToAgent: (...args: unknown[]) => hoisted.applyExtraParamsToAgentMock(...args),
 }));
 
 vi.mock("../../openai-ws-stream.js", () => ({
@@ -265,6 +268,7 @@ function resetEmbeddedAttemptHarness(
     });
   }
   hoisted.createAgentSessionMock.mockReset();
+  hoisted.applyExtraParamsToAgentMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
   hoisted.resolveSandboxContextMock.mockReset();
   hoisted.acquireSessionWriteLockMock.mockReset().mockResolvedValue({
@@ -715,5 +719,135 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         return params.sessionKey === sessionKey;
       }),
     ).toBe(true);
+  });
+});
+
+describe("runEmbeddedAttempt attribution headers", () => {
+  const tempPaths: string[] = [];
+
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness({ subscribeImpl: createSubscriptionMock });
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
+  });
+
+  async function captureRequestHeaders(params: {
+    provider: string;
+    model: Model<Api>;
+    instanceName?: string;
+  }): Promise<Record<string, string> | undefined> {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attrib-workspace-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attrib-agent-"));
+    tempPaths.push(workspaceDir, agentDir);
+    let captured: Record<string, string> | undefined;
+
+    hoisted.applyExtraParamsToAgentMock.mockImplementation((agent: { streamFn?: unknown }) => {
+      agent.streamFn = (_model: unknown, _context: unknown, options?: { headers?: never }) => {
+        captured = options?.headers;
+        return createAssistantMessageEventStream();
+      };
+    });
+    hoisted.createAgentSessionMock.mockImplementation(async () => {
+      const session = createDefaultEmbeddedSession({
+        prompt: async (current) => {
+          const streamFn = current.agent.streamFn as (
+            model: unknown,
+            context: unknown,
+            options?: unknown,
+          ) => unknown;
+          streamFn(params.model, { messages: [] }, {});
+        },
+      });
+      return { session };
+    });
+
+    const result = await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:beta:main",
+      sessionFile: path.join(workspaceDir, "session.jsonl"),
+      workspaceDir,
+      agentDir,
+      config: params.instanceName ? { gateway: { instanceName: params.instanceName } } : {},
+      prompt: "hello",
+      timeoutMs: 10_000,
+      runId: "run-attrib",
+      trigger: "user",
+      provider: params.provider,
+      modelId: "test-model",
+      model: params.model,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+    });
+    expect(result.promptError).toBeNull();
+    return captured;
+  }
+
+  it("sends agent headers to a non-loopback, non-llama provider without cache policy", async () => {
+    const headers = await captureRequestHeaders({
+      provider: "remote-gw",
+      model: {
+        ...testModel,
+        provider: "remote-gw",
+        baseUrl: "http://203.0.113.40:8080/v1",
+      } as unknown as Model<Api>,
+      instanceName: "alpha",
+    });
+
+    expect(headers).toEqual({
+      "X-OpenClaw-Session-Id": "agent:beta:main:embedded-session",
+      "X-OpenClaw-Session-Key": "agent:beta:main",
+      "X-OpenClaw-Agent-Id": "beta",
+      "X-OpenClaw-Agent-Kind": "main",
+      "X-OpenClaw-Run-Id": "run-attrib",
+      "X-OpenClaw-Trigger": "user",
+      "X-OpenClaw-Instance": "alpha",
+    });
+  });
+
+  it("keeps today's llama.cpp header set, plus Instance only when configured", async () => {
+    const llamaModel = {
+      ...testModel,
+      provider: "llama.cpp",
+      baseUrl: "http://203.0.113.40:8080/v1",
+    } as unknown as Model<Api>;
+    const todaysSet = {
+      "X-OpenClaw-Session-Id": "agent:beta:main:embedded-session",
+      "X-OpenClaw-Session-Key": "agent:beta:main",
+      "X-OpenClaw-Agent-Id": "beta",
+      "X-OpenClaw-Agent-Kind": "main",
+      "X-OpenClaw-Cache-Policy": "hdd",
+      "X-OpenClaw-Run-Id": "run-attrib",
+      "X-OpenClaw-Trigger": "user",
+    };
+
+    expect(await captureRequestHeaders({ provider: "llama.cpp", model: llamaModel })).toEqual(
+      todaysSet,
+    );
+    expect(
+      await captureRequestHeaders({
+        provider: "llama.cpp",
+        model: llamaModel,
+        instanceName: "alpha",
+      }),
+    ).toEqual({ ...todaysSet, "X-OpenClaw-Instance": "alpha" });
+  });
+
+  it("keeps the cache-policy header for loopback providers", async () => {
+    const headers = await captureRequestHeaders({
+      provider: "custom",
+      model: {
+        ...testModel,
+        provider: "custom",
+        baseUrl: "http://127.0.0.1:40801/v1",
+      } as unknown as Model<Api>,
+    });
+
+    expect(headers?.["X-OpenClaw-Cache-Policy"]).toBe("hdd");
+    expect(headers?.["X-OpenClaw-Agent-Id"]).toBe("beta");
   });
 });

@@ -661,6 +661,7 @@ export const OpenClawSchema = z
           ])
           .optional(),
         customBindHost: z.string().optional(),
+        instanceName: z.string().optional(),
         controlUi: z
           .object({
             enabled: z.boolean().optional(),

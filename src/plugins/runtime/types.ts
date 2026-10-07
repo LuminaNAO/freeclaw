@@ -48,6 +48,27 @@ export type SubagentDeleteSessionParams = {
   deleteTranscript?: boolean;
 };
 
+export type SubagentPatchSessionParams = {
+  sessionKey: string;
+  /** `provider/model`; validated against the gateway model allowlist. */
+  model?: string;
+  thinkingLevel?: string;
+  label?: string;
+};
+
+export type SubagentPatchSessionResult = {
+  provider: string;
+  model: string;
+};
+
+export type SubagentAbortSessionParams = {
+  sessionKey: string;
+};
+
+export type SubagentAbortSessionResult = {
+  aborted: boolean;
+};
+
 export type PluginRuntime = PluginRuntimeCore & {
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
@@ -58,6 +79,10 @@ export type PluginRuntime = PluginRuntimeCore & {
     /** @deprecated Use getSessionMessages. */
     getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
+    /** Apply model / thinking / label overrides to a session entry (creates it if absent). */
+    patchSession: (params: SubagentPatchSessionParams) => Promise<SubagentPatchSessionResult>;
+    /** Abort the session's active run and drop its queued follow-ups. */
+    abortSession: (params: SubagentAbortSessionParams) => Promise<SubagentAbortSessionResult>;
   };
   channel: PluginRuntimeChannel;
 };

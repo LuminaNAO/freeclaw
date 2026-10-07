@@ -20,6 +20,18 @@ vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
 }));
 
+const abortEmbeddedPiRun = vi.hoisted(() => vi.fn((_sessionId: string) => false));
+const clearSessionQueues = vi.hoisted(() =>
+  vi.fn((_keys: Array<string | undefined>) => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
+);
+const loadSessionEntry = vi.hoisted(() =>
+  vi.fn((_key: string): { entry?: { sessionId?: string } } => ({})),
+);
+
+vi.mock("../agents/pi-embedded.js", () => ({ abortEmbeddedPiRun }));
+vi.mock("../auto-reply/reply/queue.js", () => ({ clearSessionQueues }));
+vi.mock("./session-utils.js", () => ({ loadSessionEntry }));
+
 const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   plugins: [],
   tools: [],
@@ -77,6 +89,9 @@ function createSubagentRuntime(serverPlugins: ServerPluginsModule): PluginRuntim
 beforeEach(() => {
   loadOpenClawPlugins.mockReset();
   handleGatewayRequest.mockReset();
+  abortEmbeddedPiRun.mockClear();
+  clearSessionQueues.mockClear();
+  loadSessionEntry.mockClear();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
     switch (opts.req.method) {
       case "agent":
@@ -90,6 +105,12 @@ beforeEach(() => {
         return;
       case "sessions.delete":
         opts.respond(true, {});
+        return;
+      case "sessions.patch":
+        opts.respond(true, {
+          ok: true,
+          resolved: { modelProvider: "provider-a", model: "model-a" },
+        });
         return;
       default:
         opts.respond(true, {});
@@ -208,5 +229,79 @@ describe("loadGatewayPlugins", () => {
       | (GatewayRequestContext & { marker: string })
       | undefined;
     expect(dispatched?.marker).toBe("after-mutation");
+  });
+});
+
+describe("subagent runtime session control", () => {
+  test("patchSession dispatches sessions.patch and returns the resolved model", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("patch"));
+
+    const result = await runtime.patchSession({
+      sessionKey: "agent:main:worker",
+      model: "provider-a/model-a",
+      thinkingLevel: "high",
+      label: "worker",
+    });
+
+    expect(result).toEqual({ provider: "provider-a", model: "model-a" });
+    const req = handleGatewayRequest.mock.calls.at(-1)?.[0].req;
+    expect(req?.method).toBe("sessions.patch");
+    expect(req?.params).toEqual({
+      key: "agent:main:worker",
+      model: "provider-a/model-a",
+      thinkingLevel: "high",
+      label: "worker",
+    });
+  });
+
+  test("patchSession omits fields that were not given", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("patch-min"));
+
+    await runtime.patchSession({ sessionKey: "agent:main:worker" });
+
+    expect(handleGatewayRequest.mock.calls.at(-1)?.[0].req.params).toEqual({
+      key: "agent:main:worker",
+    });
+  });
+
+  test("patchSession surfaces a gateway rejection (e.g. model not allowed)", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("patch-reject"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      opts.respond(false, undefined, { code: "INVALID_REQUEST", message: "model not allowed" });
+    });
+
+    await expect(
+      runtime.patchSession({ sessionKey: "agent:main:worker", model: "provider-x/model-x" }),
+    ).rejects.toThrow("model not allowed");
+  });
+
+  test("abortSession aborts the session's embedded run and clears its queues", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = createSubagentRuntime(serverPlugins);
+    loadSessionEntry.mockReturnValueOnce({ entry: { sessionId: "session-1" } });
+    abortEmbeddedPiRun.mockReturnValueOnce(true);
+
+    await expect(runtime.abortSession({ sessionKey: "agent:main:worker" })).resolves.toEqual({
+      aborted: true,
+    });
+    expect(abortEmbeddedPiRun).toHaveBeenCalledWith("session-1");
+    expect(clearSessionQueues).toHaveBeenCalledWith(["agent:main:worker", "session-1"]);
+  });
+
+  test("abortSession reports nothing aborted for an idle or unknown session", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = createSubagentRuntime(serverPlugins);
+    loadSessionEntry.mockReturnValueOnce({});
+
+    await expect(runtime.abortSession({ sessionKey: "agent:main:idle" })).resolves.toEqual({
+      aborted: false,
+    });
+    expect(abortEmbeddedPiRun).not.toHaveBeenCalled();
   });
 });

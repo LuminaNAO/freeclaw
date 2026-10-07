@@ -46,6 +46,7 @@
     "src/plugin-sdk/open-prose.ts",
     "src/plugin-sdk/phone-control.ts",
     "src/plugin-sdk/qwen-portal-auth.ts",
+    "src/plugin-sdk/swarm.ts",
     "src/plugin-sdk/synology-chat.ts",
     "src/plugin-sdk/talk-voice.ts",
     "src/plugin-sdk/test-utils.ts",

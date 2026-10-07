@@ -462,6 +462,15 @@ importers:
 
   extensions/slack: {}
 
+  extensions/swarm:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+      yaml:
+        specifier: ^2.8.2
+        version: 2.9.0
+
   extensions/synology-chat:
     dependencies:
       zod:

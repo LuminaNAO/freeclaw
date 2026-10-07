@@ -10,6 +10,7 @@ export type OpenClawLlamaHeaderInfo = {
   cachePolicy?: "hdd" | "no-hdd";
   runId?: string;
   trigger?: string;
+  instanceName?: string;
 };
 
 export function resolveOpenClawLlamaHeaderSessionId(params: {
@@ -72,6 +73,7 @@ export function buildOpenClawLlamaHeaders(info: OpenClawLlamaHeaderInfo): Record
     ["X-OpenClaw-Cache-Policy", info.cachePolicy],
     ["X-OpenClaw-Run-Id", info.runId],
     ["X-OpenClaw-Trigger", info.trigger],
+    ["X-OpenClaw-Instance", info.instanceName],
   ];
 
   for (const [key, value] of values) {

@@ -70,4 +70,14 @@ describe("plugin runtime command execution", () => {
     // Wrappers should NOT be the same reference as the raw functions
     expect(runtime.modelAuth.getApiKeyForModel).not.toBe(rawGetApiKey);
   });
+
+  it("subagent session control throws the standard error outside a gateway request", () => {
+    const runtime = createPluginRuntime();
+    expect(() => runtime.subagent.patchSession({ sessionKey: "agent:main:x" })).toThrow(
+      "only available during a gateway request",
+    );
+    expect(() => runtime.subagent.abortSession({ sessionKey: "agent:main:x" })).toThrow(
+      "only available during a gateway request",
+    );
+  });
 });

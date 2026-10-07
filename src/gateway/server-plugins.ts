@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { abortEmbeddedPiRun } from "../agents/pi-embedded.js";
+import { clearSessionQueues } from "../auto-reply/reply/queue.js";
 import type { loadConfig } from "../config/config.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -12,6 +14,7 @@ import type {
   GatewayRequestHandler,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 // ── Fallback gateway context for non-WS paths (Telegram, WhatsApp, etc.) ──
 // The WS path sets a per-request scope via AsyncLocalStorage, but channel
@@ -155,6 +158,30 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         key: params.sessionKey,
         deleteTranscript: params.deleteTranscript ?? true,
       });
+    },
+    async patchSession(params) {
+      const payload = await dispatchGatewayMethod<{
+        resolved?: { modelProvider?: string; model?: string };
+      }>("sessions.patch", {
+        key: params.sessionKey,
+        ...(params.model !== undefined && { model: params.model }),
+        ...(params.thinkingLevel !== undefined && { thinkingLevel: params.thinkingLevel }),
+        ...(params.label !== undefined && { label: params.label }),
+      });
+      const provider = payload?.resolved?.modelProvider;
+      const model = payload?.resolved?.model;
+      if (typeof provider !== "string" || typeof model !== "string") {
+        throw new Error("Gateway sessions.patch returned no resolved model.");
+      }
+      return { provider, model };
+    },
+    async abortSession(params) {
+      // Runs started via the `agent` method are not tracked by chat.abort, so abort the
+      // embedded run directly, the same way the core subagent kill path does.
+      const sessionId = loadSessionEntry(params.sessionKey).entry?.sessionId;
+      const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
+      const cleared = clearSessionQueues([params.sessionKey, sessionId]);
+      return { aborted: aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0 };
     },
   };
 }

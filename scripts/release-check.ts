@@ -87,6 +87,8 @@ const requiredPathGroups = [
   "dist/plugin-sdk/phone-control.d.ts",
   "dist/plugin-sdk/qwen-portal-auth.js",
   "dist/plugin-sdk/qwen-portal-auth.d.ts",
+  "dist/plugin-sdk/swarm.js",
+  "dist/plugin-sdk/swarm.d.ts",
   "dist/plugin-sdk/synology-chat.js",
   "dist/plugin-sdk/synology-chat.d.ts",
   "dist/plugin-sdk/talk-voice.js",

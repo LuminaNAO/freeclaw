@@ -1,0 +1,68 @@
+{
+  "id": "swarm",
+  "name": "Swarm",
+  "description": "Run a task as a swarm of sessions that hand work to each other by routed messages.",
+  "uiHints": {
+    "stateDir": {
+      "label": "State Directory",
+      "help": "Override for task state. Defaults to <gateway state dir>/swarm.",
+      "advanced": true
+    },
+    "defaultModel": {
+      "label": "Default Worker Model",
+      "placeholder": "provider/model"
+    },
+    "defaultThinking": { "label": "Default Worker Thinking" },
+    "lane": {
+      "label": "Run Lane",
+      "help": "Global lane for swarm runs. Keep \"subagent\" so swarm work does not take the operator's main lane.",
+      "advanced": true
+    },
+    "upstream.sessionKey": { "label": "Default Upstream Session" },
+    "upstream.channel.kind": { "label": "Default Upstream Channel" },
+    "upstream.channel.to": { "label": "Default Upstream Target" },
+    "group.kind": { "label": "Task Group Adapter", "advanced": true },
+    "budget.wall": { "label": "Task Wall Budget", "placeholder": "4h" }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "stateDir": { "type": "string" },
+      "defaultModel": { "type": "string" },
+      "defaultThinking": { "type": "string" },
+      "lane": { "type": "string" },
+      "upstream": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "sessionKey": { "type": "string" },
+          "channel": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": { "type": "string" },
+              "to": { "type": "string" }
+            }
+          },
+          "events": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "group": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "type": "string", "enum": ["none"] }
+        }
+      },
+      "budget": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "wall": { "type": "string" },
+          "step_silence": { "type": "string" }
+        }
+      }
+    }
+  }
+}
