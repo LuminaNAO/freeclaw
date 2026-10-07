@@ -3,7 +3,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { queueEmbeddedPiMessage, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -18,6 +18,12 @@ import type { TypingMode } from "../../config/types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
+import {
+  bindStackFiles,
+  finishStackFiles,
+  stackFilesOf,
+  takeStackFiles,
+} from "../../infra/session-stack.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
@@ -197,6 +203,18 @@ export async function runReplyAgent(params: {
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
+      // Steered into the active run: its files end with that run (§3).
+      const steeredFiles = takeStackFiles(followupRun);
+      if (steeredFiles.length > 0) {
+        // Delete only once the run has actually ended; a wait timeout is not the end.
+        const sessionId = followupRun.run.sessionId;
+        void (async () => {
+          while (!(await waitForEmbeddedPiRunEnd(sessionId, 60_000))) {
+            // still running
+          }
+          finishStackFiles(steeredFiles);
+        })();
+      }
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
@@ -216,7 +234,12 @@ export async function runReplyAgent(params: {
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
+    // Queued: the files now end with the turn that consumes this run (§3).
+    const files = stackFilesOf(followupRun)?.slice();
+    if (enqueueFollowupRun(queueKey, followupRun, resolvedQueue)) {
+      takeStackFiles(followupRun);
+      bindStackFiles(followupRun, files);
+    }
     await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;

@@ -255,6 +255,50 @@ describe("runDaemonRestart health checks", () => {
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4300, "SIGTERM");
   });
 
+  it("unmanaged stop targets the invoking config's port, not a not-loaded unit's --port (ARCH gateway-process-title-discovery §2.2)", async () => {
+    service.readCommand.mockResolvedValue({
+      programArguments: ["node", "/srv/openclaw/dist/index.js", "gateway", "--port", "40763"],
+      environment: {},
+    });
+    resolveGatewayPort.mockReturnValue(40797);
+    findVerifiedGatewayListenerPidsOnPortSync.mockImplementation((port) =>
+      port === 40763 ? [1044] : [],
+    );
+    runServiceStop.mockImplementation(async (params: { onNotLoaded?: () => Promise<unknown> }) => {
+      await params.onNotLoaded?.();
+    });
+
+    await runDaemonStop({ json: true });
+
+    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(40797);
+    expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalledWith(40763);
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+  });
+
+  it("unmanaged restart targets the invoking config's port, not a not-loaded unit's --port (ARCH gateway-process-title-discovery §2.2)", async () => {
+    service.readCommand.mockResolvedValue({
+      programArguments: ["node", "/srv/openclaw/dist/index.js", "gateway", "--port", "40763"],
+      environment: {},
+    });
+    resolveGatewayPort.mockReturnValue(40797);
+    findVerifiedGatewayListenerPidsOnPortSync.mockImplementation((port) =>
+      port === 40763 ? [1044] : [4200],
+    );
+    mockUnmanagedRestart({ runPostRestartCheck: true });
+
+    await runDaemonRestart({ json: true });
+
+    expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalledWith(40763);
+    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGUSR1");
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalledWith(1044, expect.anything());
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:40797" }),
+    );
+    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 40797 }),
+    );
+  });
+
   it("signals a single unmanaged gateway process on restart", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart({ runPostRestartCheck: true });

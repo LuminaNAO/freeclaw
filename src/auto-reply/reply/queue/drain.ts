@@ -1,3 +1,4 @@
+import { finishStackFiles, isGatewayDraining, stackFilesOf } from "../../../infra/session-stack.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
@@ -68,17 +69,34 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   };
 }
 
+/**
+ * Session prompt stack (§3): the turn that consumes queued items ends their files.
+ * While draining for restart (§6) no turn can start, so the files stay for the next start.
+ */
+async function runConsuming(consumed: FollowupRun[], run: () => Promise<void>): Promise<void> {
+  const files = consumed.flatMap((item) => stackFilesOf(item) ?? []);
+  const draining = isGatewayDraining();
+  try {
+    await run();
+  } finally {
+    if (!draining) {
+      finishStackFiles(files);
+    }
+  }
+}
+
 export function scheduleFollowupDrain(
   key: string,
-  runFollowup: (run: FollowupRun) => Promise<void>,
+  runFollowupRaw: (run: FollowupRun) => Promise<void>,
 ): void {
+  const runFollowup = (item: FollowupRun) => runConsuming([item], () => runFollowupRaw(item));
   const queue = beginQueueDrain(FOLLOWUP_QUEUES, key);
   if (!queue) {
     return;
   }
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
-  FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
+  FOLLOWUP_RUN_CALLBACKS.set(key, runFollowupRaw);
   void (async () => {
     try {
       const collectState = { forceIndividualCollect: false };
@@ -121,12 +139,14 @@ export function scheduleFollowupDrain(
             summary,
             renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
-          await runFollowup({
-            prompt,
-            run,
-            enqueuedAt: Date.now(),
-            ...routing,
-          });
+          await runConsuming(items, () =>
+            runFollowupRaw({
+              prompt,
+              run,
+              enqueuedAt: Date.now(),
+              ...routing,
+            }),
+          );
           queue.items.splice(0, items.length);
           if (summary) {
             clearQueueSummaryState(queue);
@@ -142,15 +162,17 @@ export function scheduleFollowupDrain(
           }
           if (
             !(await drainNextQueueItem(queue.items, async (item) => {
-              await runFollowup({
-                prompt: summaryPrompt,
-                run,
-                enqueuedAt: Date.now(),
-                originatingChannel: item.originatingChannel,
-                originatingTo: item.originatingTo,
-                originatingAccountId: item.originatingAccountId,
-                originatingThreadId: item.originatingThreadId,
-              });
+              await runConsuming([item], () =>
+                runFollowupRaw({
+                  prompt: summaryPrompt,
+                  run,
+                  enqueuedAt: Date.now(),
+                  originatingChannel: item.originatingChannel,
+                  originatingTo: item.originatingTo,
+                  originatingAccountId: item.originatingAccountId,
+                  originatingThreadId: item.originatingThreadId,
+                }),
+              );
             }))
           ) {
             break;
@@ -171,7 +193,7 @@ export function scheduleFollowupDrain(
       if (queue.items.length === 0 && queue.droppedCount === 0) {
         FOLLOWUP_QUEUES.delete(key);
       } else {
-        scheduleFollowupDrain(key, runFollowup);
+        scheduleFollowupDrain(key, runFollowupRaw);
       }
     }
   })();

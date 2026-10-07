@@ -9,7 +9,13 @@ export function parseProcCmdline(raw: string): string[] {
     .filter(Boolean);
 }
 
+/** The gateway's `process.title`; on Linux it replaces the whole cmdline. */
+const GATEWAY_PROCESS_TITLE = "openclaw-gateway";
+
 export function isGatewayArgv(args: string[], opts?: { allowGatewayBinary?: boolean }): boolean {
+  if (opts?.allowGatewayBinary === true && args.length === 1 && args[0] === GATEWAY_PROCESS_TITLE) {
+    return true;
+  }
   const normalized = args.map(normalizeProcArg);
   if (!normalized.includes("gateway")) {
     return false;

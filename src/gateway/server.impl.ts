@@ -97,6 +97,7 @@ import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { startGatewaySidecars } from "./server-startup.js";
+import { replaySessionStack } from "./session-stack-replay.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
@@ -937,6 +938,11 @@ export async function startGatewayServer(
       logChannels,
       logBrowser,
     }));
+  }
+
+  // Session prompt stack (§5): after channels start, re-submit unfinished prompts.
+  if (!minimalTestGateway) {
+    void replaySessionStack(gatewayRequestContext);
   }
 
   // Run gateway_start plugin hook (fire-and-forget)

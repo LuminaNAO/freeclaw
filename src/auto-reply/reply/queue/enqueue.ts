@@ -1,4 +1,5 @@
 import { createDedupeCache } from "../../../infra/dedupe.js";
+import { finishStackFiles, stackFilesOf } from "../../../infra/session-stack.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle } from "./drain.js";
@@ -83,10 +84,17 @@ export function enqueueFollowupRun(
   queue.lastEnqueuedAt = Date.now();
   queue.lastRun = run.run;
 
+  const itemsBeforeDrop = queue.items.slice();
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
     summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
   });
+  // Session prompt stack (§3): a prompt dropped by queue policy is deleted when dropped.
+  for (const dropped of itemsBeforeDrop) {
+    if (!queue.items.includes(dropped)) {
+      finishStackFiles(stackFilesOf(dropped));
+    }
+  }
   if (!shouldEnqueue) {
     return false;
   }

@@ -17,6 +17,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { bindStackFiles, stackFilesOf } from "../../infra/session-stack.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -533,6 +534,9 @@ export async function runPreparedReply(
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
     },
   };
+
+  // Session prompt stack (§3): the run carries the prompt files of its context.
+  bindStackFiles(followupRun, stackFilesOf(ctx));
 
   return runReplyAgent({
     commandBody: prefixedCommandBody,

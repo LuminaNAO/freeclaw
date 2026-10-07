@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import { parseCmdScriptCommandLine } from "../daemon/cmd-argv.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { readPortListenerOwnersSync } from "./proc-net-listeners.js";
 import { findGatewayPidsOnPortSync as findUnixGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 
 const WINDOWS_GATEWAY_DISCOVERY_TIMEOUT_MS = 5_000;
@@ -143,11 +144,28 @@ export function signalVerifiedGatewayPidSync(pid: number, signal: "SIGTERM" | "S
   process.kill(pid, signal);
 }
 
+/**
+ * Linux: the pids owning the LISTEN socket on `port`, read from /proc. A titled gateway's
+ * cmdline carries no port or state dir, so the socket is the only way to tell gateways apart.
+ * When a listener exists but its owner cannot be attributed, refuse instead of guessing.
+ */
+function readLinuxListeningPidsOnPortSync(port: number): number[] {
+  const owners = readPortListenerOwnersSync(port);
+  if (owners.status === "unknown") {
+    throw new Error(
+      `cannot determine which process owns gateway port ${port} (${owners.reason}); refusing to stop a gateway by guess`,
+    );
+  }
+  return owners.pids;
+}
+
 export function findVerifiedGatewayListenerPidsOnPortSync(port: number): number[] {
   const rawPids =
     process.platform === "win32"
       ? readWindowsListeningPidsOnPortSync(port)
-      : findUnixGatewayPidsOnPortSync(port);
+      : process.platform === "linux"
+        ? readLinuxListeningPidsOnPortSync(port)
+        : findUnixGatewayPidsOnPortSync(port);
 
   return Array.from(new Set(rawPids))
     .filter((pid): pid is number => Number.isFinite(pid) && pid > 0 && pid !== process.pid)

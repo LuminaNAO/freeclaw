@@ -6,6 +6,7 @@ const parseCmdScriptCommandLineMock = vi.hoisted(() => vi.fn());
 const parseProcCmdlineMock = vi.hoisted(() => vi.fn());
 const isGatewayArgvMock = vi.hoisted(() => vi.fn());
 const findGatewayPidsOnPortSyncMock = vi.hoisted(() => vi.fn());
+const readPortListenerOwnersSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
@@ -24,6 +25,10 @@ vi.mock("../daemon/cmd-argv.js", () => ({
 vi.mock("./gateway-process-argv.js", () => ({
   parseProcCmdline: (...args: unknown[]) => parseProcCmdlineMock(...args),
   isGatewayArgv: (...args: unknown[]) => isGatewayArgvMock(...args),
+}));
+
+vi.mock("./proc-net-listeners.js", () => ({
+  readPortListenerOwnersSync: (...args: unknown[]) => readPortListenerOwnersSyncMock(...args),
 }));
 
 vi.mock("./restart-stale-pids.js", () => ({
@@ -54,6 +59,7 @@ describe("gateway-processes", () => {
     parseProcCmdlineMock.mockReset();
     isGatewayArgvMock.mockReset();
     findGatewayPidsOnPortSyncMock.mockReset();
+    readPortListenerOwnersSyncMock.mockReset();
   });
 
   afterEach(() => {
@@ -132,7 +138,10 @@ describe("gateway-processes", () => {
 
   it("dedupes and filters verified gateway listener pids on unix and windows", () => {
     setPlatform("linux");
-    findGatewayPidsOnPortSyncMock.mockReturnValue([process.pid, 200, 200, 300, -1]);
+    readPortListenerOwnersSyncMock.mockReturnValue({
+      status: "ok",
+      pids: [process.pid, 200, 200, 300, -1],
+    });
     readFileSyncMock.mockReturnValueOnce("openclaw-gateway\0gateway\0");
     readFileSyncMock.mockReturnValueOnce("python\0-m\0http.server\0");
     parseProcCmdlineMock
@@ -157,6 +166,25 @@ describe("gateway-processes", () => {
     isGatewayArgvMock.mockReturnValue(true);
 
     expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([200]);
+  });
+
+  it("refuses on linux when the port owner cannot be determined (ARCH §2.2)", () => {
+    setPlatform("linux");
+    readPortListenerOwnersSyncMock.mockReturnValue({ status: "unknown", reason: "hidden" });
+
+    expect(() => findVerifiedGatewayListenerPidsOnPortSync(40797)).toThrow(
+      /cannot determine which process owns gateway port 40797 \(hidden\); refusing/,
+    );
+    expect(findGatewayPidsOnPortSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the lsof path on darwin (ARCH §2.3)", () => {
+    setPlatform("darwin");
+    findGatewayPidsOnPortSyncMock.mockReturnValue([]);
+
+    expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([]);
+    expect(findGatewayPidsOnPortSyncMock).toHaveBeenCalledWith(18789);
+    expect(readPortListenerOwnersSyncMock).not.toHaveBeenCalled();
   });
 
   it("formats pid lists as comma-separated output", () => {

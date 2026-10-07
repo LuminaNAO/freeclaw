@@ -43,6 +43,12 @@ async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
   return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
 }
 
+/**
+ * Port of the invoking config (env or `gateway.port`), never the installed unit's `--port`.
+ * Used for the unmanaged path: a unit file that is not loaded may describe another gateway, and
+ * signalling by its port could hit a gateway the invoking config does not own (ARCH
+ * gateway-process-title-discovery §2.2).
+ */
 function resolveGatewayPortFallback(): Promise<number> {
   return readBestEffortConfig()
     .then((cfg) => resolveGatewayPort(cfg, process.env))
@@ -128,14 +134,11 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
 
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   const service = resolveGatewayService();
-  const gatewayPort = await resolveGatewayLifecyclePort(service).catch(() =>
-    resolveGatewayPortFallback(),
-  );
   return await runServiceStop({
     serviceNoun: "Gateway",
     service,
     opts,
-    onNotLoaded: async () => stopGatewayWithoutServiceManager(gatewayPort),
+    onNotLoaded: async () => stopGatewayWithoutServiceManager(await resolveGatewayPortFallback()),
   });
 }
 
@@ -148,6 +151,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;
+  let unmanagedPort = 0;
   const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
     resolveGatewayPortFallback(),
   );
@@ -161,7 +165,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     opts,
     checkTokenDrift: true,
     onNotLoaded: async () => {
-      const handled = await restartGatewayWithoutServiceManager(restartPort);
+      unmanagedPort = await resolveGatewayPortFallback();
+      const handled = await restartGatewayWithoutServiceManager(unmanagedPort);
       if (handled) {
         restartedWithoutServiceManager = true;
       }
@@ -170,16 +175,16 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       if (restartedWithoutServiceManager) {
         const health = await waitForGatewayHealthyListener({
-          port: restartPort,
+          port: unmanagedPort,
           attempts: POST_RESTART_HEALTH_ATTEMPTS,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
         });
         if (health.healthy) {
-          return;
+          return undefined;
         }
 
         const diagnostics = renderGatewayPortHealthDiagnostics(health);
-        const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
+        const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${unmanagedPort} to become healthy.`;
         if (!json) {
           defaultRuntime.log(theme.warn(timeoutLine));
           for (const line of diagnostics) {
@@ -227,7 +232,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       if (health.healthy) {
-        return;
+        return undefined;
       }
 
       const diagnostics = renderRestartDiagnostics(health);
@@ -256,6 +261,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         formatCliCommand("openclaw gateway status --deep"),
         formatCliCommand("openclaw doctor"),
       ]);
+      return undefined;
     },
   });
 }

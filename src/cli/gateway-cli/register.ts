@@ -25,6 +25,7 @@ import {
   renderBeaconLines,
 } from "./discover.js";
 import { addGatewayRunCommand } from "./run.js";
+import { runGatewayStack, runGatewayStackDrop } from "./stack.js";
 
 function runGatewayCommand(action: () => Promise<void>, label?: string) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
@@ -110,6 +111,20 @@ export function registerGatewayCli(program: Command) {
   addGatewayServiceCommands(gateway, {
     statusDescription: "Show gateway service status + probe the Gateway",
   });
+
+  const stack = gateway
+    .command("stack")
+    .description("Show unfinished session prompts kept on disk (works with the gateway up or down)")
+    .action(async () => {
+      await runGatewayCommand(runGatewayStack, "Gateway stack failed");
+    });
+  stack
+    .command("drop")
+    .description("Stop the gateway and delete every session stack file")
+    .option("--yes", "Do not ask for confirmation", false)
+    .action(async (opts: { yes?: boolean }) => {
+      await runGatewayCommand(() => runGatewayStackDrop(opts), "Gateway stack drop failed");
+    });
 
   gatewayCallOpts(
     gateway

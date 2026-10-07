@@ -1,3 +1,4 @@
+import { finishStackFiles, stackFilesOf } from "../../../infra/session-stack.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
@@ -77,6 +78,10 @@ export function clearFollowupQueue(key: string): number {
     return 0;
   }
   const cleared = queue.items.length + queue.droppedCount;
+  // Session prompt stack (§3): cleared prompts (/stop, reset) end here.
+  for (const item of queue.items) {
+    finishStackFiles(stackFilesOf(item));
+  }
   queue.items.length = 0;
   queue.droppedCount = 0;
   queue.summaryLines = [];

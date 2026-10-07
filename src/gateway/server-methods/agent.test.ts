@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import { listStack } from "../../infra/session-stack.js";
+import { markGatewayDraining, resetAllLanes } from "../../process/command-queue.js";
 import { agentHandlers } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -380,6 +382,113 @@ describe("gateway agent handler", () => {
       | { senderIsOwner?: boolean }
       | undefined;
     expect(callArgs?.senderIsOwner).toBe(senderIsOwner);
+  });
+
+  it("session stack: writes the request before the run and deletes it when the turn ends (§3)", async () => {
+    primeMainAgentRun();
+    let releaseRun: (() => void) | undefined;
+    mocks.agentCommand.mockImplementationOnce(
+      () => new Promise((resolve) => (releaseRun = () => resolve({ payloads: [] }))),
+    );
+    await runMainAgent("stack write", "test-stack-write");
+    await vi.waitFor(() => expect(releaseRun).toBeDefined());
+    const during = listStack().find((s) => s.sessionKey === "agent:main:main")?.entries ?? [];
+    const stored = during.find(
+      (e) =>
+        (e.content.payload as { params: { idempotencyKey?: string } }).params.idempotencyKey ===
+        "test-stack-write",
+    );
+    expect(stored?.content.source).toBe("agent");
+    releaseRun?.();
+    await vi.waitFor(() =>
+      expect(
+        stored &&
+          listStack()
+            .flatMap((s) => s.entries.map((e) => e.file))
+            .includes(stored.file),
+      ).toBe(false),
+    );
+  });
+
+  it("session stack: during restart drain the request is stored and accepted without a run (§6)", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+    markGatewayDraining();
+    try {
+      await invokeAgent(
+        { message: "drain", sessionKey: "agent:main:main", idempotencyKey: "test-stack-drain" },
+        { respond },
+      );
+    } finally {
+      resetAllLanes();
+    }
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "accepted" }),
+      undefined,
+      expect.anything(),
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    const stored = listStack()
+      .flatMap((s) => s.entries)
+      .find(
+        (e) =>
+          (e.content.payload as { params: { idempotencyKey?: string } }).params.idempotencyKey ===
+          "test-stack-drain",
+      );
+    expect(stored).toBeDefined();
+  });
+
+  it("session stack: an admin request replayed from its file runs with the same sender and owner status (§2.1, §5)", async () => {
+    primeMainAgentRun();
+    let releaseRun: (() => void) | undefined;
+    mocks.agentCommand.mockImplementationOnce(
+      () => new Promise((resolve) => (releaseRun = () => resolve({ payloads: [] }))),
+    );
+    await invokeAgent(
+      {
+        message: "replay owner",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-stack-owner",
+      },
+      {
+        client: {
+          connect: {
+            role: "operator",
+            scopes: ["operator.admin"],
+            auth: { token: "secret-token" },
+            client: { id: "cli", mode: "cli", displayName: "op" },
+          },
+        } as unknown as AgentHandlerArgs["client"],
+      },
+    );
+    await vi.waitFor(() => expect(releaseRun).toBeDefined());
+    const original = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    const entry = listStack()
+      .flatMap((s) => s.entries)
+      .find(
+        (e) =>
+          (e.content.payload as { params: { idempotencyKey?: string } }).params.idempotencyKey ===
+          "test-stack-owner",
+      );
+    expect(entry).toBeDefined();
+    expect(JSON.stringify(entry?.content)).not.toContain("secret-token");
+
+    // Simulate the gateway stopping before the turn ended: replay the file through the real handler.
+    const { replaySessionStack } = await import("../session-stack-replay.js");
+    mocks.agentCommand.mockClear();
+    mocks.agentCommand.mockResolvedValueOnce({ payloads: [] });
+    await replaySessionStack(makeContext());
+    const replayed = mocks.agentCommand.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .find((c) => c.runId === "test-stack-owner");
+    expect(replayed?.senderIsOwner).toBe(true);
+    expect(replayed?.senderIsOwner).toBe(original.senderIsOwner);
+    expect(replayed?.message).toBe(original.message);
+    expect(replayed?.sessionKey).toBe(original.sessionKey);
+    expect(replayed?.channel).toBe(original.channel);
+    releaseRun?.();
   });
 
   it("respects explicit bestEffortDeliver=false for main session runs", async () => {

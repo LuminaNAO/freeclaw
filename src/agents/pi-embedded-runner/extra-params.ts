@@ -152,6 +152,25 @@ function createStreamFnWithExtraParams(
   return wrappedStreamFn;
 }
 
+/**
+ * ARCH model-output-token-cap §2: the model's configured `maxTokens` is the default
+ * output cap; an explicit `maxTokens` still wins but is clamped to the model's cap.
+ * Models without a positive `maxTokens` keep the library default untouched.
+ */
+function createModelMaxTokensWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const modelMax = model.maxTokens;
+    if (typeof modelMax !== "number" || !Number.isFinite(modelMax) || modelMax <= 0) {
+      return underlying(model, context, options);
+    }
+    const requested = options?.maxTokens;
+    const maxTokens =
+      typeof requested === "number" && requested > 0 ? Math.min(requested, modelMax) : modelMax;
+    return underlying(model, context, { ...options, maxTokens });
+  };
+}
+
 function isGemini31Model(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
   return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
@@ -356,6 +375,8 @@ export function applyExtraParamsToAgent(
         )
       : undefined;
   const merged = Object.assign({}, resolvedExtraParams, override);
+  // Innermost of the param wrappers so it sees explicit params.maxTokens (ARCH §2).
+  agent.streamFn = createModelMaxTokensWrapper(agent.streamFn);
   const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider);
 
   if (wrappedStreamFn) {

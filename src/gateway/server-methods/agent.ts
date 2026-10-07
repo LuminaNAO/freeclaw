@@ -22,6 +22,13 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import {
+  bindStackFiles,
+  finishStackFiles,
+  isGatewayDraining,
+  stackFilesOf,
+  writeStackFile,
+} from "../../infra/session-stack.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -99,9 +106,11 @@ function dispatchAgentRunFromGateway(params: {
   idempotencyKey: string;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
+  stackFiles?: string[];
 }) {
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
+      finishStackFiles(params.stackFiles);
       const payload = {
         runId: params.runId,
         status: "ok" as const,
@@ -122,6 +131,7 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err) => {
+      finishStackFiles(params.stackFiles);
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: params.runId,
@@ -561,6 +571,24 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
 
+    // Session prompt stack (§3, §4): keep the request on disk until its turn ends.
+    // A replayed request (§5) arrives with its file already bound.
+    let stackFiles = stackFilesOf(p);
+    if (!stackFiles && resolvedSessionKey) {
+      stackFiles = [
+        writeStackFile({
+          sessionKey: resolvedSessionKey,
+          source: "agent",
+          // The request and who sent it; connect credentials are not part of the prompt.
+          payload: {
+            params: p,
+            client: client?.connect ? { connect: { ...client.connect, auth: undefined } } : null,
+          },
+        }),
+      ];
+      bindStackFiles(p, stackFiles);
+    }
+
     const accepted = {
       runId,
       status: "accepted" as const,
@@ -577,6 +605,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       },
     });
     respond(true, accepted, undefined, { runId });
+
+    if (stackFiles && isGatewayDraining()) {
+      // Restart drain (§6): stored and accepted; the next start replays it.
+      return;
+    }
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
@@ -624,6 +657,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       idempotencyKey: idem,
       respond,
       context,
+      stackFiles,
     });
   },
   "agent.identity.get": ({ params, respond }) => {

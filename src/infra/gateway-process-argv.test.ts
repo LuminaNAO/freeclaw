@@ -44,6 +44,26 @@ describe("isGatewayArgv", () => {
     ).toBe(true);
   });
 
+  it("matches the bare openclaw-gateway process title only behind the opt-in flag (ARCH §2.1)", () => {
+    expect(isGatewayArgv(["openclaw-gateway"], { allowGatewayBinary: true })).toBe(true);
+    expect(isGatewayArgv(["openclaw-gateway"])).toBe(false);
+  });
+
+  it("does not match processes titled anything else (ARCH §2.1)", () => {
+    for (const title of [
+      "openclaw",
+      "openclaw-gateway-x",
+      "my-openclaw-gateway",
+      "node",
+      "gateway",
+    ]) {
+      expect(isGatewayArgv([title], { allowGatewayBinary: true })).toBe(false);
+    }
+    expect(isGatewayArgv(["openclaw-gateway", "--other"], { allowGatewayBinary: true })).toBe(
+      false,
+    );
+  });
+
   it("rejects unknown gateway argv even when the token is present", () => {
     expect(isGatewayArgv(["node", "/srv/openclaw/custom.js", "gateway"])).toBe(false);
     expect(isGatewayArgv(["python", "gateway", "script.py"])).toBe(false);
