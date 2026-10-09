@@ -26,8 +26,9 @@ import { getAbortMemory, isAbortRequestText } from "./abort.js";
 import { buildStatusReply, handleCommands } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { isDirectiveOnly } from "./directive-handling.js";
+import { stripMentions } from "./mentions.js";
 import type { createModelSelectionState } from "./model-selection.js";
-import { extractInlineSimpleCommand } from "./reply-inline.js";
+import { extractLeadingSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
 let builtinSlashCommands: Set<string> | null = null;
@@ -290,10 +291,31 @@ export async function handleInlineActions(params: {
     }
   }
 
-  const inlineCommand =
+  // `/help`, `/commands`, `/whoami` and `/id` only run when the message starts with them
+  // (docs/design/no-embedded-slash-commands.md §2.1-§2.3). Detect on the clean command text,
+  // then strip the leading command from the prompt body (which may carry envelope/context).
+  const isIgnorableLeadingToken = isGroup
+    ? (token: string) => stripMentions(token, ctx, cfg, agentId).length === 0
+    : undefined;
+  const leadingSimpleCommand =
     allowTextCommands && command.isAuthorizedSender
-      ? extractInlineSimpleCommand(cleanedBody)
+      ? extractLeadingSimpleCommand(
+          sessionCtx.BodyForCommands ??
+            sessionCtx.CommandBody ??
+            sessionCtx.RawBody ??
+            ctx.BodyForCommands ??
+            ctx.CommandBody ??
+            ctx.RawBody ??
+            cleanedBody,
+          { isIgnorableToken: isIgnorableLeadingToken },
+        )
       : null;
+  const inlineCommand = leadingSimpleCommand
+    ? (extractLeadingSimpleCommand(cleanedBody, {
+        skipSenderLabel: true,
+        isIgnorableToken: isIgnorableLeadingToken,
+      }) ?? leadingSimpleCommand)
+    : null;
   if (inlineCommand) {
     cleanedBody = inlineCommand.cleaned;
     sessionCtx.Body = cleanedBody;

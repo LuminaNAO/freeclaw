@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseIdentityMarkdown } from "./identity-file.js";
 
@@ -14,6 +16,14 @@ describe("parseIdentityMarkdown", () => {
 `;
     const parsed = parseIdentityMarkdown(content);
     expect(parsed).toEqual({});
+  });
+
+  it("treats the shipped IDENTITY.md template as empty", () => {
+    const content = fs.readFileSync(
+      path.resolve(import.meta.dirname, "../../docs/reference/templates/IDENTITY.md"),
+      "utf-8",
+    );
+    expect(parseIdentityMarkdown(content)).toEqual({});
   });
 
   it("parses explicit identity values", () => {

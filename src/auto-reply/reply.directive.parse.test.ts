@@ -32,9 +32,16 @@ describe("directive parsing", () => {
   });
 
   it("matches verbose with leading space", () => {
-    const res = extractVerboseDirective(" please /verbose on now");
+    const res = extractVerboseDirective("  /verbose on now");
     expect(res.hasDirective).toBe(true);
     expect(res.verboseLevel).toBe("on");
+    expect(res.cleaned).toBe("now");
+  });
+
+  it("treats mid-message verbose as plain text", () => {
+    const res = extractVerboseDirective(" please /verbose on now");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("please /verbose on now");
   });
 
   it("matches reasoning directive", () => {
@@ -56,9 +63,15 @@ describe("directive parsing", () => {
   });
 
   it("matches elevated with leading space", () => {
-    const res = extractElevatedDirective(" please /elevated on now");
+    const res = extractElevatedDirective("  /elevated on now");
     expect(res.hasDirective).toBe(true);
     expect(res.elevatedLevel).toBe("on");
+  });
+
+  it("treats mid-message elevated as plain text", () => {
+    const res = extractElevatedDirective(" please /elevated on now");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("please /elevated on now");
   });
   it("matches elevated ask", () => {
     const res = extractElevatedDirective("/elevated ask please");
@@ -138,14 +151,22 @@ describe("directive parsing", () => {
 
   it("matches exec directive with options", () => {
     const res = extractExecDirective(
-      "please /exec host=gateway security=allowlist ask=on-miss node=mac-mini now",
+      "/exec host=gateway security=allowlist ask=on-miss node=mac-mini now",
     );
     expect(res.hasDirective).toBe(true);
     expect(res.execHost).toBe("gateway");
     expect(res.execSecurity).toBe("allowlist");
     expect(res.execAsk).toBe("on-miss");
     expect(res.execNode).toBe("mac-mini");
-    expect(res.cleaned).toBe("please now");
+    expect(res.cleaned).toBe("now");
+  });
+
+  it("treats mid-message exec as plain text", () => {
+    const body = "please /exec host=gateway security=full now";
+    const res = extractExecDirective(body);
+    expect(res.hasDirective).toBe(false);
+    expect(res.execSecurity).toBeUndefined();
+    expect(res.cleaned).toBe(body);
   });
 
   it("captures invalid exec host values", () => {
@@ -157,35 +178,65 @@ describe("directive parsing", () => {
   });
 
   it("matches queue directive", () => {
-    const res = extractQueueDirective("please /queue interrupt now");
+    const res = extractQueueDirective("/queue interrupt now");
     expect(res.hasDirective).toBe(true);
     expect(res.queueMode).toBe("interrupt");
     expect(res.queueReset).toBe(false);
-    expect(res.cleaned).toBe("please now");
+    expect(res.cleaned).toBe("now");
   });
 
-  it("preserves spacing when stripping think directives before paths", () => {
+  it("treats mid-message queue as plain text", () => {
+    const res = extractQueueDirective("please /queue interrupt now");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("please /queue interrupt now");
+  });
+
+  it("preserves spacing when stripping leading think directives before paths", () => {
+    const res = extractThinkDirective("/think high/tmp/hello");
+    expect(res.hasDirective).toBe(true);
+    expect(res.cleaned).toBe("/tmp/hello");
+  });
+
+  it("leaves mid-message think tokens before paths untouched", () => {
     const res = extractThinkDirective("thats not /think high/tmp/hello");
-    expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("thats not /think high/tmp/hello");
   });
 
-  it("preserves spacing when stripping verbose directives before paths", () => {
+  it("preserves spacing when stripping leading verbose directives before paths", () => {
+    const res = extractVerboseDirective("/verbose on/tmp/hello");
+    expect(res.hasDirective).toBe(true);
+    expect(res.cleaned).toBe("/tmp/hello");
+  });
+
+  it("leaves mid-message verbose tokens before paths untouched", () => {
     const res = extractVerboseDirective("thats not /verbose on/tmp/hello");
-    expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("thats not /verbose on/tmp/hello");
   });
 
-  it("preserves spacing when stripping reasoning directives before paths", () => {
+  it("preserves spacing when stripping leading reasoning directives before paths", () => {
+    const res = extractReasoningDirective("/reasoning on/tmp/hello");
+    expect(res.hasDirective).toBe(true);
+    expect(res.cleaned).toBe("/tmp/hello");
+  });
+
+  it("leaves mid-message reasoning tokens before paths untouched", () => {
     const res = extractReasoningDirective("thats not /reasoning on/tmp/hello");
-    expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("thats not /reasoning on/tmp/hello");
   });
 
-  it("preserves spacing when stripping status directives before paths", () => {
-    const res = extractStatusDirective("thats not /status:/tmp/hello");
+  it("preserves spacing when stripping leading status directives before paths", () => {
+    const res = extractStatusDirective("/status:/tmp/hello");
     expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
+    expect(res.cleaned).toBe("/tmp/hello");
+  });
+
+  it("leaves mid-message status tokens before paths untouched", () => {
+    const res = extractStatusDirective("thats not /status:/tmp/hello");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("thats not /status:/tmp/hello");
   });
 
   it("does not treat /usage as a status directive", () => {
@@ -195,15 +246,13 @@ describe("directive parsing", () => {
   });
 
   it("parses queue options and modes", () => {
-    const res = extractQueueDirective(
-      "please /queue steer+backlog debounce:2s cap:5 drop:summarize now",
-    );
+    const res = extractQueueDirective("/queue steer+backlog debounce:2s cap:5 drop:summarize now");
     expect(res.hasDirective).toBe(true);
     expect(res.queueMode).toBe("steer-backlog");
     expect(res.debounceMs).toBe(2000);
     expect(res.cap).toBe(5);
     expect(res.dropPolicy).toBe("summarize");
-    expect(res.cleaned).toBe("please now");
+    expect(res.cleaned).toBe("now");
   });
 
   it("extracts reply_to_current tag", () => {

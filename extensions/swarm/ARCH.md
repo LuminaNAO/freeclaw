@@ -147,6 +147,27 @@ There is no step-silence watchdog. `budget.step_silence` is accepted in old cont
 8. A long-running worker turn (longer than any old step_silence) raises no alarm.
 9. `swarm answer` reaches the taskmaster and appears in `events.jsonl` as `OPERATOR`.
 
+## 12. Continue (follow-up rounds on the same workers)
+A follow-up to a task reuses that task's sessions, so the workers keep the context they built. A new task id
+is for new work only.
+- `swarm continue <task-id> --file <followup.yaml>`. The follow-up file has `input` (required), `done_when`
+  (optional, replaces the task's) and `budget.wall` (optional, replaces it for this round). Any other key is
+  refused. The task's contract, worker sessions, models, thinking, routes, repo and upstream are unchanged.
+- Allowed for a `done` (closed) task or an `open` task whose workers are all idle (no active run); refused
+  for a `cancelled` task, and for an open task with an active run (say so; use `swarm answer` instead).
+- It appends `ROUND_STARTED {round: n, input}` to the same `events.jsonl` (round 1 = the original start), then
+  delivers the follow-up through the normal kickoff route, exactly as `start` does, to the same session keys.
+  The task's status is `open` again until the next `TASK_CLOSED`. Nothing is reset: outbox, seq and the event
+  log continue.
+- The kickoff message names the round and carries only the new input plus one line: `[round n of task <id>:
+  you already hold this task's context; re-read only what changed]`. It does not resend the original brief.
+- Wall budget for the round starts at `ROUND_STARTED`. Resume (§8) is unchanged and applies per round.
+- `swarm list` shows the round number; `swarm show` groups the timeline by round.
+- Acceptance: continue a done task → the same session ids receive the round-2 kickoff (asserted by session id,
+  not key), the round runs build → audit → test → DONE, round 1 events are untouched; continue is refused for a
+  cancelled task, a busy open task, and a follow-up file with an unknown key; a gateway restart mid-round 2
+  resumes round 2 (§8).
+
 ## 11. Later
 Fan-out/join (§6); child tasks with a depth limit; a reserved concurrency lane for interactive sessions;
 per-role thinking defaults from R&D; a board generated from `events.jsonl`.

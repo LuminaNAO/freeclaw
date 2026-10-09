@@ -13,13 +13,13 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands.js";
 import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.js";
+import { splitLeadingCommandPrefix } from "./directive-parsing.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
-import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
-import { stripInlineStatus } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -200,10 +200,34 @@ export async function resolveReplyDirectives(params: {
     (alias) => !reservedCommands.has(alias.toLowerCase()),
   );
   const allowStatusDirective = allowTextCommands && command.isAuthorizedSender;
-  let parsedDirectives = parseInlineDirectives(commandText, {
-    modelAliases: configuredAliases,
-    allowStatusDirective,
-  });
+  // Only a message whose first meaningful token starts with `/` carries directives
+  // (docs/design/no-embedded-slash-commands.md §2.1-§2.3). Everything else is plain text.
+  const isIgnorableLeadingToken = isGroup
+    ? (token: string) => stripMentions(token, ctx, cfg, agentId).length === 0
+    : undefined;
+  const parseLeadingDirectives = (
+    text: string,
+    skipSenderLabel: boolean,
+  ): InlineDirectives | null => {
+    const { head, rest } = splitLeadingCommandPrefix(text, {
+      skipEnvelope: true,
+      skipSenderLabel,
+      isIgnorableToken: isIgnorableLeadingToken,
+    });
+    if (!rest.startsWith("/")) {
+      return null;
+    }
+    const parsed = parseInlineDirectives(rest, {
+      modelAliases: configuredAliases,
+      allowStatusDirective,
+    });
+    if (parsed.cleaned === rest.trim()) {
+      return null;
+    }
+    return { ...parsed, cleaned: head ? `${head}${parsed.cleaned}`.trim() : parsed.cleaned };
+  };
+  const leadingDirectives = parseLeadingDirectives(commandText, false);
+  let parsedDirectives = leadingDirectives ?? clearInlineDirectives(commandText.trim());
   const hasInlineStatus =
     parsedDirectives.hasStatusDirective && parsedDirectives.cleaned.trim().length > 0;
   if (hasInlineStatus) {
@@ -271,37 +295,17 @@ export async function resolveReplyDirectives(params: {
         queueReset: false,
       };
   const existingBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  let cleanedBody = (() => {
+  // The prompt body is only rewritten when the command text opened with a directive run;
+  // otherwise the model sees the message unchanged (§2.2).
+  const cleanedBody = (() => {
     if (!existingBody) {
       return parsedDirectives.cleaned;
     }
-    if (!sessionCtx.CommandBody && !sessionCtx.RawBody) {
-      return parseInlineDirectives(existingBody, {
-        modelAliases: configuredAliases,
-        allowStatusDirective,
-      }).cleaned;
+    if (!leadingDirectives) {
+      return existingBody;
     }
-
-    const markerIndex = existingBody.indexOf(CURRENT_MESSAGE_MARKER);
-    if (markerIndex < 0) {
-      return parseInlineDirectives(existingBody, {
-        modelAliases: configuredAliases,
-        allowStatusDirective,
-      }).cleaned;
-    }
-
-    const head = existingBody.slice(0, markerIndex + CURRENT_MESSAGE_MARKER.length);
-    const tail = existingBody.slice(markerIndex + CURRENT_MESSAGE_MARKER.length);
-    const cleanedTail = parseInlineDirectives(tail, {
-      modelAliases: configuredAliases,
-      allowStatusDirective,
-    }).cleaned;
-    return `${head}${cleanedTail}`;
+    return parseLeadingDirectives(existingBody, true)?.cleaned ?? existingBody;
   })();
-
-  if (allowStatusDirective) {
-    cleanedBody = stripInlineStatus(cleanedBody).cleaned;
-  }
 
   sessionCtx.BodyForAgent = cleanedBody;
   sessionCtx.Body = cleanedBody;

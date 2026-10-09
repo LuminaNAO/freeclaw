@@ -78,6 +78,7 @@ openclaw swarm list [--json]               # tasks with status, sha, recent even
 openclaw swarm show <task-id> [--json]     # models per role, event log, handover timeline
 openclaw swarm cancel <task-id> [--reason] # stop every task session, close the task
 openclaw swarm answer <task-id> <message>  # answer the taskmaster; logged as OPERATOR
+openclaw swarm continue <task-id> --file <followup.yaml>  # next round on the same sessions
 ```
 
 - `start --file` resolves a relative path against the directory you run the command from (or
@@ -96,10 +97,37 @@ openclaw swarm answer <task-id> <message>  # answer the taskmaster; logged as OP
   still active there).
 
 The same operations are gateway methods: `swarm.start`, `swarm.list`, `swarm.show`,
-`swarm.cancel`, `swarm.answer`.
+`swarm.cancel`, `swarm.answer`, `swarm.continue`.
 
 A task id is used once. A finished or cancelled task keeps its state on disk so `swarm show`
-still works, so start a new run under a new id.
+still works. Start new work under a new id; a follow-up to the same work is a new round of the
+same task (`swarm continue`, below).
+
+## Follow-up rounds
+
+`swarm continue <task-id> --file <followup.yaml>` runs another round of a task on the same
+worker sessions, so each worker keeps the context it already built.
+
+```yaml
+input: Also handle an empty name. # required
+done_when: both unit tests pass # optional; replaces the task's from now on
+budget: { wall: 1h } # optional; this round only
+```
+
+Any other key is refused. The task's contract, sessions, models, thinking, routes, repo and
+upstream stay as they are.
+
+- Allowed for a `done` task, or an `open` task with no active run in any of its sessions.
+  Refused for a `cancelled` task, and for an open task with an active run (use `swarm answer`
+  there).
+- Appends `ROUND_STARTED {round, input}` to the same `events.jsonl` (round 1 is the original
+  start), sets the task `open` again and sends the kickoff exactly as `start` does, to the same
+  session keys. Outbox, seq and the log continue; nothing is reset.
+- The kickoff carries only the new input under one line:
+  `[round n of task <id>: you already hold this task's context; re-read only what changed]`.
+- The round's `budget.wall` starts at `ROUND_STARTED`. Resume after a restart works per round.
+- `--file` resolves like `start --file`. `swarm list` shows the round (`r2`); `swarm show`
+  returns `round` and `rounds` (one handover timeline per round) and prints them grouped.
 
 ## How a task flows
 

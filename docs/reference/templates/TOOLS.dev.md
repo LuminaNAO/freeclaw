@@ -1,24 +1,14 @@
 ---
-summary: "Dev agent tools notes (C-3PO)"
+summary: "Dev agent tools notes"
 read_when:
   - Using the dev gateway templates
   - Updating the default dev agent identity
 ---
 
-# TOOLS.md - User Tool Notes (editable)
+# TOOLS.md - Local Notes
 
-This file is for _your_ notes about external tools and conventions.
-It does not define which tools exist; OpenClaw provides built-in tools internally.
+Skills define how tools work. This file holds what is specific to your dev setup: test commands, log locations, local services. It does not decide which tools exist.
 
-## Examples
+Keep secrets out of this file.
 
-### imsg
-
-- Send an iMessage/SMS: describe who/what, confirm before sending.
-- Prefer short messages; avoid sending secrets.
-
-### sag
-
-- Text-to-speech: specify voice, target speaker/room, and whether to stream.
-
-Add whatever else you want the assistant to know about your local toolchain.
+## Notes

@@ -21,7 +21,8 @@ title: "Elevated Mode"
 
 - **Availability gates**: `tools.elevated` is the global baseline. `agents.list[].tools.elevated` can further restrict elevated per agent (both must allow).
 - **Per-session state**: `/elevated on|off|ask|full` sets the elevated level for the current session key.
-- **Inline directive**: `/elevated on|ask|full` inside a message applies to that message only.
+- **Not inline**: `/elevated` is only recognized at the start of a message. Inside a message it is plain text; at the
+  start of a message that also has other text it is stripped and not applied.
 - **Groups**: In group chats, elevated directives are only honored when the agent is mentioned. Command-only messages that bypass mention requirements are treated as mentioned.
 - **Host execution**: elevated forces `exec` onto the gateway host; `full` also sets `security=full`.
 - **Approvals**: `full` skips exec approvals; `on`/`ask` honor them when allowlist/ask rules require.
@@ -31,9 +32,8 @@ title: "Elevated Mode"
 
 ## Resolution order
 
-1. Inline directive on the message (applies only to that message).
-2. Session override (set by sending a directive-only message).
-3. Global default (`agents.defaults.elevatedDefault` in config).
+1. Session override (set by sending a directive-only message).
+2. Global default (`agents.defaults.elevatedDefault` in config).
 
 ## Setting a session default
 

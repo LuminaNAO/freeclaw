@@ -8,6 +8,7 @@ import { resolveGroupAdapter } from "./src/group.js";
 import { createSwarmHooks } from "./src/hooks.js";
 import { createSwarmMethods } from "./src/methods.js";
 import { resumeOpenTasks } from "./src/resume.js";
+import { ROUND_STARTED } from "./src/rounds.js";
 import { createRuntimeChannelSender } from "./src/upstream.js";
 import { WallDeadline } from "./src/wall.js";
 
@@ -64,6 +65,9 @@ export default function register(api: OpenClawPluginApi) {
         onEvent: (taskId, event) => {
           if (event.event === "TASK_STARTED") {
             wall?.arm(taskId);
+          } else if (event.event === ROUND_STARTED) {
+            // ARCH §12: the round's wall budget starts at ROUND_STARTED.
+            wall?.rearm(taskId);
           }
         },
       });

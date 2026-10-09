@@ -60,6 +60,7 @@ describe("swarm gateway methods", () => {
     expect(Object.keys(handlers).toSorted()).toEqual([
       "swarm.answer",
       "swarm.cancel",
+      "swarm.continue",
       "swarm.list",
       "swarm.show",
       "swarm.start",
@@ -81,6 +82,35 @@ describe("swarm gateway methods", () => {
       taskId: "task-600",
     });
     expect(cancelled.payload).toMatchObject({ status: "cancelled" });
+  });
+
+  it("swarm.continue starts round 2 of an idle task and refuses a relative path (ARCH §12)", async () => {
+    const stateDir = path.join(tmp, "continue");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const runtime = makeStubRuntime();
+    const engine = new SwarmEngine({ stateDir, runtime });
+    const handlers = createSwarmMethods(() => engine);
+    await callMethod(handlers, "swarm.start", { contract: CONTRACT });
+    const busy = await callMethod(handlers, "swarm.continue", {
+      taskId: "task-600",
+      followup: "input: more\n",
+    });
+    expect(busy.ok).toBe(false);
+    expect(busy.error?.message).toMatch(/swarm answer/);
+    await runtime.endAll();
+    const ok = await callMethod(handlers, "swarm.continue", {
+      taskId: "task-600",
+      followup: "input: more\n",
+    });
+    expect(ok).toMatchObject({ ok: true, payload: { taskId: "task-600", round: 2 } });
+    const listed = await callMethod(handlers, "swarm.list", {});
+    expect((listed.payload as { tasks: Array<{ round: number }> }).tasks[0]?.round).toBe(2);
+    const rel = await callMethod(handlers, "swarm.continue", {
+      taskId: "task-600",
+      file: "f.yaml",
+    });
+    expect(rel.error?.message).toMatch(/must be an absolute path/);
+    expect((await callMethod(handlers, "swarm.continue", { taskId: "task-600" })).ok).toBe(false);
   });
 
   it("puts the error text where gateway clients read it, not only in the payload", async () => {
@@ -279,6 +309,43 @@ describe("swarm CLI", () => {
     expect(formatDuration(7_200_000 + 180_000)).toBe("2h03m");
   });
 
+  it("continue resolves --file against the caller's cwd and prints the round (ARCH §12)", async () => {
+    const reply = {
+      taskId: "task-1",
+      id: "task-1",
+      round: 2,
+      sha: "abc",
+      sessions: { build: "agent:main:swarm:task-1:build" },
+    };
+    const callerDir = path.join(tmp, "caller");
+    const { call, lines } = await run(["continue", "task-1", "--file", "f.yaml"], reply, {
+      cwd: callerDir,
+    });
+    expect(call).toHaveBeenCalledWith("swarm.continue", expect.anything(), {
+      taskId: "task-1",
+      file: path.join(callerDir, "f.yaml"),
+    });
+    expect(lines[0]).toBe("continued task-1 round 2 @ abc");
+    expect(lines[1]).toMatch(/^\s+build\s+agent:main:swarm:task-1:build$/);
+    const json = await run(["continue", "task-1", "--file", "f.yaml", "--json"], reply, {
+      cwd: callerDir,
+    });
+    expect(JSON.parse(json.lines.join("\n"))).toEqual(reply);
+    const err = await run(["continue", "task-1", "--file", "f.yaml"], undefined, {
+      cwd: callerDir,
+      reject: new Error("task task-1 is cancelled; it cannot be continued"),
+    });
+    expect(err.errors).toEqual(["swarm: task task-1 is cancelled; it cannot be continued"]);
+    expect(err.failed).toBe(1);
+  });
+
+  it("list shows the round (ARCH §12)", async () => {
+    const { lines } = await run(["list"], {
+      tasks: [{ id: "task-1", status: "open", round: 3, sha: "abc", ageMs: 0 }],
+    });
+    expect(lines[0]).toMatch(/^task-1\s+open\s+r3\s+abc/);
+  });
+
   it("cancel passes the task id and reason", async () => {
     const { call, lines } = await run(["cancel", "task-1", "--reason", "stop"], {
       status: "cancelled",
@@ -305,7 +372,7 @@ describe("swarm CLI", () => {
 });
 
 describe("swarm plugin registration", () => {
-  it("registers the tool, the model hook, five methods, the CLI and the service", () => {
+  it("registers the tool, the model hook, six methods, the CLI and the service", () => {
     const tools: Array<{ opts?: { name?: string } }> = [];
     const hooks: string[] = [];
     const methods: string[] = [];
@@ -330,6 +397,7 @@ describe("swarm plugin registration", () => {
     expect(methods.toSorted()).toEqual([
       "swarm.answer",
       "swarm.cancel",
+      "swarm.continue",
       "swarm.list",
       "swarm.show",
       "swarm.start",

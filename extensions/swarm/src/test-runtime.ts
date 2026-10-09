@@ -27,6 +27,21 @@ export function makeStubRuntime(
     label?: string;
   }> = [];
   const aborts: string[] = [];
+  /**
+   * Session store stand-in: one session id per session key, created on first use (patch or
+   * run) and kept, as the gateway keeps a session entry's id. `runSessionIds[i]` is the id
+   * runs[i] ran in, so tests can assert "same session" by id, not only by key.
+   */
+  const sessionIds = new Map<string, string>();
+  const runSessionIds: string[] = [];
+  const sessionIdFor = (sessionKey: string) => {
+    let id = sessionIds.get(sessionKey);
+    if (!id) {
+      id = `session-${sessionIds.size + 1}`;
+      sessionIds.set(sessionKey, id);
+    }
+    return id;
+  };
   let failuresLeft = opts.failRuns ?? 0;
   type WaitResult = { status: "ok" | "error" | "timeout"; error?: string };
   /** Runs started and not settled yet: runId → session key and the agent.wait resolver. */
@@ -41,6 +56,7 @@ export function makeStubRuntime(
         throw new Error(opts.runError ?? "gateway unavailable");
       }
       runs.push(params);
+      runSessionIds.push(sessionIdFor(params.sessionKey));
       const runId = params.idempotencyKey ?? `run-${runs.length}`;
       waits.set(
         runId,
@@ -75,6 +91,7 @@ export function makeStubRuntime(
           throw new Error(failure);
         }
         patches.push(params);
+        sessionIdFor(params.sessionKey);
         const [provider = "default", ...rest] = (params.model ?? "default/default").split("/");
         return { provider, model: rest.join("/") || "default" };
       },
@@ -112,6 +129,8 @@ export function makeStubRuntime(
     [...live.values()].filter((r) => r.sessionKey === sessionKey).length;
   return {
     runs,
+    runSessionIds,
+    sessionIds,
     patches,
     aborts,
     subagent,

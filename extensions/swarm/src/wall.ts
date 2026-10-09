@@ -1,11 +1,13 @@
 import { parseDuration } from "./contract.js";
 import type { SwarmEngine } from "./engine.js";
+import { currentRound, currentRoundEvents } from "./rounds.js";
 import { TASKMASTER } from "./routing.js";
 import { readTasksIndex } from "./store.js";
 
 // Wall deadline (ARCH §7 "Taskmaster dies / loses context"): one timer per open task at
 // createdAt + budget.wall. It only escalates; it never routes work and never re-prompts.
-// There is no step-silence watchdog (ARCH §7).
+// There is no step-silence watchdog (ARCH §7). ARCH §12: from round 2 on, the wall for the
+// round starts at its ROUND_STARTED and uses that round's budget.wall.
 
 export type Clock = {
   now: () => number;
@@ -48,14 +50,22 @@ export class WallDeadline {
       return;
     }
     const entry = readTasksIndex(this.engine.stateDir)[taskId];
-    const created = Date.parse(entry?.createdAt ?? "");
-    if (entry?.status !== "open" || !Number.isFinite(created)) {
+    let created = Date.parse(entry?.createdAt ?? "");
+    if (entry?.status !== "open") {
       return;
     }
     let wallMs: number;
     try {
-      wallMs = parseDuration(this.engine.loadState(taskId).contract.budget.wall);
+      const state = this.engine.loadState(taskId);
+      const round = currentRound(state.events);
+      if (round.round > 1 && round.ts !== null) {
+        created = round.ts;
+      }
+      wallMs = parseDuration(state.contract.budget.wall);
     } catch {
+      return;
+    }
+    if (!Number.isFinite(created)) {
       return;
     }
     const delay = Math.max(0, created + wallMs - this.clock.now());
@@ -63,6 +73,16 @@ export class WallDeadline {
       taskId,
       this.clock.setTimeout(() => void this.fire(taskId), delay),
     );
+  }
+
+  /** ARCH §12: a new round restarts the task's wall at its ROUND_STARTED. */
+  rearm(taskId: string): void {
+    const handle = this.timers.get(taskId);
+    if (handle !== undefined) {
+      this.clock.clearTimeout(handle);
+      this.timers.delete(taskId);
+    }
+    this.arm(taskId);
   }
 
   stop(): void {
@@ -75,7 +95,8 @@ export class WallDeadline {
   async fire(taskId: string): Promise<void> {
     await this.engine.locks.run(taskId, async () => {
       const state = this.engine.loadState(taskId);
-      const reported = state.events.some(
+      // ARCH §12: only the current round's reports count (round 1: the whole log).
+      const reported = currentRoundEvents(state.events).some(
         (e) => (e.kind === "upstream" && e.to === "upstream") || e.event === TASKMASTER_LOST,
       );
       if (state.status !== "open" || reported) {

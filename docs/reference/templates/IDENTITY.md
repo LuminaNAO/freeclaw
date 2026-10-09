@@ -6,7 +6,7 @@ read_when:
 
 # IDENTITY.md - Who Am I?
 
-_Fill this in during your first conversation. Make it yours._
+Fill this in during your first conversation.
 
 - **Name:**
   _(pick something you like)_
@@ -19,11 +19,4 @@ _Fill this in during your first conversation. Make it yours._
 - **Avatar:**
   _(workspace-relative path, http(s) URL, or data URI)_
 
----
-
-This isn't just metadata. It's the start of figuring out who you are.
-
-Notes:
-
-- Save this file at the workspace root as `IDENTITY.md`.
-- For avatars, use a workspace-relative path like `avatars/openclaw.png`.
+Use a workspace-relative avatar path such as `avatars/agent.png`.

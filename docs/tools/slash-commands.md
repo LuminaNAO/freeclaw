@@ -8,22 +8,28 @@ title: "Slash Commands"
 
 # Slash commands
 
-Commands are handled by the Gateway. Most commands must be sent as a **standalone** message that starts with `/`.
+Commands are handled by the Gateway. A message is a command or directive message **only if its first non-whitespace
+character is `/`**. A `/word` anywhere else in a message is plain text: nothing runs, nothing is stripped, and the model
+sees the message unchanged. Most commands must be sent as a **standalone** message.
 The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 
 There are two related systems:
 
 - **Commands**: standalone `/...` messages.
 - **Directives**: `/think`, `/fast`, `/verbose`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue`.
-  - Directives are stripped from the message before the model sees it.
-  - In normal chat messages (not directive-only), they are treated as “inline hints” and do **not** persist session settings.
+  - Directives are only recognized at the **start** of a message. Only the leading run of directives is parsed; a
+    directive-looking token after ordinary text is plain text.
   - In directive-only messages (the message contains only directives), they persist to the session and reply with an acknowledgement.
+  - When a message starts with directives and then has other text (e.g. `/think high explain X`), the leading
+    directives are stripped and the rest (`explain X`) goes to the model. The directives are **not** applied: they
+    neither persist nor change that turn. Send the directive on its own to change a setting.
   - Directives are only applied for **authorized senders**. If `commands.allowFrom` is set, it is the only
     allowlist used; otherwise authorization comes from channel allowlists/pairing plus `commands.useAccessGroups`.
     Unauthorized senders see directives treated as plain text.
 
-There are also a few **inline shortcuts** (allowlisted/authorized senders only): `/help`, `/commands`, `/status`, `/whoami` (`/id`).
-They run immediately, are stripped before the model sees the message, and the remaining text continues through the normal flow.
+`/help`, `/commands`, `/whoami` (`/id`) also run when they **start** a longer message (allowlisted/authorized senders
+only): the command replies immediately, is stripped, and the remaining text continues through the normal flow. Inside a
+message (e.g. `hey /status`) they are plain text.
 
 ## Config
 
@@ -136,10 +142,10 @@ Notes:
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
 - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).
 - **Group mention gating:** command-only messages from allowlisted senders bypass mention requirements.
-- **Inline shortcuts (allowlisted senders only):** certain commands also work when embedded in a normal message and are stripped before the model sees the remaining text.
-  - Example: `hey /status` triggers a status reply, and the remaining text continues through the normal flow.
-- Currently: `/help`, `/commands`, `/status`, `/whoami` (`/id`).
-- Unauthorized command-only messages are silently ignored, and inline `/...` tokens are treated as plain text.
+- **No embedded commands:** a `/word` that is not at the start of the message is never executed or stripped.
+  - Example: `hey /status` and `please use /model opus for this` go to the model unchanged; no status reply, no model change.
+  - `/status` runs only as a standalone message.
+- Unauthorized command-only messages are silently ignored, and their `/...` tokens are treated as plain text.
 - **Skill commands:** `user-invocable` skills are exposed as slash commands. Names are sanitized to `a-z0-9_` (max 32 chars); collisions get numeric suffixes (e.g. `_2`).
   - `/skill <name> [input]` runs a skill by name (useful when native command limits prevent per-skill commands).
   - By default, skill commands are forwarded to the model as a normal request.

@@ -1,45 +1,45 @@
+import {
+  type LeadingCommandPrefixOptions,
+  splitLeadingCommandPrefix,
+} from "./directive-parsing.js";
 import { collapseInlineHorizontalWhitespace } from "./reply-inline-whitespace.js";
 
-const INLINE_SIMPLE_COMMAND_ALIASES = new Map<string, string>([
+const LEADING_SIMPLE_COMMAND_ALIASES = new Map<string, string>([
   ["/help", "/help"],
   ["/commands", "/commands"],
   ["/whoami", "/whoami"],
   ["/id", "/whoami"],
 ]);
-const INLINE_SIMPLE_COMMAND_RE = /(?:^|\s)\/(help|commands|whoami|id)(?=$|\s|:)/i;
+// Anchored: only a message that starts with the command qualifies
+// (docs/design/no-embedded-slash-commands.md §2.1-§2.3).
+const LEADING_SIMPLE_COMMAND_RE = /^\/(help|commands|whoami|id)(?=$|\s|:)(?:\s*:)?/i;
 
-const INLINE_STATUS_RE = /(?:^|\s)\/status(?=$|\s|:)(?:\s*:\s*)?/gi;
-
-export function extractInlineSimpleCommand(body?: string): {
+/**
+ * Detect `/help`, `/commands`, `/whoami` or `/id` at the start of a message.
+ * A message that does not start with `/` never matches; `/word` tokens later in the
+ * message are plain text and are left untouched.
+ */
+export function extractLeadingSimpleCommand(
+  body?: string,
+  options?: LeadingCommandPrefixOptions,
+): {
   command: string;
   cleaned: string;
 } | null {
   if (!body) {
     return null;
   }
-  const match = body.match(INLINE_SIMPLE_COMMAND_RE);
-  if (!match || match.index === undefined) {
+  const { head, rest } = splitLeadingCommandPrefix(body, { skipEnvelope: true, ...options });
+  const match = rest.match(LEADING_SIMPLE_COMMAND_RE);
+  if (!match) {
     return null;
   }
-  const alias = `/${match[1].toLowerCase()}`;
-  const command = INLINE_SIMPLE_COMMAND_ALIASES.get(alias);
+  const command = LEADING_SIMPLE_COMMAND_ALIASES.get(`/${match[1].toLowerCase()}`);
   if (!command) {
     return null;
   }
-  const cleaned = collapseInlineHorizontalWhitespace(body.replace(match[0], " ")).trim();
-  return { command, cleaned };
-}
-
-export function stripInlineStatus(body: string): {
-  cleaned: string;
-  didStrip: boolean;
-} {
-  const trimmed = body.trim();
-  if (!trimmed) {
-    return { cleaned: "", didStrip: false };
-  }
-  // Use [^\S\n]+ instead of \s+ to only collapse horizontal whitespace,
-  // preserving newlines so multi-line messages keep their paragraph structure.
-  const cleaned = collapseInlineHorizontalWhitespace(trimmed.replace(INLINE_STATUS_RE, " ")).trim();
-  return { cleaned, didStrip: cleaned !== trimmed };
+  const remainder = rest.slice(match[0].length);
+  const cleaned = collapseInlineHorizontalWhitespace(`${head} ${remainder}`).trim();
+  const hasContent = remainder.trim().length > 0;
+  return { command, cleaned: hasContent ? cleaned : "" };
 }

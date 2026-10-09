@@ -98,13 +98,20 @@ describe("extractModelDirective", () => {
       expect(result.rawModel).toBe("sonnet");
     });
 
-    it("recognizes alias mid-message", () => {
+    it("treats a mid-message alias as plain text", () => {
       const result = extractModelDirective("switch to /opus please", {
         aliases: ["opus"],
       });
+      expect(result.hasDirective).toBe(false);
+      expect(result.rawModel).toBeUndefined();
+      expect(result.cleaned).toBe("switch to /opus please");
+    });
+
+    it("recognizes a leading alias and keeps the rest", () => {
+      const result = extractModelDirective("/opus please", { aliases: ["opus"] });
       expect(result.hasDirective).toBe(true);
       expect(result.rawModel).toBe("opus");
-      expect(result.cleaned).toBe("switch to please");
+      expect(result.cleaned).toBe("please");
     });
 
     it("is case-insensitive for aliases", () => {
@@ -148,10 +155,17 @@ describe("extractModelDirective", () => {
   });
 
   describe("edge cases", () => {
-    it("absorbs path-like segments when /model includes extra slashes", () => {
-      const result = extractModelDirective("thats not /model gpt-5/tmp/hello");
+    it("absorbs path-like segments when a leading /model includes extra slashes", () => {
+      const result = extractModelDirective("/model gpt-5/tmp/hello");
       expect(result.hasDirective).toBe(true);
-      expect(result.cleaned).toBe("thats not");
+      expect(result.cleaned).toBe("");
+    });
+
+    it("treats a mid-message /model as plain text", () => {
+      const result = extractModelDirective("please use /model opus for this");
+      expect(result.hasDirective).toBe(false);
+      expect(result.rawModel).toBeUndefined();
+      expect(result.cleaned).toBe("please use /model opus for this");
     });
 
     it("handles alias with special regex characters", () => {

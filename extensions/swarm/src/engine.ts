@@ -3,6 +3,7 @@ import { briefFor } from "./briefs.js";
 import { loadContract, type Contract, type ContractDefaults } from "./contract.js";
 import { formatEnvelope, Mailbox, msgIdFor, type RunEnd, type RuntimeLike } from "./delivery.js";
 import { noGroupAdapter, type SwarmGroupAdapter } from "./group.js";
+import { effectiveContract } from "./rounds.js";
 import {
   renderRouteMessage,
   resolveRoute,
@@ -154,12 +155,14 @@ export class SwarmEngine {
       throw new Error(`task "${taskId}" not found`);
     }
     const contract = loadContract(this.stateDir, taskId, this.defaults);
+    const events = readEvents(this.stateDir, taskId);
     return {
-      contract,
+      // ARCH §12: the current round's input, done_when and wall; round 1 is the contract as is.
+      contract: effectiveContract(contract, events),
       status: entry.status,
       // ARCH §4: the sha is information, not a gate; the task reports the repo head.
       sha: readRepoHead(contract.repo) ?? entry.sha,
-      events: readEvents(this.stateDir, taskId),
+      events,
     };
   }
 

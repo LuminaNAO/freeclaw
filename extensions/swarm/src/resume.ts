@@ -1,6 +1,7 @@
 import { briefFor } from "./briefs.js";
 import { msgIdFor } from "./delivery.js";
 import { lastInputSeqFor, type SwarmEngine, type TaskState } from "./engine.js";
+import { currentRoundEvents } from "./rounds.js";
 import { TASKMASTER } from "./routing.js";
 import { appendOutbox, readOutbox, readTasksIndex, type OutboxEntry } from "./store.js";
 
@@ -109,8 +110,11 @@ async function resumeTask(engine: SwarmEngine, taskId: string, summary: ResumeSu
     return;
   }
   // A terminal upstream event in the log means the task finished before the index caught up.
+  // ARCH §12: per round; an earlier round's DONE does not close the current one.
   if (
-    state.events.some((e) => e.event === "DONE" && (e.from === TASKMASTER || e.kind === "upstream"))
+    currentRoundEvents(state.events).some(
+      (e) => e.event === "DONE" && (e.from === TASKMASTER || e.kind === "upstream"),
+    )
   ) {
     engine.close(taskId, "done");
     return;

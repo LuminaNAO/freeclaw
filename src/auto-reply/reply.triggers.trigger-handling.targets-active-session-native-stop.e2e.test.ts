@@ -228,7 +228,7 @@ describe("trigger handling", () => {
         if (testCase.assertPrompt) {
           const prompt = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0]?.prompt ?? "";
           expect(prompt).toContain("Give me the status");
-          expect(prompt).not.toContain("/thinking high");
+          // History context is plain text: an earlier "/thinking high" is not stripped or applied.
           expect(prompt).not.toContain("/think high");
         }
         getRunEmbeddedPiAgentMock().mockClear();

@@ -3,6 +3,7 @@ import path from "node:path";
 import { taskmasterBrief, workerBrief } from "./briefs.js";
 import { parseContract, serializeContract, SwarmContractError, taskDirFor } from "./contract.js";
 import { readRepoHead, type SwarmEngine } from "./engine.js";
+import { ROUND_STARTED, roundStarts } from "./rounds.js";
 import { TASKMASTER, UPSTREAM } from "./routing.js";
 import {
   readEvents,
@@ -34,7 +35,7 @@ export type StartedTask = {
   workers: Record<string, AppliedModel>;
 };
 
-function firstRole(routes: { from: string }[], workers: string[]): string {
+export function firstRole(routes: { from: string }[], workers: string[]): string {
   return workers.includes("build") ? "build" : (routes[0]?.from ?? workers[0] ?? "build");
 }
 
@@ -170,6 +171,8 @@ export async function startTask(
 export type TaskSummary = {
   id: string;
   status: TaskStatus;
+  /** ARCH §12: the current round (1 until the first `swarm continue`). */
+  round: number;
   sha: string;
   recentEvent?: string;
   updatedAt: string;
@@ -180,14 +183,18 @@ export function listTasks(stateDir: string, now = Date.now()): TaskSummary[] {
   return Object.entries(readTasksIndex(stateDir))
     .map(([id, entry]) => {
       let recentEvent: string | undefined;
+      let round = 1;
       try {
-        recentEvent = readEvents(stateDir, id).at(-1)?.event;
+        const events = readEvents(stateDir, id);
+        recentEvent = events.at(-1)?.event;
+        round = roundStarts(events).length;
       } catch {
         recentEvent = undefined;
       }
       return {
         id,
         status: entry.status,
+        round,
         sha: entry.sha,
         recentEvent,
         updatedAt: entry.updatedAt,
@@ -201,6 +208,10 @@ export type TaskDetail = HandoverTimeline & {
   id: string;
   status: TaskStatus;
   sha: string;
+  /** ARCH §12: the current round. */
+  round: number;
+  /** ARCH §12: the timeline grouped by round (round 1 = the original start). */
+  rounds: RoundTimeline[];
   contract: {
     kind: string;
     input: string;
@@ -241,23 +252,46 @@ export type HandoverTimeline = {
   activeMs: Record<string, number>;
 };
 
+export type RoundTimeline = HandoverTimeline & {
+  round: number;
+  /** Seq of the round's TASK_STARTED / ROUND_STARTED. */
+  seq: number;
+  input: string;
+};
+
+/** ARCH §12: one timeline per round, each over that round's slice of the log. */
+export function buildRoundTimelines(events: SwarmEvent[], now = Date.now()): RoundTimeline[] {
+  const rounds = roundStarts(events);
+  return rounds.map((r, i) => {
+    const next = rounds[i + 1];
+    const slice = events.filter(
+      (e) => (i === 0 || e.seq >= r.seq) && (next === undefined || e.seq < next.seq),
+    );
+    return { round: r.round, seq: r.seq, input: r.input, ...buildTimeline(slice, now) };
+  });
+}
+
 /**
  * Handover timeline (ARCH §4 "Logged": events.jsonl is the audit trail and board feed, §11 board).
  * A handover is the task kickoff (TASK_STARTED) or an emit the route table sent somewhere
  * (`to` set). Always computed over the whole log.
  */
 export function buildTimeline(events: SwarmEvent[], now = Date.now()): HandoverTimeline {
-  const started = events.find((e) => e.event === "TASK_STARTED") ?? events[0];
+  const started =
+    events.find((e) => e.event === "TASK_STARTED" || e.event === ROUND_STARTED) ?? events[0];
   const startedAt = started?.ts ?? null;
+  // ARCH §12: a close from an earlier round does not end a task that was continued.
+  const lastRound = events.findLast((e) => e.kind === "system" && e.event === ROUND_STARTED);
   const closed = events.findLast((e) => e.event === "TASK_CLOSED");
-  const endedAt = closed?.ts ?? null;
+  const endedAt = closed && (!lastRound || closed.seq > lastRound.seq) ? closed.ts : null;
   const durationMs = startedAt === null ? null : Math.max(0, (endedAt ?? now) - startedAt);
 
   const handovers: Handover[] = [];
   let prevTs = startedAt ?? 0;
   for (const e of events) {
     const routed =
-      (e.kind === "system" && e.event === "TASK_STARTED" && e.to) || (e.kind === "emit" && e.to);
+      (e.kind === "system" && (e.event === "TASK_STARTED" || e.event === ROUND_STARTED) && e.to) ||
+      (e.kind === "emit" && e.to);
     if (!routed || !e.to) {
       continue;
     }
@@ -309,10 +343,13 @@ export function showTask(engine: SwarmEngine, taskId: string, limit?: number): T
     }
   }
   const events = limit && limit > 0 ? state.events.slice(-limit) : state.events;
+  const rounds = buildRoundTimelines(state.events);
   return {
     id: taskId,
     status: state.status,
     sha: state.sha,
+    round: rounds.length,
+    rounds,
     contract: {
       kind: state.contract.kind,
       input: state.contract.input,

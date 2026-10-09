@@ -6,9 +6,11 @@ import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
@@ -79,6 +81,27 @@ describe("ensureAgentWorkspace", () => {
 
     await expectBootstrapSeeded(tempDir);
     expect((await readOnboardingState(tempDir)).onboardingCompletedAt).toBeUndefined();
+  });
+
+  it("seeds only missing files and never rewrites existing ones", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const names = [
+      DEFAULT_AGENTS_FILENAME,
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_TOOLS_FILENAME,
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_USER_FILENAME,
+      DEFAULT_HEARTBEAT_FILENAME,
+    ];
+    for (const name of names) {
+      await writeWorkspaceFile({ dir: tempDir, name, content: `custom ${name}` });
+    }
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    for (const name of names) {
+      await expect(fs.readFile(path.join(tempDir, name), "utf-8")).resolves.toBe(`custom ${name}`);
+    }
   });
 
   it("recovers partial initialization by creating BOOTSTRAP.md when marker is missing", async () => {

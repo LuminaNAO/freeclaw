@@ -353,7 +353,7 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
-  it("strips inline elevated directives from the user text (does not persist session override)", async () => {
+  it("leaves mid-message elevated tokens in the user text as plain text (no session override)", async () => {
     await withTempHome(async (home) => {
       runEmbeddedPiAgentMock.mockResolvedValue({
         payloads: [{ text: "ok" }],
@@ -382,8 +382,7 @@ describe("directive behavior", () => {
       const calls = runEmbeddedPiAgentMock.mock.calls;
       expect(calls.length).toBeGreaterThan(0);
       const call = calls[0]?.[0];
-      expect(call?.prompt).toContain("hello there");
-      expect(call?.prompt).not.toContain("/elevated");
+      expect(call?.prompt).toContain("hello there /elevated off");
     });
   });
 });

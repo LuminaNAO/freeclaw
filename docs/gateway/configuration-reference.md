@@ -1755,7 +1755,7 @@ Controls elevated (host) exec access:
 ```
 
 - Per-agent override (`agents.list[].tools.elevated`) can only further restrict.
-- `/elevated on|off|ask|full` stores state per session; inline directives apply to single message.
+- `/elevated on|off|ask|full` (sent as a directive-only message) stores state per session.
 - Elevated `exec` runs on the host, bypasses sandboxing.
 
 ### `tools.exec`

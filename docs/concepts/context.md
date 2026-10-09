@@ -131,15 +131,17 @@ Tools affect context in two ways:
 
 `/context detail` breaks down the biggest tool schemas so you can see what dominates.
 
-## Commands, directives, and “inline shortcuts”
+## Commands and directives
 
-Slash commands are handled by the Gateway. There are a few different behaviors:
+Slash commands are handled by the Gateway. Only a message whose first non-whitespace character is `/` is treated as a
+command or directive:
 
 - **Standalone commands**: a message that is only `/...` runs as a command.
-- **Directives**: `/think`, `/verbose`, `/reasoning`, `/elevated`, `/model`, `/queue` are stripped before the model sees the message.
+- **Directives**: `/think`, `/verbose`, `/reasoning`, `/elevated`, `/model`, `/queue` at the start of a message.
   - Directive-only messages persist session settings.
-  - Inline directives in a normal message act as per-message hints.
-- **Inline shortcuts** (allowlisted senders only): certain `/...` tokens inside a normal message can run immediately (example: “hey /status”), and are stripped before the model sees the remaining text.
+  - Leading directives followed by other text are stripped and not applied; the rest goes to the model.
+- **Everything else is plain text**: a `/...` token inside a normal message (example: “hey /status”) is not run and not
+  stripped; the model sees the message unchanged.
 
 Details: [Slash commands](/tools/slash-commands).
 

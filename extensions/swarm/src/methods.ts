@@ -1,9 +1,11 @@
 import path from "node:path";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/swarm";
+import { continueTask } from "./continue.js";
 import type { SwarmEngine } from "./engine.js";
 import { answerTask, cancelTask, listTasks, showTask, startTask } from "./tasks.js";
 
-// Gateway methods swarm.start / list / show / cancel / answer (ARCH §5, §9).
+// Gateway methods swarm.start / list / show / cancel / answer (ARCH §5, §9) and
+// swarm.continue (ARCH §12).
 
 type Handler = (opts: GatewayRequestHandlerOptions) => Promise<void>;
 
@@ -62,6 +64,23 @@ export function createSwarmMethods(
         );
       }
       return startTask(engine, { contractYaml, contractPath });
+    }),
+    "swarm.continue": guarded((engine, params) => {
+      const taskId = str(params, "taskId");
+      const followUpYaml = str(params, "followup");
+      const followUpPath = str(params, "file");
+      if (!taskId || (!followUpYaml && !followUpPath)) {
+        throw new Error(
+          "swarm.continue needs `taskId` and `file` (follow-up path) or `followup` (YAML text)",
+        );
+      }
+      // Same rule as swarm.start: the caller resolves a relative path, never the gateway.
+      if (!followUpYaml && followUpPath && !path.isAbsolute(followUpPath)) {
+        throw new Error(
+          `swarm.continue \`file\` must be an absolute path (got "${followUpPath}"); resolve it in the caller`,
+        );
+      }
+      return continueTask(engine, taskId, { followUpYaml, followUpPath });
     }),
     "swarm.list": guarded((engine) => ({ tasks: listTasks(engine.stateDir) })),
     "swarm.show": guarded((engine, params) => {

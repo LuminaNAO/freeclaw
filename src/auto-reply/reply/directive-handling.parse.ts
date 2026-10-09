@@ -64,14 +64,13 @@ export type InlineDirectives = {
   hasQueueOptions: boolean;
 };
 
-export function parseInlineDirectives(
-  body: string,
-  options?: {
-    modelAliases?: string[];
-    disableElevated?: boolean;
-    allowStatusDirective?: boolean;
-  },
-): InlineDirectives {
+type ParseDirectiveOptions = {
+  modelAliases?: string[];
+  disableElevated?: boolean;
+  allowStatusDirective?: boolean;
+};
+
+function parseDirectivePass(body: string, options?: ParseDirectiveOptions): InlineDirectives {
   const {
     cleaned: thinkCleaned,
     thinkLevel,
@@ -226,4 +225,94 @@ export function isDirectiveOnly(params: {
   const stripped = stripStructuralPrefixes(cleanedBody ?? "");
   const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;
   return noMentions.length === 0;
+}
+
+const DIRECTIVE_FIELD_GROUPS: Array<{
+  flag: keyof InlineDirectives;
+  fields: Array<keyof InlineDirectives>;
+}> = [
+  { flag: "hasThinkDirective", fields: ["thinkLevel", "rawThinkLevel"] },
+  { flag: "hasVerboseDirective", fields: ["verboseLevel", "rawVerboseLevel"] },
+  { flag: "hasFastDirective", fields: ["fastMode", "rawFastMode"] },
+  { flag: "hasReasoningDirective", fields: ["reasoningLevel", "rawReasoningLevel"] },
+  { flag: "hasElevatedDirective", fields: ["elevatedLevel", "rawElevatedLevel"] },
+  {
+    flag: "hasExecDirective",
+    fields: [
+      "execHost",
+      "execSecurity",
+      "execAsk",
+      "execNode",
+      "rawExecHost",
+      "rawExecSecurity",
+      "rawExecAsk",
+      "rawExecNode",
+      "hasExecOptions",
+      "invalidExecHost",
+      "invalidExecSecurity",
+      "invalidExecAsk",
+      "invalidExecNode",
+    ],
+  },
+  { flag: "hasStatusDirective", fields: [] },
+  { flag: "hasModelDirective", fields: ["rawModelDirective", "rawModelProfile"] },
+  {
+    flag: "hasQueueDirective",
+    fields: [
+      "queueMode",
+      "queueReset",
+      "rawQueueMode",
+      "debounceMs",
+      "cap",
+      "dropPolicy",
+      "rawDebounce",
+      "rawCap",
+      "rawDrop",
+      "hasQueueOptions",
+    ],
+  },
+];
+
+const MAX_LEADING_DIRECTIVE_PASSES = 16;
+
+/**
+ * Parse the leading run of directives in `body`.
+ *
+ * Only a message whose first non-whitespace character is `/` can carry directives
+ * (docs/design/no-embedded-slash-commands.md §2.1/§2.3). Every extractor is anchored
+ * to the start of the remaining text, so a directive-looking token after ordinary
+ * text is plain text and stays in `cleaned`. Passes repeat so that a leading run of
+ * several directives is consumed regardless of their order.
+ */
+export function parseInlineDirectives(
+  body: string,
+  options?: ParseDirectiveOptions,
+): InlineDirectives {
+  const result = parseDirectivePass(body, options);
+  for (let pass = 1; pass < MAX_LEADING_DIRECTIVE_PASSES; pass += 1) {
+    if (!result.cleaned.startsWith("/")) {
+      break;
+    }
+    const next = parseDirectivePass(result.cleaned, options);
+    if (next.cleaned === result.cleaned) {
+      break;
+    }
+    const merged = result as Record<keyof InlineDirectives, unknown>;
+    let addedDirective = false;
+    for (const group of DIRECTIVE_FIELD_GROUPS) {
+      if (next[group.flag] && !result[group.flag]) {
+        addedDirective = true;
+        merged[group.flag] = true;
+        for (const field of group.fields) {
+          merged[field] = next[field];
+        }
+      }
+    }
+    if (!addedDirective) {
+      // A repeated directive ends the leading run (one occurrence per directive, as before).
+      break;
+    }
+    result.cleaned = next.cleaned;
+  }
+  return result;
 }

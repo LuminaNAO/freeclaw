@@ -70,6 +70,7 @@ export type CliIo = {
 type TaskRow = {
   id: string;
   status: string;
+  round?: number;
   sha: string;
   recentEvent?: string;
   ageMs: number;
@@ -79,6 +80,7 @@ type EventRow = {
   ts: number;
   kind: string;
   event: string;
+  data?: Record<string, unknown>;
   from?: string;
   to?: string | null;
   sha?: string;
@@ -139,6 +141,23 @@ export function formatTimeline(t: Partial<Timeline>): string[] {
   const active = Object.entries(t.activeMs ?? {});
   if (active.length > 0) {
     lines.push(`  active: ${active.map(([r, ms]) => `${r}=${formatDuration(ms)}`).join("  ")}`);
+  }
+  return lines;
+}
+
+type RoundRow = Partial<Timeline> & { round: number; seq: number; input: string };
+
+/** ARCH §12: the timeline grouped by round; a one-round task prints as before. */
+export function formatRounds(shown: Partial<Timeline> & { rounds?: RoundRow[] }): string[] {
+  const rounds = shown.rounds ?? [];
+  if (rounds.length <= 1) {
+    return formatTimeline(shown);
+  }
+  const lines: string[] = [];
+  for (const r of rounds) {
+    const input = r.input.split("\n").find((l) => l.trim()) ?? "";
+    lines.push(`round ${r.round} (seq ${r.seq})  ${input.slice(0, 72)}`);
+    lines.push(...formatTimeline(r).map((l) => `  ${l}`));
   }
   return lines;
 }
@@ -209,6 +228,33 @@ export function registerSwarmCli(params: {
     }),
   );
 
+  withClientOptions(
+    swarm
+      .command("continue")
+      .description("Start a follow-up round on a task's same worker sessions (ARCH §12)")
+      .argument("<taskId>")
+      .requiredOption("--file <path>"),
+  ).action(
+    guarded(async (taskId: string, opts: CliOpts & { file: string }) => {
+      const file = resolveContractPath(opts.file, cwd());
+      const result = (await call("swarm.continue", opts, { taskId, file })) as {
+        taskId?: string;
+        id: string;
+        round: number;
+        sha: string;
+        sessions: Record<string, string>;
+      };
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+        return;
+      }
+      log(`continued ${result.taskId ?? result.id} round ${result.round} @ ${result.sha}`);
+      for (const [role, sessionKey] of Object.entries(result.sessions)) {
+        log(`  ${role.padEnd(10)} ${sessionKey}`);
+      }
+    }),
+  );
+
   withClientOptions(swarm.command("list").description("List tasks")).action(
     guarded(async (opts: CliOpts) => {
       const { tasks } = (await call("swarm.list", opts, {})) as {
@@ -224,7 +270,7 @@ export function registerSwarmCli(params: {
       }
       for (const t of tasks) {
         log(
-          `${t.id.padEnd(24)} ${t.status.padEnd(9)} ${t.sha.padEnd(10)} ${formatAge(t.ageMs).padStart(6)}  ${t.recentEvent ?? ""}`,
+          `${t.id.padEnd(24)} ${t.status.padEnd(9)} ${`r${t.round ?? 1}`.padEnd(4)} ${t.sha.padEnd(10)} ${formatAge(t.ageMs).padStart(6)}  ${t.recentEvent ?? ""}`,
         );
       }
     }),
@@ -247,6 +293,7 @@ export function registerSwarmCli(params: {
         sha: string;
         models: Record<string, { contract?: string; applied?: string; observed: string[] }>;
         events: EventRow[];
+        rounds?: RoundRow[];
       } & Partial<Timeline>;
       if (opts.json) {
         log(JSON.stringify(shown, null, 2));
@@ -259,12 +306,15 @@ export function registerSwarmCli(params: {
         );
       }
       for (const e of shown.events) {
+        if (e.kind === "system" && e.event === "ROUND_STARTED") {
+          log(`  -- round ${typeof e.data?.round === "number" ? e.data.round : "?"} --`);
+        }
         const when = new Date(e.ts).toISOString().slice(11, 19);
         log(
           `  ${String(e.seq).padStart(4)} ${when} ${e.kind.padEnd(8)} ${e.event.padEnd(26)} ${e.from ?? ""}${e.to ? ` -> ${e.to}` : ""}`,
         );
       }
-      for (const line of formatTimeline(shown)) {
+      for (const line of formatRounds(shown)) {
         log(line);
       }
     }),

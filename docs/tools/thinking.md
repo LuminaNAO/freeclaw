@@ -9,7 +9,8 @@ title: "Thinking Levels"
 
 ## What it does
 
-- Inline directive in any inbound body: `/t <level>`, `/think:<level>`, or `/thinking <level>`.
+- Directive at the start of a message: `/t <level>`, `/think:<level>`, or `/thinking <level>`. Inside a message these
+  tokens are plain text and are passed to the model unchanged.
 - Levels (aliases): `off | minimal | low | medium | high | xhigh | adaptive`
   - minimal → “think”
   - low → “think hard”
@@ -26,10 +27,9 @@ title: "Thinking Levels"
 
 ## Resolution order
 
-1. Inline directive on the message (applies only to that message).
-2. Session override (set by sending a directive-only message).
-3. Global default (`agents.defaults.thinkingDefault` in config).
-4. Fallback: `adaptive` for Anthropic Claude 4.6 models, `low` for other reasoning-capable models, `off` otherwise.
+1. Session override (set by sending a directive-only message).
+2. Global default (`agents.defaults.thinkingDefault` in config).
+3. Fallback: `adaptive` for Anthropic Claude 4.6 models, `low` for other reasoning-capable models, `off` otherwise.
 
 ## Setting a session default
 
@@ -48,10 +48,9 @@ title: "Thinking Levels"
 - Directive-only message toggles a session fast-mode override and replies `Fast mode enabled.` / `Fast mode disabled.`.
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
 - OpenClaw resolves fast mode in this order:
-  1. Inline/directive-only `/fast on|off`
-  2. Session override
-  3. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
-  4. Fallback: `off`
+  1. Session override (directive-only `/fast on|off`)
+  2. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
+  3. Fallback: `off`
 - For `openai/*`, fast mode applies the OpenAI fast profile: `service_tier=priority` when supported, plus low reasoning effort and low text verbosity.
 - For `openai-codex/*`, fast mode applies the same low-latency profile on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
 - For direct `anthropic/*` API-key requests, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
@@ -62,7 +61,7 @@ title: "Thinking Levels"
 - Levels: `on` (minimal) | `full` | `off` (default).
 - Directive-only message toggles session verbose and replies `Verbose logging enabled.` / `Verbose logging disabled.`; invalid levels return a hint without changing state.
 - `/verbose off` stores an explicit session override; clear it via the Sessions UI by choosing `inherit`.
-- Inline directive affects only that message; session/global defaults apply otherwise.
+- A `/verbose` token inside a normal message is plain text; only a directive-only message changes the level.
 - Send `/verbose` (or `/verbose:`) with no argument to see the current verbose level.
 - When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command). These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `on` or `full`.
@@ -83,7 +82,7 @@ title: "Thinking Levels"
 
 ## Heartbeats
 
-- Heartbeat probe body is the configured heartbeat prompt (default: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
+- Heartbeat probe body is the configured heartbeat prompt (default: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`). Directives in a heartbeat message follow the normal rule (only a leading `/` counts); avoid changing session defaults from heartbeats.
 - Heartbeat delivery defaults to the final payload only. To also send the separate `Reasoning:` message (when available), set `agents.defaults.heartbeat.includeReasoning: true` or per-agent `agents.list[].heartbeat.includeReasoning: true`.
 
 ## Web chat UI
