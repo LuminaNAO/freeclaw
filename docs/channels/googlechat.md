@@ -224,7 +224,7 @@ This means the webhook handler isn't registered. Common causes:
    openclaw config get channels.googlechat
    ```
 
-   If it returns "Config path not found", add the configuration (see [Config highlights](#config-highlights)).
+   If it returns `no config path "channels.googlechat"`, add the configuration (see [Config highlights](#config-highlights)).
 
 2. **Plugin not enabled**: Check plugin status:
 

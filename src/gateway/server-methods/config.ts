@@ -21,6 +21,7 @@ import {
 } from "../../config/redact-snapshot.js";
 import {
   buildConfigSchema,
+  describeConfigPathNotFound,
   lookupConfigSchema,
   type ConfigSchemaResponse,
 } from "../../config/schema.js";
@@ -302,10 +303,14 @@ export const configHandlers: GatewayRequestHandlers = {
     const schema = loadSchemaWithPlugins();
     const result = lookupConfigSchema(schema, path);
     if (!result) {
+      // ARCH config-path-hints §2.3: keep INVALID_REQUEST; suggestions in details + message.
+      const notFound = describeConfigPathNotFound(schema, path);
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "config schema path not found"),
+        errorShape(ErrorCodes.INVALID_REQUEST, notFound.message, {
+          details: { suggestions: notFound.suggestions },
+        }),
       );
       return;
     }

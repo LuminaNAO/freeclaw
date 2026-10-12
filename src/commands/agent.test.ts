@@ -1002,3 +1002,207 @@ describe("agentCommand", () => {
     });
   });
 });
+
+describe("agentCommand session override persistence (ARCH §3)", () => {
+  const sessionKey = "agent:main:subagent:override-mid-turn";
+  const modelsAllowlist = {
+    "anthropic/claude-opus-4-5": {},
+    "openai/gpt-5.2": {},
+    "openai/gpt-4.1-mini": {},
+  };
+  const catalog = [
+    { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+    { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+    { id: "gpt-5.2", name: "GPT-5.2", provider: "openai" },
+  ];
+
+  function runResult(provider: string, model: string) {
+    return {
+      payloads: [{ text: "ok" }],
+      meta: {
+        durationMs: 5,
+        agentMeta: {
+          sessionId: "session-override",
+          provider,
+          model,
+          usage: { input: 120, output: 30, cacheRead: 7, cacheWrite: 3 },
+        },
+      },
+    };
+  }
+
+  // Simulates the session_status tool writing a model selection mid-turn: it
+  // re-reads the store, applies the selection and writes the entry back whole.
+  async function simulateSessionStatusModelChange(
+    storePath: string,
+    selection: { provider: string; model: string; isDefault?: boolean },
+  ) {
+    const { applyModelOverrideToSessionEntry } = await import("../sessions/model-overrides.js");
+    await sessionsModule.updateSessionStore(storePath, (store) => {
+      const nextEntry = { ...store[sessionKey] } as sessionsModule.SessionEntry;
+      applyModelOverrideToSessionEntry({ entry: nextEntry, selection });
+      store[sessionKey] = nextEntry;
+    });
+  }
+
+  it.each([
+    { name: "no prior override", seed: {}, runProvider: "anthropic", runModel: "claude-opus-4-5" },
+    {
+      name: "prior override in the turn-start snapshot",
+      seed: { providerOverride: "openai", modelOverride: "gpt-4.1-mini" },
+      runProvider: "openai",
+      runModel: "gpt-4.1-mini",
+    },
+  ])("§3.1 keeps a tool-set override written mid-turn ($name)", async (c) => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        [sessionKey]: { sessionId: "session-override", updatedAt: Date.now(), ...c.seed },
+      });
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: modelsAllowlist,
+      });
+      vi.mocked(loadModelCatalog).mockResolvedValue(catalog);
+
+      vi.mocked(runEmbeddedPiAgent).mockImplementationOnce(async () => {
+        await simulateSessionStatusModelChange(store, { provider: "openai", model: "gpt-5.2" });
+        return runResult(c.runProvider, c.runModel);
+      });
+      await runAgentWithSessionKey(sessionKey);
+      expectLastRunProviderModel(c.runProvider, c.runModel);
+
+      const saved = readSessionStore<sessionsModule.SessionEntry>(store)[sessionKey];
+      expect(saved?.providerOverride).toBe("openai");
+      expect(saved?.modelOverride).toBe("gpt-5.2");
+      // §2.3: runtime model is not pinned to the run model when an override differs.
+      expect(saved?.model).toBeUndefined();
+      expect(saved?.modelProvider).toBeUndefined();
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce(runResult("openai", "gpt-5.2"));
+      await runAgentWithSessionKey(sessionKey);
+      expectLastRunProviderModel("openai", "gpt-5.2");
+    });
+  });
+  it("§3.2 keeps an override set via sessions.patch while the turn is running", async () => {
+    const { applySessionsPatchToStore } = await import("../gateway/sessions-patch.js");
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        [sessionKey]: { sessionId: "session-override", updatedAt: Date.now() },
+      });
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: modelsAllowlist,
+      });
+      vi.mocked(loadModelCatalog).mockResolvedValue(catalog);
+      const cfg = configModule.loadConfig();
+
+      vi.mocked(runEmbeddedPiAgent).mockImplementationOnce(async () => {
+        const applied = await sessionsModule.updateSessionStore(store, (live) =>
+          applySessionsPatchToStore({
+            cfg,
+            store: live,
+            storeKey: sessionKey,
+            patch: { key: sessionKey, model: "openai/gpt-5.2" },
+            loadGatewayModelCatalog: async () => catalog,
+          }),
+        );
+        expect(applied.ok).toBe(true);
+        return runResult("anthropic", "claude-opus-4-5");
+      });
+      await runAgentWithSessionKey(sessionKey);
+
+      const saved = readSessionStore<sessionsModule.SessionEntry>(store)[sessionKey];
+      expect(saved?.providerOverride).toBe("openai");
+      expect(saved?.modelOverride).toBe("gpt-5.2");
+      expect(saved?.model).toBeUndefined();
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce(runResult("openai", "gpt-5.2"));
+      await runAgentWithSessionKey(sessionKey);
+      expectLastRunProviderModel("openai", "gpt-5.2");
+    });
+  });
+
+  it("§3.3 a mid-turn reset (model=default) clears the override and it stays cleared", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-override",
+          updatedAt: Date.now(),
+          providerOverride: "openai",
+          modelOverride: "gpt-5.2",
+        },
+      });
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: modelsAllowlist,
+      });
+      vi.mocked(loadModelCatalog).mockResolvedValue(catalog);
+
+      vi.mocked(runEmbeddedPiAgent).mockImplementationOnce(async () => {
+        await simulateSessionStatusModelChange(store, {
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+          isDefault: true,
+        });
+        return runResult("openai", "gpt-5.2");
+      });
+      await runAgentWithSessionKey(sessionKey);
+      expectLastRunProviderModel("openai", "gpt-5.2");
+
+      const saved = readSessionStore<sessionsModule.SessionEntry>(store)[sessionKey];
+      expect(saved).not.toHaveProperty("providerOverride");
+      expect(saved).not.toHaveProperty("modelOverride");
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce(
+        runResult("anthropic", "claude-opus-4-5"),
+      );
+      await runAgentWithSessionKey(sessionKey);
+      expectLastRunProviderModel("anthropic", "claude-opus-4-5");
+      const after = readSessionStore<sessionsModule.SessionEntry>(store)[sessionKey];
+      expect(after).not.toHaveProperty("providerOverride");
+      expect(after).not.toHaveProperty("modelOverride");
+    });
+  });
+
+  it("§3.4 still updates usage fields and records the run model when no override is set", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-override",
+          updatedAt: Date.now(),
+          inputTokens: 1,
+          outputTokens: 1,
+          compactionCount: 2,
+        },
+      });
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: modelsAllowlist,
+      });
+      vi.mocked(loadModelCatalog).mockResolvedValue(catalog);
+      const result = runResult("anthropic", "claude-opus-4-5");
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        ...result,
+        meta: { ...result.meta, agentMeta: { ...result.meta.agentMeta, compactionCount: 1 } },
+      });
+
+      await runAgentWithSessionKey(sessionKey);
+
+      const saved = readSessionStore<sessionsModule.SessionEntry>(store)[sessionKey];
+      expect(saved?.modelProvider).toBe("anthropic");
+      expect(saved?.model).toBe("claude-opus-4-5");
+      expect(saved?.inputTokens).toBe(120);
+      expect(saved?.outputTokens).toBe(30);
+      expect(saved?.cacheRead).toBe(7);
+      expect(saved?.cacheWrite).toBe(3);
+      expect(saved?.compactionCount).toBe(3);
+      expect(saved?.contextTokens).toBeGreaterThan(0);
+      expect(saved?.abortedLastRun).toBe(false);
+      expect(saved?.modelOverride).toBeUndefined();
+    });
+  });
+});

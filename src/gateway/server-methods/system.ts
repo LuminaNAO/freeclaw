@@ -7,11 +7,28 @@ import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
+import { writeGatewayHeapSnapshot } from "../memory-evidence.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const systemHandlers: GatewayRequestHandlers = {
+  // docs/design/gateway-crash-log.md §3.1. Synchronous: the gateway pauses while V8 writes.
+  "gateway.heapSnapshot": ({ respond, context }) => {
+    const startedAt = Date.now();
+    try {
+      const file = writeGatewayHeapSnapshot();
+      const durationMs = Date.now() - startedAt;
+      context.logGateway.warn(`heap snapshot written on request (${durationMs}ms): ${file}`);
+      respond(true, { path: file, durationMs }, undefined);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `heap snapshot failed: ${String(err)}`),
+      );
+    }
+  },
   "gateway.identity.get": ({ respond }) => {
     const identity = loadOrCreateDeviceIdentity();
     respond(

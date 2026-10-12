@@ -124,4 +124,58 @@ describe("updateSessionStoreAfterAgentRun", () => {
       "once",
     );
   });
+  it("leaves user-owned fields written during the run untouched (ARCH §2.2, §2.3)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:main:override:${randomUUID()}`;
+    const sessionId = randomUUID();
+
+    const turnStart: SessionEntry = { sessionId, updatedAt: Date.now(), thinkingLevel: "low" };
+    const onDisk: SessionEntry = {
+      ...turnStart,
+      providerOverride: "openai",
+      modelOverride: "gpt-5.2",
+      thinkingLevel: "high",
+      verboseLevel: "on",
+      sendPolicy: "deny",
+      label: "renamed",
+    };
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: onDisk }, null, 2), "utf8");
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: turnStart };
+
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      result: {
+        payloads: [],
+        meta: {
+          agentMeta: {
+            provider: "anthropic",
+            model: "claude-opus-4-5",
+            usage: { input: 10, output: 5 },
+          },
+        },
+      } as never,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.2",
+      thinkingLevel: "high",
+      verboseLevel: "on",
+      sendPolicy: "deny",
+      label: "renamed",
+      inputTokens: 10,
+      outputTokens: 5,
+    });
+    expect(persisted).not.toHaveProperty("model");
+    expect(persisted).not.toHaveProperty("modelProvider");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-5.2");
+  });
 });

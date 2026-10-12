@@ -3,7 +3,9 @@ import {
   getActiveEmbeddedRunCount,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
+import { startGatewayMemorySampler } from "../../gateway/memory-evidence.js";
 import type { startGatewayServer } from "../../gateway/server.js";
+import { beginGatewayRun, removeRunMarker } from "../../infra/gateway-crash-log.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
@@ -25,12 +27,43 @@ const gatewayLog = createSubsystemLogger("gateway");
 
 type GatewayRunSignalAction = "stop" | "restart";
 
+function safeCrashLogCall<T>(fn: () => T, fallback: T): T {
+  try {
+    return fn();
+  } catch (err) {
+    gatewayLog.warn(`crash log / memory sampling unavailable: ${String(err)}`);
+    return fallback;
+  }
+}
+
 export async function runGatewayLoop(params: {
   start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: typeof defaultRuntime;
   lockPort?: number;
 }) {
   let lock = await acquireGatewayLock({ port: params.lockPort });
+  // docs/design/gateway-crash-log.md §1.1–§1.2: with the lock held, detect a crashed predecessor
+  // and write this run's marker; §2: start memory sampling for the life of the process.
+  const crash = safeCrashLogCall(() => beginGatewayRun(), null);
+  if (crash) {
+    gatewayLog.warn(
+      `previous gateway run (pid ${crash.pid}) ended without a clean shutdown: ${crash.reason}`,
+    );
+  }
+  const startSampler = () =>
+    safeCrashLogCall(
+      () =>
+        startGatewayMemorySampler({
+          log: { info: (msg) => gatewayLog.info(msg), warn: (msg) => gatewayLog.warn(msg) },
+        }),
+      () => {},
+    );
+  let stopMemorySampler = startSampler();
+  // Requested stop/restart: the next start must not report a crash (§1.1).
+  const markCleanShutdown = () => {
+    stopMemorySampler();
+    safeCrashLogCall(() => removeRunMarker(), undefined);
+  };
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
@@ -64,6 +97,9 @@ export async function runGatewayLoop(params: {
   };
   const handleRestartAfterServerClose = async () => {
     const hadLock = await releaseLockIfHeld();
+    // Remove before spawning so the child does not take this run for a crash. An in-process
+    // restart below rewrites it for the same pid.
+    markCleanShutdown();
     // Release the lock BEFORE spawning so the child can acquire it immediately.
     const respawn = restartGatewayProcessWithFreshPid();
     if (respawn.mode === "spawned" || respawn.mode === "supervised") {
@@ -87,10 +123,13 @@ export async function runGatewayLoop(params: {
     if (hadLock && !(await reacquireLockForInProcessRestart())) {
       return;
     }
+    safeCrashLogCall(() => beginGatewayRun(), null);
+    stopMemorySampler = startSampler();
     shuttingDown = false;
     restartResolver?.();
   };
   const handleStopAfterServerClose = async () => {
+    markCleanShutdown();
     await releaseLockIfHeld();
     exitProcess(0);
   };
@@ -111,6 +150,8 @@ export async function runGatewayLoop(params: {
     const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
+      // Still a requested stop/restart, not a crash.
+      markCleanShutdown();
       // Exit non-zero on restart timeout so launchd/systemd treats it as a
       // failure and triggers a clean process restart instead of assuming the
       // shutdown was intentional. Stop-timeout stays at 0 (graceful). (#36822)
@@ -226,6 +267,8 @@ export async function runGatewayLoop(params: {
         // swallow errors on subsequent in-process restarts to keep the
         // process alive (a crash would lose macOS TCC permissions). (#35862)
         if (isFirstStart) {
+          // A start that fails cleanly is reported by the caller, not logged as a crash.
+          markCleanShutdown();
           throw err;
         }
         server = null;

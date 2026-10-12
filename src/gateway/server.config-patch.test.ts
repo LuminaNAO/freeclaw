@@ -141,7 +141,34 @@ describe("gateway config methods", () => {
     });
 
     expect(res.ok).toBe(false);
-    expect(res.error?.message).toBe("config schema path not found");
+    expect(res.error?.code).toBe("INVALID_REQUEST");
+    expect(res.error?.message).toMatch(/^no config path "gateway\.notReal\.path"/);
+  });
+
+  it("returns config.schema.lookup path suggestions in error details", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: "instanceName",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("INVALID_REQUEST");
+    const details = (res.error as { details?: { suggestions?: unknown } } | undefined)?.details;
+    expect(details?.suggestions).toEqual(["gateway.instanceName"]);
+    expect(res.error?.message).toBe(
+      'no config path "instanceName"; did you mean: gateway.instanceName',
+    );
+  });
+
+  it("returns empty config.schema.lookup suggestions when nothing is close", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+      path: "zzqqxxyy.wwvvuu",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("INVALID_REQUEST");
+    expect(res.error?.message).toBe('no config path "zzqqxxyy.wwvvuu"');
+    const details = (res.error as { details?: { suggestions?: unknown } } | undefined)?.details;
+    expect(details?.suggestions).toEqual([]);
   });
 
   it.each([
@@ -168,7 +195,8 @@ describe("gateway config methods", () => {
     });
 
     expect(res.ok).toBe(false);
-    expect(res.error?.message).toBe("config schema path not found");
+    expect(res.error?.message).toBe("no config path (blocked path segment)");
+    expect(res.error?.message).not.toContain("constructor");
   });
 
   it("rejects config.patch when raw is null", async () => {

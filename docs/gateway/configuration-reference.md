@@ -2409,6 +2409,7 @@ See [Plugins](/tools/plugin).
     mode: "local", // local | remote
     port: 18789,
     bind: "loopback",
+    instanceName: "alpha", // optional; sent as X-OpenClaw-Instance on model requests (usage dashboards)
     auth: {
       mode: "token", // none | token | password | trusted-proxy
       token: "your-token",
@@ -2466,6 +2467,7 @@ See [Plugins](/tools/plugin).
 
 - `mode`: `local` (run gateway) or `remote` (connect to remote gateway). Gateway refuses to start unless `local`.
 - `port`: single multiplexed port for WS + HTTP. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
+- `instanceName`: operator label for this gateway, sent as the `X-OpenClaw-Instance` header on every model request so shared provider/usage dashboards can tell gateways apart. Unset omits the header. Full path: `gateway.instanceName`.
 - `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IP only), or `custom`.
 - **Legacy bind aliases**: use bind mode values in `gateway.bind` (`auto`, `loopback`, `lan`, `tailnet`, `custom`), not host aliases (`0.0.0.0`, `127.0.0.1`, `localhost`, `::`, `::1`).
 - **Docker note**: the default `loopback` bind listens on `127.0.0.1` inside the container. With Docker bridge networking (`-p 18789:18789`), traffic arrives on `eth0`, so the gateway is unreachable. Use `--network host`, or set `bind: "lan"` (or `bind: "custom"` with `customBindHost: "0.0.0.0"`) to listen on all interfaces.

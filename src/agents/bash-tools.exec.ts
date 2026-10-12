@@ -528,6 +528,14 @@ export function createExecTool(
       } else if (signal) {
         signal.addEventListener("abort", onAbortSignal, { once: true });
       }
+      // The tool signal is usually AbortSignal.any([toolSignal, runSignal]) (pi-tools.abort.ts).
+      // Node keeps a composite signal with a live abort listener in a process-wide strong set
+      // until it aborts; this listener's closure reaches the run (and its SessionManager), and the
+      // run reaches the source signals, so a listener left behind pins every finished exec call's
+      // run state for the life of the process. Detach once the call settles (gateway crash log
+      // ARCH §4 finding).
+      const detachAbortListener = () => signal?.removeEventListener("abort", onAbortSignal);
+      void run.promise.then(detachAbortListener, detachAbortListener);
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
         const resolveRunning = () =>

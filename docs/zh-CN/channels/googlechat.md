@@ -221,7 +221,7 @@ status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Al
    openclaw config get channels.googlechat
    ```
 
-   如果返回"Config path not found"，请添加配置（参见[配置要点](#配置要点)）。
+   如果返回 `no config path "channels.googlechat"`，请添加配置（参见[配置要点](#配置要点)）。
 
 2. **插件未启用**：检查插件状态：
 

@@ -618,6 +618,38 @@ describe("gateway agent handler", () => {
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
   });
 
+  it("does not write user-owned fields from the lookup snapshot into the store (session override persistence ARCH §2.2, §2.4)", async () => {
+    // Lookup snapshot predates a sessions.patch that set an override and levels.
+    mockMainSessionEntry({});
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          providerOverride: "openai",
+          modelOverride: "gpt-5.2",
+          thinkingLevel: "high",
+          sendPolicy: "allow",
+        }),
+      };
+      const result = await updater(store);
+      capturedEntry = store["agent:main:main"] as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await runMainAgent("test", "test-idem-override-kept");
+
+    expect(capturedEntry).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.2",
+      thinkingLevel: "high",
+      sendPolicy: "allow",
+    });
+  });
+
   it("handles missing cliSessionIds gracefully", async () => {
     mockMainSessionEntry({});
 

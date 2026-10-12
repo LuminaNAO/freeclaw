@@ -155,6 +155,16 @@ function dispatchAgentRunFromGateway(params: {
     });
 }
 
+function omitUndefinedFields<T extends object>(value: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(value)) {
+    if (field !== undefined) {
+      out[key] = field;
+    }
+  }
+  return out as T;
+}
+
 export const agentHandlers: GatewayRequestHandlers = {
   agent: async ({ params, respond, context, client, isWebchatConnect }) => {
     const p = params;
@@ -254,7 +264,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            `invalid agent params: unknown channel: ${String(normalized)}`,
+            `invalid agent params: unknown channel: ${normalized}`,
           ),
         );
         return;
@@ -384,22 +394,20 @@ export const agentHandlers: GatewayRequestHandlers = {
       resolvedGroupChannel = resolvedGroupChannel || inheritedGroup?.groupChannel;
       resolvedGroupSpace = resolvedGroupSpace || inheritedGroup?.groupSpace;
       const deliveryFields = normalizeSessionDeliveryFields(entry);
-      const nextEntryPatch: SessionEntry = {
+      // ARCH §2.2/§2.4: user-/tool-owned fields (model/provider overrides,
+      // thinking/verbose/reasoning levels, fastMode, sendPolicy) are not copied
+      // from the lookup snapshot — the in-lock merge keeps whatever is on disk —
+      // and no key is present with an `undefined` value, since mergeSessionEntry
+      // would let it overwrite the stored field.
+      const nextEntryPatch: SessionEntry = omitUndefinedFields({
         sessionId,
         updatedAt: now,
-        thinkingLevel: entry?.thinkingLevel,
-        fastMode: entry?.fastMode,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
         systemSent: entry?.systemSent,
-        sendPolicy: entry?.sendPolicy,
         skillsSnapshot: entry?.skillsSnapshot,
         deliveryContext: deliveryFields.deliveryContext,
         lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
         lastTo: deliveryFields.lastTo ?? entry?.lastTo,
         lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
-        modelOverride: entry?.modelOverride,
-        providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
         spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
@@ -410,7 +418,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         space: resolvedGroupSpace ?? entry?.space,
         cliSessionIds: entry?.cliSessionIds,
         claudeCliSessionId: entry?.claudeCliSessionId,
-      };
+      });
       sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
       const sendPolicy = resolveSendPolicy({
         cfg,

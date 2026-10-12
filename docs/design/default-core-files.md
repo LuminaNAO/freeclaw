@@ -80,8 +80,3 @@ appears once in the template set, not restated across files.
 
 No real names, client names, hosts, IPs, home paths or internal topology in templates or tests. Commit as the org
 identity, no attribution trailers.
-
-## 6. Hygiene
-
-No real names, client names, hosts, IPs, home paths or internal topology in templates or tests. Commit as the org
-identity, no attribution trailers.

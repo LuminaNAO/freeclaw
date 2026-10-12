@@ -55,57 +55,99 @@ export async function updateSessionStoreAfterAgentRun(params: {
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
-  const entry = sessionStore[sessionKey] ?? {
-    sessionId,
-    updatedAt: Date.now(),
-  };
-  const next: SessionEntry = {
-    ...entry,
-    sessionId,
-    updatedAt: Date.now(),
-    contextTokens,
-  };
-  setSessionRuntimeModel(next, {
-    provider: providerUsed,
-    model: modelUsed,
-  });
-  if (isCliProvider(providerUsed, cfg)) {
-    const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
-    if (cliSessionId) {
-      setCliSessionId(next, providerUsed, cliSessionId);
-    }
-  }
-  next.abortedLastRun = result.meta.aborted ?? false;
-  if (result.meta.systemPromptReport) {
-    next.systemPromptReport = result.meta.systemPromptReport;
-  }
-  if (hasNonzeroUsage(usage)) {
-    const input = usage.input ?? 0;
-    const output = usage.output ?? 0;
-    const totalTokens = deriveSessionTotalTokens({
-      usage,
-      contextTokens,
-      promptTokens,
-    });
-    next.inputTokens = input;
-    next.outputTokens = output;
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
-      next.totalTokens = totalTokens;
-      next.totalTokensFresh = true;
-    } else {
-      next.totalTokens = undefined;
-      next.totalTokensFresh = false;
-    }
-    next.cacheRead = usage.cacheRead ?? 0;
-    next.cacheWrite = usage.cacheWrite ?? 0;
-  }
-  if (compactionsThisRun > 0) {
-    next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
-  }
+  // ARCH §2.1: the end-of-run write is a patch of run-owned fields only, computed
+  // against the entry re-read inside the store lock — never the turn-start
+  // snapshot, so fields other writers changed during the turn (overrides set by
+  // tools, commands or sessions.patch) survive. ARCH §2.2: user-/tool-owned
+  // fields are never part of the patch.
   const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], next);
+    const existing = store[sessionKey];
+    const patch: Partial<SessionEntry> = {
+      sessionId,
+      updatedAt: Date.now(),
+      abortedLastRun: result.meta.aborted ?? false,
+    };
+    // ARCH §2.3: an override on disk that differs from the model this run used
+    // wins; do not pin the runtime model (or its context window) to the run.
+    const overrideSelected = hasDifferingModelOverride(existing, {
+      provider: providerUsed,
+      model: modelUsed,
+    });
+    if (!overrideSelected) {
+      patch.contextTokens = contextTokens;
+      setSessionRuntimeModel(patch as SessionEntry, {
+        provider: providerUsed,
+        model: modelUsed,
+      });
+    }
+    if (isCliProvider(providerUsed, cfg)) {
+      const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
+      if (cliSessionId) {
+        const cliPatch: SessionEntry = {
+          sessionId,
+          updatedAt: patch.updatedAt ?? Date.now(),
+          ...(existing?.cliSessionIds ? { cliSessionIds: existing.cliSessionIds } : {}),
+        };
+        setCliSessionId(cliPatch, providerUsed, cliSessionId);
+        if (cliPatch.cliSessionIds) {
+          patch.cliSessionIds = cliPatch.cliSessionIds;
+        }
+        if (cliPatch.claudeCliSessionId) {
+          patch.claudeCliSessionId = cliPatch.claudeCliSessionId;
+        }
+      }
+    }
+    if (result.meta.systemPromptReport) {
+      patch.systemPromptReport = result.meta.systemPromptReport;
+    }
+    let clearTotalTokens = false;
+    if (hasNonzeroUsage(usage)) {
+      const totalTokens = deriveSessionTotalTokens({
+        usage,
+        contextTokens,
+        promptTokens,
+      });
+      patch.inputTokens = usage.input ?? 0;
+      patch.outputTokens = usage.output ?? 0;
+      if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+        patch.totalTokens = totalTokens;
+        patch.totalTokensFresh = true;
+      } else {
+        // ARCH §2.4: no explicit-undefined keys in the patch; clear after merge.
+        clearTotalTokens = true;
+        patch.totalTokensFresh = false;
+      }
+      patch.cacheRead = usage.cacheRead ?? 0;
+      patch.cacheWrite = usage.cacheWrite ?? 0;
+    }
+    if (compactionsThisRun > 0) {
+      patch.compactionCount = (existing?.compactionCount ?? 0) + compactionsThisRun;
+    }
+    const merged = mergeSessionEntry(existing, patch);
+    if (clearTotalTokens) {
+      delete merged.totalTokens;
+    }
+    if (overrideSelected) {
+      delete merged.model;
+      delete merged.modelProvider;
+    }
     store[sessionKey] = merged;
     return merged;
   });
   sessionStore[sessionKey] = persisted;
+}
+
+function hasDifferingModelOverride(
+  entry: SessionEntry | undefined,
+  used: { provider: string; model: string },
+): boolean {
+  const overrideModel = entry?.modelOverride?.trim();
+  if (!overrideModel) {
+    return false;
+  }
+  if (overrideModel !== used.model.trim()) {
+    return true;
+  }
+  const overrideProvider = entry?.providerOverride?.trim();
+  return Boolean(overrideProvider) && overrideProvider !== used.provider.trim();
 }

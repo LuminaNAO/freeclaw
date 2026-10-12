@@ -5,6 +5,7 @@ import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-f
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { danger, info, success } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -229,6 +230,44 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolea
   return true;
 }
 
+/**
+ * ARCH config-path-hints §2.2/§2.4: precise not-found text with the same
+ * suggestions `config.schema.lookup` returns. A path the schema already
+ * resolves is correct as typed, so it gets no (misleading) alternatives.
+ */
+async function describeMissingConfigPath(path: string, config: OpenClawConfig): Promise<string> {
+  const { describeConfigPathNotFound, formatConfigPathNotFound, lookupConfigSchema } =
+    await import("../config/schema.js");
+  try {
+    const { loadCliConfigSchema } = await import("./config-cli.schema.js");
+    const schema = loadCliConfigSchema(config);
+    if (lookupConfigSchema(schema, path)) {
+      return formatConfigPathNotFound(path.trim(), []);
+    }
+    return describeConfigPathNotFound(schema, path).message;
+  } catch {
+    return formatConfigPathNotFound(path.trim(), []);
+  }
+}
+
+/** Suggestions for `config set` refusals; empty when the path is known to the schema. */
+async function describeRefusedConfigSetPath(
+  path: string,
+  config: OpenClawConfig,
+): Promise<string | null> {
+  try {
+    const { describeConfigPathNotFound, lookupConfigSchema } = await import("../config/schema.js");
+    const { loadCliConfigSchema } = await import("./config-cli.schema.js");
+    const schema = loadCliConfigSchema(config);
+    if (lookupConfigSchema(schema, path)) {
+      return null;
+    }
+    return describeConfigPathNotFound(schema, path).message;
+  } catch {
+    return null;
+  }
+}
+
 async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.valid) {
@@ -284,7 +323,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const redacted = redactConfigObject(snapshot.config);
     const res = getAtPath(redacted, parsedPath);
     if (!res.found) {
-      runtime.error(danger(`Config path not found: ${opts.path}`));
+      runtime.error(danger(await describeMissingConfigPath(opts.path, snapshot.config)));
       runtime.exit(1);
       return;
     }
@@ -318,7 +357,7 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
     const removed = unsetAtPath(next, parsedPath);
     if (!removed) {
-      runtime.error(danger(`Config path not found: ${opts.path}`));
+      runtime.error(danger(await describeMissingConfigPath(opts.path, snapshot.config)));
       runtime.exit(1);
       return;
     }
@@ -431,12 +470,14 @@ export function registerConfigCli(program: Command) {
     .option("--strict-json", "Strict JSON5 parsing (error instead of raw string fallback)", false)
     .option("--json", "Legacy alias for --strict-json", false)
     .action(async (path: string, value: string, opts) => {
+      let snapshotConfig: OpenClawConfig | undefined;
       try {
         const parsedPath = parseRequiredPath(path);
         const parsedValue = parseValue(value, {
           strictJson: Boolean(opts.strictJson || opts.json),
         });
         const snapshot = await loadValidConfig();
+        snapshotConfig = snapshot.config;
         // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
         // instead of snapshot.config (runtime-merged with defaults).
         // This prevents runtime defaults from leaking into the written config file (issue #6070)
@@ -447,6 +488,13 @@ export function registerConfigCli(program: Command) {
         defaultRuntime.log(info(`Updated ${path}. Restart the gateway to apply.`));
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
+        // ARCH config-path-hints §2.4: validation still refuses; add path hints.
+        if (snapshotConfig) {
+          const hint = await describeRefusedConfigSetPath(path, snapshotConfig);
+          if (hint) {
+            defaultRuntime.error(danger(hint));
+          }
+        }
         defaultRuntime.exit(1);
       }
     });

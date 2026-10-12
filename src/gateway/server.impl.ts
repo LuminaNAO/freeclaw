@@ -78,6 +78,7 @@ import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import { createAgentEventHandler } from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
+import { announceGatewayCrash } from "./server-crash-announce.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
@@ -97,7 +98,6 @@ import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { startGatewaySidecars } from "./server-startup.js";
-import { replaySessionStack } from "./session-stack-replay.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
@@ -111,6 +111,7 @@ import {
 import { resolveHookClientIpConfig } from "./server/hooks.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
+import { replaySessionStack } from "./session-stack-replay.js";
 import {
   ensureGatewayStartupAuth,
   mergeGatewayAuthConfig,
@@ -938,6 +939,12 @@ export async function startGatewayServer(
       logChannels,
       logBrowser,
     }));
+  }
+
+  // Crash log (docs/design/gateway-crash-log.md §1.4): once channels are up, tell the main
+  // session that the previous run crashed so the agent can tell its humans. Once per process.
+  if (!minimalTestGateway) {
+    announceGatewayCrash(cfgAtStart, log);
   }
 
   // Session prompt stack (§5): after channels start, re-submit unfinished prompts.

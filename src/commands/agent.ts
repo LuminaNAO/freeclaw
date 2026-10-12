@@ -16,7 +16,6 @@ import {
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../agents/bootstrap-budget.js";
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
@@ -100,49 +99,79 @@ import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
 import { resolveSession } from "./agent/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./agent/types.js";
 
-type PersistSessionEntryParams = {
+type PatchSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   storePath: string;
-  entry: SessionEntry;
+  /** Fields this writer changed. Keys with `undefined` values are ignored. */
+  patch: Partial<SessionEntry>;
+  /** Fields this writer removed (`delete`), cleared on the stored entry. */
+  clear?: ReadonlyArray<keyof SessionEntry>;
 };
 
-type OverrideFieldClearedByDelete =
-  | "providerOverride"
-  | "modelOverride"
-  | "authProfileOverride"
-  | "authProfileOverrideSource"
-  | "authProfileOverrideCompactionCount"
-  | "fallbackNoticeSelectedModel"
-  | "fallbackNoticeActiveModel"
-  | "fallbackNoticeReason"
-  | "claudeCliSessionId";
-
-const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
-  "providerOverride",
-  "modelOverride",
-  "authProfileOverride",
-  "authProfileOverrideSource",
-  "authProfileOverrideCompactionCount",
-  "fallbackNoticeSelectedModel",
-  "fallbackNoticeActiveModel",
-  "fallbackNoticeReason",
-  "claudeCliSessionId",
-];
-
-async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
+// ARCH §2.5: session writes made after the turn starts are patches applied to the
+// entry re-read inside the store lock, not rewrites of the turn-start snapshot,
+// so fields another writer changed meanwhile (e.g. a model override set by a
+// tool or sessions.patch) are never clobbered by stale values.
+async function patchSessionEntry(params: PatchSessionEntryParams): Promise<SessionEntry> {
+  // ARCH §2.4: no explicit-undefined own keys reach mergeSessionEntry.
+  const patch: Partial<SessionEntry> = {};
+  for (const [key, value] of Object.entries(params.patch)) {
+    if (value !== undefined) {
+      (patch as Record<string, unknown>)[key] = value;
+    }
+  }
   const persisted = await updateSessionStore(params.storePath, (store) => {
-    const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
-    // Preserve explicit `delete` clears done by session override helpers.
-    for (const field of OVERRIDE_FIELDS_CLEARED_BY_DELETE) {
-      if (!Object.hasOwn(params.entry, field)) {
-        Reflect.deleteProperty(merged, field);
-      }
+    const merged = mergeSessionEntry(store[params.sessionKey], patch);
+    for (const field of params.clear ?? []) {
+      Reflect.deleteProperty(merged, field);
     }
     store[params.sessionKey] = merged;
     return merged;
   });
   params.sessionStore[params.sessionKey] = persisted;
+  return persisted;
+}
+
+/**
+ * Turn an in-memory edit (`before` -> `after`) into the patch + cleared fields
+ * for {@link patchSessionEntry}: only what the edit changed is written.
+ */
+function diffSessionEntry(
+  before: SessionEntry | undefined,
+  after: SessionEntry,
+): Pick<PatchSessionEntryParams, "patch" | "clear"> {
+  const patch: Partial<SessionEntry> = {};
+  const clear: Array<keyof SessionEntry> = [];
+  const keys = new Set([...Object.keys(before ?? {}), ...Object.keys(after)]);
+  for (const key of keys as Set<keyof SessionEntry>) {
+    const prev = before?.[key];
+    const next = after[key];
+    if (prev === next) {
+      continue;
+    }
+    if (next === undefined) {
+      clear.push(key);
+    } else {
+      (patch as Record<string, unknown>)[key] = next;
+    }
+  }
+  return { patch, clear };
+}
+
+async function persistSessionEntryChanges(params: {
+  sessionStore: Record<string, SessionEntry>;
+  sessionKey: string;
+  storePath: string;
+  before: SessionEntry | undefined;
+  after: SessionEntry;
+}): Promise<SessionEntry> {
+  return await patchSessionEntry({
+    sessionStore: params.sessionStore,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    ...diffSessionEntry(params.before, params.after),
+  });
 }
 
 function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boolean }): string {
@@ -402,27 +431,30 @@ function runAgentAttempt(params: {
         // Clear the expired session ID from the session store
         const entry = params.sessionStore[params.sessionKey];
         if (entry) {
-          const updatedEntry = { ...entry };
-          if (params.providerOverride === "claude-cli") {
-            delete updatedEntry.claudeCliSessionId;
-          }
-          if (updatedEntry.cliSessionIds) {
-            const normalizedProvider = normalizeProviderId(params.providerOverride);
-            const newCliSessionIds = { ...updatedEntry.cliSessionIds };
-            delete newCliSessionIds[normalizedProvider];
-            updatedEntry.cliSessionIds = newCliSessionIds;
-          }
-          updatedEntry.updatedAt = Date.now();
-
-          await persistSessionEntry({
-            sessionStore: params.sessionStore,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-            entry: updatedEntry,
+          const sessionStore = params.sessionStore;
+          const sessionKey = params.sessionKey;
+          const normalizedProvider = normalizeProviderId(params.providerOverride);
+          // ARCH §2.5: compute the CLI session id removal against the entry
+          // re-read inside the lock, then write only those fields.
+          const persisted = await updateSessionStore(params.storePath, (store) => {
+            const current = store[sessionKey] ?? entry;
+            const patch: Partial<SessionEntry> = { updatedAt: Date.now() };
+            if (current.cliSessionIds) {
+              const newCliSessionIds = { ...current.cliSessionIds };
+              delete newCliSessionIds[normalizedProvider];
+              patch.cliSessionIds = newCliSessionIds;
+            }
+            const merged = mergeSessionEntry(current, patch);
+            if (params.providerOverride === "claude-cli") {
+              delete merged.claudeCliSessionId;
+            }
+            store[sessionKey] = merged;
+            return merged;
           });
+          sessionStore[sessionKey] = persisted;
 
           // Update the session entry reference
-          params.sessionEntry = updatedEntry;
+          params.sessionEntry = persisted;
         }
 
         // Retry with no session ID (will create a new session)
@@ -436,20 +468,23 @@ function runAgentAttempt(params: {
           ) {
             const entry = params.sessionStore[params.sessionKey];
             if (entry) {
-              const updatedEntry = { ...entry };
-              setCliSessionId(
-                updatedEntry,
-                params.providerOverride,
-                result.meta.agentMeta.sessionId,
-              );
-              updatedEntry.updatedAt = Date.now();
-
-              await persistSessionEntry({
-                sessionStore: params.sessionStore,
-                sessionKey: params.sessionKey,
-                storePath: params.storePath,
-                entry: updatedEntry,
+              const sessionStore = params.sessionStore;
+              const sessionKey = params.sessionKey;
+              const cliSessionId = result.meta.agentMeta.sessionId;
+              // ARCH §2.5: patch the CLI session ids onto the entry re-read in the lock.
+              const persisted = await updateSessionStore(params.storePath, (store) => {
+                const current = store[sessionKey] ?? entry;
+                const cliFields: SessionEntry = {
+                  sessionId: current.sessionId,
+                  updatedAt: Date.now(),
+                  ...(current.cliSessionIds ? { cliSessionIds: current.cliSessionIds } : {}),
+                };
+                setCliSessionId(cliFields, params.providerOverride, cliSessionId);
+                const merged = mergeSessionEntry(current, cliFields);
+                store[sessionKey] = merged;
+                return merged;
               });
+              sessionStore[sessionKey] = persisted;
             }
           }
           return result;
@@ -890,41 +925,28 @@ async function agentCommandInternal(
       : sessionEntry?.skillsSnapshot;
 
     if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
-      const current = sessionEntry ?? {
-        sessionId,
-        updatedAt: Date.now(),
-      };
-      const next: SessionEntry = {
-        ...current,
-        sessionId,
-        updatedAt: Date.now(),
-        skillsSnapshot,
-      };
-      await persistSessionEntry({
+      sessionEntry = await patchSessionEntry({
         sessionStore,
         sessionKey,
         storePath,
-        entry: next,
+        patch: { sessionId, updatedAt: Date.now(), skillsSnapshot },
       });
-      sessionEntry = next;
     }
 
     // Persist explicit /command overrides to the session store when we have a key.
     if (sessionStore && sessionKey) {
-      const entry = sessionStore[sessionKey] ??
-        sessionEntry ?? { sessionId, updatedAt: Date.now() };
-      const next: SessionEntry = { ...entry, sessionId, updatedAt: Date.now() };
+      const levels: SessionEntry = { sessionId, updatedAt: Date.now() };
       if (thinkOverride) {
-        next.thinkingLevel = thinkOverride;
+        levels.thinkingLevel = thinkOverride;
       }
-      applyVerboseOverride(next, verboseOverride);
-      await persistSessionEntry({
+      applyVerboseOverride(levels, verboseOverride);
+      sessionEntry = await patchSessionEntry({
         sessionStore,
         sessionKey,
         storePath,
-        entry: next,
+        patch: levels,
+        clear: verboseOverride === null ? ["verboseLevel"] : undefined,
       });
-      sessionEntry = next;
     }
 
     const configuredDefaultRef = resolveDefaultModelForAgent({
@@ -973,16 +995,18 @@ async function agentCommandInternal(
           !allowAnyModel &&
           !allowedModelKeys.has(key)
         ) {
+          const before = { ...entry };
           const { updated } = applyModelOverrideToSessionEntry({
             entry,
             selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
           });
           if (updated) {
-            await persistSessionEntry({
+            sessionEntry = await persistSessionEntryChanges({
               sessionStore,
               sessionKey,
               storePath,
-              entry,
+              before,
+              after: entry,
             });
           }
         }
@@ -1007,16 +1031,21 @@ async function agentCommandInternal(
     if (sessionEntry) {
       const authProfileId = sessionEntry.authProfileOverride;
       if (authProfileId) {
-        const entry = sessionEntry;
         const store = ensureAuthProfileStore();
         const profile = store.profiles[authProfileId];
         if (!profile || profile.provider !== provider) {
           if (sessionStore && sessionKey) {
-            await clearSessionAuthProfileOverride({
-              sessionEntry: entry,
+            // ARCH §2.5: clear only the auth profile override fields.
+            sessionEntry = await patchSessionEntry({
               sessionStore,
               sessionKey,
               storePath,
+              patch: { updatedAt: Date.now() },
+              clear: [
+                "authProfileOverride",
+                "authProfileOverrideSource",
+                "authProfileOverrideCompactionCount",
+              ],
             });
           }
         }
@@ -1043,14 +1072,11 @@ async function agentCommandInternal(
       }
       resolvedThinkLevel = "high";
       if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
-        const entry = sessionEntry;
-        entry.thinkingLevel = "high";
-        entry.updatedAt = Date.now();
-        await persistSessionEntry({
+        sessionEntry = await patchSessionEntry({
           sessionStore,
           sessionKey,
           storePath,
-          entry,
+          patch: { thinkingLevel: "high", updatedAt: Date.now() },
         });
       }
     }

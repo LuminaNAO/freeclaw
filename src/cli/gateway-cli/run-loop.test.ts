@@ -55,6 +55,20 @@ vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
   waitForActiveEmbeddedRuns: (timeoutMs: number) => waitForActiveEmbeddedRuns(timeoutMs),
 }));
 
+const beginGatewayRun = vi.fn(() => null);
+const removeRunMarker = vi.fn();
+const stopMemorySampler = vi.fn();
+const startGatewayMemorySampler = vi.fn(() => stopMemorySampler);
+
+vi.mock("../../infra/gateway-crash-log.js", () => ({
+  beginGatewayRun: () => beginGatewayRun(),
+  removeRunMarker: () => removeRunMarker(),
+}));
+
+vi.mock("../../gateway/memory-evidence.js", () => ({
+  startGatewayMemorySampler: () => startGatewayMemorySampler(),
+}));
+
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => gatewayLog,
 }));
@@ -190,6 +204,23 @@ describe("runGatewayLoop", () => {
         restartExpectedMs: null,
       });
       expect(runtime.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("writes the run marker at start and removes it on clean stop (crash log §1.1)", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { exited } = await createSignaledLoopHarness();
+      expect(beginGatewayRun).toHaveBeenCalledTimes(1);
+      expect(startGatewayMemorySampler).toHaveBeenCalledTimes(1);
+      expect(removeRunMarker).not.toHaveBeenCalled();
+
+      captureSignal("SIGTERM")();
+
+      await expect(exited).resolves.toBe(0);
+      expect(removeRunMarker).toHaveBeenCalledTimes(1);
+      expect(stopMemorySampler).toHaveBeenCalled();
     });
   });
 

@@ -19,6 +19,21 @@ vi.mock("../config/config.js", () => ({
     mockWriteConfigFile(cfg, options),
 }));
 
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: () => ({
+    diagnostics: [],
+    plugins: [
+      {
+        id: "hint-probe",
+        configSchema: {
+          type: "object",
+          properties: { quuxWidgetMode: { type: "string" } },
+        },
+      },
+    ],
+  }),
+}));
+
 const mockLog = vi.fn();
 const mockError = vi.fn();
 const mockExit = vi.fn((code: number) => {
@@ -216,6 +231,122 @@ describe("config cli", () => {
       await runConfigCommand(["config", "get", "gateway.auth.token"]);
 
       expect(mockLog).toHaveBeenCalledWith("__OPENCLAW_REDACTED__");
+    });
+  });
+
+  // ARCH config-path-hints §3: CLI output.
+  describe("config path hints", () => {
+    function errorText(): string {
+      return mockError.mock.calls.map((call) => call.join(" ")).join("\n");
+    }
+
+    it("config get suggests the full path for a leaf under a parent", async () => {
+      setSnapshot({ gateway: { instanceName: "alpha" } }, { gateway: { instanceName: "alpha" } });
+
+      await expect(runConfigCommand(["config", "get", "instanceName"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(errorText()).toContain(
+        'no config path "instanceName"; did you mean: gateway.instanceName',
+      );
+      expect(errorText()).not.toContain("does not exist");
+    });
+
+    it("config get suggests for typos and case mismatches", async () => {
+      setSnapshot({}, {});
+      await expect(runConfigCommand(["config", "get", "gateway.instancName"])).rejects.toThrow(
+        "__exit__:1",
+      );
+      setSnapshot({}, {});
+      await expect(runConfigCommand(["config", "get", "gateway.instancename"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(errorText()).toContain(
+        'no config path "gateway.instancName"; did you mean: gateway.instanceName',
+      );
+      expect(errorText()).toContain(
+        'no config path "gateway.instancename"; did you mean: gateway.instanceName',
+      );
+    });
+
+    it("config get prints no suggestions when nothing is close", async () => {
+      setSnapshot({}, {});
+
+      await expect(runConfigCommand(["config", "get", "zzqqxxyy.wwvvuu"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(errorText()).toContain('no config path "zzqqxxyy.wwvvuu"');
+      expect(errorText()).not.toContain("did you mean");
+    });
+
+    it("config get does not offer alternatives for a known but unset path", async () => {
+      setSnapshot({}, {});
+
+      await expect(runConfigCommand(["config", "get", "gateway.instanceName"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(errorText()).toContain('no config path "gateway.instanceName"');
+      expect(errorText()).not.toContain("did you mean");
+    });
+
+    it("config get suggests keys from plugin schemas", async () => {
+      setSnapshot({}, {});
+
+      await expect(runConfigCommand(["config", "get", "quuxWidgetMode"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(errorText()).toContain(
+        "did you mean: plugins.entries.hint-probe.config.quuxWidgetMode",
+      );
+    });
+
+    it("config unset prints the same suggestions", async () => {
+      setSnapshot({ gateway: { instanceName: "alpha" } }, { gateway: { instanceName: "alpha" } });
+
+      await expect(runConfigCommand(["config", "unset", "instanceName"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(errorText()).toContain(
+        'no config path "instanceName"; did you mean: gateway.instanceName',
+      );
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("config set still refuses an unknown path and prints suggestions", async () => {
+      setSnapshot({}, {});
+      mockWriteConfigFile.mockRejectedValueOnce(
+        new Error('Config validation failed: <root>: Unrecognized key: "instanceName"'),
+      );
+
+      await expect(runConfigCommand(["config", "set", "instanceName", "alpha"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(errorText()).toContain("Config validation failed");
+      expect(errorText()).toContain(
+        'no config path "instanceName"; did you mean: gateway.instanceName',
+      );
+      expect(mockLog).not.toHaveBeenCalled();
+    });
+
+    it("config set adds no hints when a known path fails validation", async () => {
+      setSnapshot({}, {});
+      mockWriteConfigFile.mockRejectedValueOnce(
+        new Error("Config validation failed: gateway.port: expected number"),
+      );
+
+      await expect(runConfigCommand(["config", "set", "gateway.port", "x"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(errorText()).toContain("Config validation failed");
+      expect(errorText()).not.toContain("no config path");
     });
   });
 

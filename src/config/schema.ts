@@ -709,3 +709,173 @@ export function lookupConfigSchema(
     children: buildLookupChildren(current, normalizedPath, response.uiHints),
   };
 }
+
+// Config path hints (docs/design/config-path-hints.md §2).
+const MAX_CONFIG_PATH_SUGGESTIONS = 5;
+const MAX_CONFIG_PATH_EDIT_DISTANCE = 2;
+const configSchemaPathIndexCache = new WeakMap<object, string[]>();
+
+/**
+ * Every path `lookupConfigSchema` can resolve, in deterministic schema order.
+ * Walks the same edges as the lookup (properties, items, additionalProperties),
+ * so each suggestion is itself a valid `config.schema.lookup` path.
+ */
+function collectConfigSchemaPaths(response: ConfigSchemaResponse): string[] {
+  const root = asSchemaObject(response.schema);
+  if (!root) {
+    return [];
+  }
+  const cached = configSchemaPathIndexCache.get(root);
+  if (cached) {
+    return cached;
+  }
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  const visit = (schema: JsonSchemaObject, prefix: string, depth: number) => {
+    if (depth >= MAX_LOOKUP_PATH_SEGMENTS) {
+      return;
+    }
+    const push = (segment: string, child: JsonSchemaObject | null) => {
+      if (!child) {
+        return;
+      }
+      const childPath = prefix ? `${prefix}.${segment}` : segment;
+      if (!seen.has(childPath)) {
+        seen.add(childPath);
+        paths.push(childPath);
+      }
+      visit(child, childPath, depth + 1);
+    };
+    for (const [key, child] of Object.entries(schema.properties ?? {})) {
+      if (FORBIDDEN_LOOKUP_SEGMENTS.has(key) || key.includes(".")) {
+        continue;
+      }
+      push(key, asSchemaObject(child));
+    }
+    // Same wildcard precedence as buildLookupChildren.
+    const additional =
+      schema.additionalProperties && typeof schema.additionalProperties === "object"
+        ? asSchemaObject(schema.additionalProperties)
+        : null;
+    push("*", additional ?? resolveItemsSchema(schema));
+  };
+  visit(root, "", 0);
+  configSchemaPathIndexCache.set(root, paths);
+  return paths;
+}
+
+/** Levenshtein distance, or `max + 1` once it is known to exceed `max`. */
+function boundedEditDistance(a: string, b: string, max: number): number {
+  if (a === b) {
+    return 0;
+  }
+  if (Math.abs(a.length - b.length) > max) {
+    return max + 1;
+  }
+  let prev = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    const next = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const value = Math.min(prev[j] + 1, next[j - 1] + 1, prev[j - 1] + cost);
+      next.push(value);
+      rowMin = Math.min(rowMin, value);
+    }
+    if (rowMin > max) {
+      return max + 1;
+    }
+    prev = next;
+  }
+  return Math.min(prev[b.length], max + 1);
+}
+
+function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function hasForbiddenLookupSegment(parts: string[]): boolean {
+  return parts.some((part) => FORBIDDEN_LOOKUP_SEGMENTS.has(part));
+}
+
+/**
+ * Suggest full schema paths (core + plugins) for a path that was not found:
+ * keys whose last segment equals the requested last segment (case-insensitive)
+ * first, then close matches (edit distance <= 2 on the last segment or the
+ * full path). At most 5, deterministic order.
+ */
+export function suggestConfigSchemaPaths(response: ConfigSchemaResponse, path: string): string[] {
+  const parts = splitLookupPath(path);
+  if (parts.length === 0 || hasForbiddenLookupSegment(parts)) {
+    return [];
+  }
+  const starred = parts.map((part) => (/^\d+$/.test(part) ? "*" : part));
+  const requestedPath = starred.join(".");
+  const requestedFull = requestedPath.toLowerCase();
+  const rawLeaf = starred[starred.length - 1] ?? "";
+  const requestedLeaf = rawLeaf === "*" ? null : rawLeaf.toLowerCase();
+
+  const ranked: Array<{ path: string; tier: number; distance: number; fullDistance: number }> = [];
+  for (const candidate of collectConfigSchemaPaths(response)) {
+    if (candidate === requestedPath) {
+      continue;
+    }
+    const candidateFull = candidate.toLowerCase();
+    const candidateLeaf = candidateFull.slice(candidateFull.lastIndexOf(".") + 1);
+    const fullDistance = boundedEditDistance(
+      requestedFull,
+      candidateFull,
+      MAX_CONFIG_PATH_EDIT_DISTANCE,
+    );
+    if (requestedLeaf !== null && candidateLeaf !== "*" && candidateLeaf === requestedLeaf) {
+      ranked.push({ path: candidate, tier: 0, distance: 0, fullDistance });
+      continue;
+    }
+    const leafDistance =
+      requestedLeaf !== null && candidateLeaf !== "*"
+        ? boundedEditDistance(requestedLeaf, candidateLeaf, MAX_CONFIG_PATH_EDIT_DISTANCE)
+        : MAX_CONFIG_PATH_EDIT_DISTANCE + 1;
+    const distance = Math.min(leafDistance, fullDistance);
+    if (distance <= MAX_CONFIG_PATH_EDIT_DISTANCE) {
+      ranked.push({ path: candidate, tier: 1, distance, fullDistance });
+    }
+  }
+
+  return ranked
+    .toSorted(
+      (a, b) =>
+        a.tier - b.tier ||
+        a.distance - b.distance ||
+        a.fullDistance - b.fullDistance ||
+        compareCodeUnits(a.path, b.path),
+    )
+    .slice(0, MAX_CONFIG_PATH_SUGGESTIONS)
+    .map((entry) => entry.path);
+}
+
+export type ConfigPathNotFound = {
+  message: string;
+  suggestions: string[];
+};
+
+/**
+ * Precise not-found text: `no config path "<p>"`, plus `did you mean: ...`
+ * when suggestions exist. Paths with blocked prototype segments are never
+ * reflected and get no suggestions.
+ */
+export function describeConfigPathNotFound(
+  response: ConfigSchemaResponse,
+  path: string,
+): ConfigPathNotFound {
+  const trimmed = path.trim();
+  if (hasForbiddenLookupSegment(splitLookupPath(trimmed))) {
+    return { message: "no config path (blocked path segment)", suggestions: [] };
+  }
+  const suggestions = suggestConfigSchemaPaths(response, trimmed);
+  return { message: formatConfigPathNotFound(trimmed, suggestions), suggestions };
+}
+
+export function formatConfigPathNotFound(path: string, suggestions: readonly string[]): string {
+  const base = `no config path "${path}"`;
+  return suggestions.length > 0 ? `${base}; did you mean: ${suggestions.join(", ")}` : base;
+}

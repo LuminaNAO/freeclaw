@@ -16,6 +16,7 @@ import { addGatewayServiceCommands } from "../daemon-cli.js";
 import { formatHelpExamples } from "../help-format.js";
 import { withProgress } from "../progress.js";
 import { callGatewayCli, gatewayCallOpts } from "./call.js";
+import { runGatewayCrashes, runGatewayHeapSnapshot } from "./crash-evidence.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import {
   dedupeBeacons,
@@ -124,6 +125,31 @@ export function registerGatewayCli(program: Command) {
     .option("--yes", "Do not ask for confirmation", false)
     .action(async (opts: { yes?: boolean }) => {
       await runGatewayCommand(() => runGatewayStackDrop(opts), "Gateway stack drop failed");
+    });
+
+  gateway
+    .command("crashes")
+    .description("Show recorded gateway crashes (reads the crash log; works with the gateway down)")
+    .option("--json", "Output JSON", false)
+    .option("--limit <n>", "Show only the last N crashes")
+    .action(async (opts: { json?: boolean; limit?: string }) => {
+      await runGatewayCommand(() => runGatewayCrashes(opts), "Gateway crashes failed");
+    });
+
+  gateway
+    .command("heap-snapshot")
+    .description(
+      "Ask the running gateway to write a V8 heap snapshot into its logs dir (pauses it; large file)",
+    )
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--token <token>", "Gateway token (if required)")
+    .option("--password <password>", "Gateway password (password auth)")
+    .option("--timeout <ms>", "Timeout in ms", "300000")
+    .option("--json", "Output JSON", false)
+    .action(async (opts, command) => {
+      await runGatewayCommand(async () => {
+        await runGatewayHeapSnapshot(resolveGatewayRpcOptions(opts, command));
+      }, "Gateway heap snapshot failed");
     });
 
   gatewayCallOpts(
@@ -246,9 +272,7 @@ export function registerGatewayCli(program: Command) {
         );
 
         const deduped = dedupeBeacons(beacons).toSorted((a, b) =>
-          String(a.displayName || a.instanceName).localeCompare(
-            String(b.displayName || b.instanceName),
-          ),
+          (a.displayName || a.instanceName).localeCompare(b.displayName || b.instanceName),
         );
 
         if (opts.json) {
