@@ -89,6 +89,11 @@ describe("default workspace templates", () => {
     });
   }
 
+  it("carries the NAO identity (species-level, not deployment-specific)", () => {
+    expect(read("SOUL.md")).toContain("Networked Adaptive Organism");
+    expect(read("SOUL.dev.md")).toContain("Networked Adaptive Organism");
+  });
+
   it("has no emoji headers or deployment-specific persona", () => {
     for (const name of [...DEFAULT_FILES, ...DEV_FILES]) {
       const content = read(name);

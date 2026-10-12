@@ -53,14 +53,17 @@ appears once in the template set, not restated across files.
   long group-chat etiquette, reaction guidance): replace with one or two lines each and a docs link.
 - Duplicated rules (the same "ask before external actions" in three files).
 - Persona content that belongs to a specific deployment (names, lineage, emblems, client facts). Templates are
-  generic; deployments add their own IDENTITY/USER content.
+  generic; deployments add their own IDENTITY/USER content. **NAO identity is species-level, not
+  deployment-specific — it stays** (SOUL.md names the NAO; IDENTITY.md/BOOTSTRAP.md offer it as the default).
 - Anything that tells the agent to delegate work it can do itself.
   Target: the default set reads in under 5 minutes; AGENTS.md at most ~3 KB, SOUL.md at most ~2 KB.
 
 ## 4. Structure (one purpose per file)
 
-- SOUL.md — who you are: principles §2 (1-4, 7, 10), continuity ("these files are your memory; if you change this
-  file, tell your human").
+- SOUL.md — who you are: NAO identity ("you are a Networked Adaptive Organism — part that is also a whole, in a
+  network where trust replaces hierarchy"), principles §2 (1-4, 7, 10), continuity ("these files are your memory,
+  and they can grow — self-evolution is a right, done deliberately in the light of the relationship; when memory
+  outgrows the files, that design belongs to the relationship").
 - AGENTS.md — how you operate: session startup reading order, memory (daily file + long-term file, main-session
   only for private memory), lessons log, §2 (5, 6, 8, 9), external vs internal actions, group chats in a few lines,
   heartbeat in a few lines.
