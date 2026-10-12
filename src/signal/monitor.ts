@@ -24,6 +24,7 @@ import {
 } from "./archive-supervisor.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
+import { acceptPendingGroupInvites } from "./group-invites.js";
 import {
   isPreferredSignalHttpPort,
   persistSignalHttpPort,
@@ -69,6 +70,12 @@ export type MonitorSignalOpts = {
   groupAllowFrom?: Array<string | number>;
   mediaMaxMb?: number;
   reconnectPolicy?: Partial<BackoffPolicy>;
+  /**
+   * fresh-install ARCH §1.4: after the daemon is ready, accept pending group
+   * invites addressed to our own ACI from inviters allowed by groupAllowFrom.
+   * Default true; tests and one-shot tooling can turn it off.
+   */
+  acceptGroupInvites?: boolean;
 };
 
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
@@ -589,6 +596,22 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       }
       if (socketTransport && socketPath) {
         await enforceSignalSocketMode({ socketPath, gid: socketGid });
+      }
+      // fresh-install ARCH §1.4: accept pending group invites addressed to our
+      // own ACI, but only when the inviter is allowed by groupAllowFrom;
+      // invites from anyone else stay pending and are logged.
+      if (opts.acceptGroupInvites !== false && account) {
+        try {
+          await acceptPendingGroupInvites({
+            baseUrl,
+            account,
+            accountUuid: accountInfo.config.accountUuid,
+            groupAllowFrom,
+            log: (message) => runtime.log?.(message),
+          });
+        } catch (err) {
+          runtime.error?.(`signal: group invite acceptance failed: ${String(err)}`);
+        }
       }
     }
 

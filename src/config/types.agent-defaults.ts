@@ -117,7 +117,18 @@ export type CliBackendConfig = {
   };
 };
 
+export type GroupMemoryAgentConfig = {
+  /** Group memory master switch (default true). Disabling stops loading and meta writes; files stay. */
+  enabled?: boolean;
+  /** Trailing history.md lines included in the group session prompt block (default 20). */
+  historyLines?: number;
+  /** CONTEXT.md is truncated in the prompt beyond this many bytes, with a note (default 16384). */
+  maxContextBytes?: number;
+};
+
 export type AgentDefaultsConfig = {
+  /** Per-group memory (group-memory ARCH §5). */
+  groupMemory?: GroupMemoryAgentConfig;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */

@@ -428,6 +428,12 @@ importers:
 
   extensions/minimax-portal-auth: {}
 
+  extensions/model-badge:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+
   extensions/msteams:
     dependencies:
       '@microsoft/agents-hosting':

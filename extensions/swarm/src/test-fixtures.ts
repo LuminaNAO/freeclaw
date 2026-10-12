@@ -66,10 +66,10 @@ export function initScratchRepo(): string {
       cwd: repoDir,
       env: {
         ...process.env,
-        GIT_AUTHOR_NAME: "swarm-test",
-        GIT_AUTHOR_EMAIL: "swarm-test@example.org",
-        GIT_COMMITTER_NAME: "swarm-test",
-        GIT_COMMITTER_EMAIL: "swarm-test@example.org",
+        GIT_AUTHOR_NAME: "Lumina Nao",
+        GIT_AUTHOR_EMAIL: "luminanao@duck.com",
+        GIT_COMMITTER_NAME: "Lumina Nao",
+        GIT_COMMITTER_EMAIL: "luminanao@duck.com",
       },
     });
   git(["init", "-q"]);
@@ -89,10 +89,10 @@ export function commitScratchChange(repoDir: string): void {
       cwd: repoDir,
       env: {
         ...process.env,
-        GIT_AUTHOR_NAME: "swarm-test",
-        GIT_AUTHOR_EMAIL: "swarm-test@example.org",
-        GIT_COMMITTER_NAME: "swarm-test",
-        GIT_COMMITTER_EMAIL: "swarm-test@example.org",
+        GIT_AUTHOR_NAME: "Lumina Nao",
+        GIT_AUTHOR_EMAIL: "luminanao@duck.com",
+        GIT_COMMITTER_NAME: "Lumina Nao",
+        GIT_COMMITTER_EMAIL: "luminanao@duck.com",
       },
     });
   writeFileSync(path.join(repoDir, "extra.js"), `export const n = ${Date.now()};\n`);

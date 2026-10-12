@@ -175,14 +175,26 @@ async function resumeTask(engine: SwarmEngine, taskId: string, summary: ResumeSu
 
   // Step 2: every session whose last delivered input has no emit after it and that has no
   // active run gets that input again. On every restart; no "already re-prompted" skip.
+  // A session's last input is the last delivery TO its own member key (outbox), never an
+  // emit whose `to` happens to equal a lane role: an unsettled fan-out join must not leak a
+  // member verdict to the next role (ARCH §4.5).
   const after = engine.loadState(taskId);
   const pending = readOutbox(engine.stateDir, taskId);
   const undelivered = new Set(pending.filter((o) => !o.acked).map((o) => o.to));
-  for (const role of [...Object.keys(after.contract.workers), TASKMASTER]) {
+  const members = after.holon.lanes.flatMap((l) =>
+    l.count > 1 ? Array.from({ length: l.count }, (_, i) => `${l.role}:${i + 1}`) : [l.role],
+  );
+  for (const role of [...members, TASKMASTER]) {
     const sessionKey = engine.sessionKey(taskId, role);
-    const inputSeq = lastInputSeqFor(after.events, role);
+    // The member's input: the last delivery TO its own session key (outbox). Never an emit
+    // whose `to` names the lane role — an unsettled fan-out join must not leak a member
+    // verdict to the next role (ARCH §4.5). No delivery yet = no input = nothing to redeliver.
+    const lastDelivery = pending.findLast((o) => o.to === role);
+    if (lastDelivery === undefined) {
+      continue;
+    }
+    const inputSeq = Math.max(...lastDelivery.seqs);
     if (
-      inputSeq === undefined ||
       blockedRoles.has(role) ||
       undelivered.has(role) || // its last input is step 1's (not delivered yet)
       engine.mailbox.isBusy(sessionKey) ||
@@ -206,44 +218,65 @@ async function resumeTask(engine: SwarmEngine, taskId: string, summary: ResumeSu
       seqs: [inputSeq],
       idempotencyKey: msgId,
       message: redeliveryText(after, pending, role, inputSeq, msgId),
-      extraSystemPrompt: briefFor(after.contract, role),
+      extraSystemPrompt: briefFor(
+        after.contract,
+        role === TASKMASTER ? role : role.replace(/:\d+$/, ""),
+      ),
     });
     summary.redelivered += 1;
   }
 }
 
 /**
- * Re-apply each worker's contract model/thinking (ARCH §3). Returns the roles whose re-apply
- * failed: resume must not hand those workers anything, since they could run on another model.
+ * Re-apply each participant's model/thinking (ARCH §3): every lane member gets its own model
+ * (a redundant lane cycles its list, §4.3), and the lead gets its holon's lead model (§3.2).
+ * Returns the roles whose re-apply failed: resume must not hand those participants anything,
+ * since they could run on another model.
  */
 export async function reapplyModels(engine: SwarmEngine, state: TaskState): Promise<Set<string>> {
   const blocked = new Set<string>();
   const patch = (engine.runtime.subagent as { patchSession?: unknown }).patchSession as
     | ((p: { sessionKey: string; model?: string; thinkingLevel?: string }) => Promise<unknown>)
     | undefined;
-  for (const [role, spec] of Object.entries(state.contract.workers)) {
+  const apply = async (
+    member: string,
+    spec: { model?: string; thinking?: string },
+  ): Promise<void> => {
     if (!spec.model && !spec.thinking) {
-      continue;
+      return;
     }
     if (!patch) {
-      blocked.add(role);
-      continue;
+      blocked.add(member);
+      return;
     }
     try {
       await patch({
-        sessionKey: engine.sessionKey(state.contract.id, role),
+        sessionKey: engine.sessionKey(state.contract.id, member),
         ...(spec.model && { model: spec.model }),
         ...(spec.thinking && { thinkingLevel: spec.thinking }),
       });
     } catch (err) {
-      blocked.add(role);
+      blocked.add(member);
       engine.record(state.contract.id, {
         kind: "system",
         event: "MODEL_REAPPLY_FAILED",
-        from: role,
+        from: member,
         data: { error: err instanceof Error ? err.message : String(err) },
       });
     }
+  };
+  for (const lane of state.holon.lanes) {
+    for (let n = 1; n <= lane.count; n += 1) {
+      const member = lane.count > 1 ? `${lane.role}:${n}` : lane.role;
+      await apply(member, {
+        model: lane.models[(n - 1) % lane.models.length],
+        thinking: lane.thinking,
+      });
+    }
+  }
+  // The lead: v1 keeps the gateway default (nothing to apply); v2 lead.model is re-applied.
+  if (!state.holon.v1 && (state.holon.lead.model || state.holon.lead.thinking)) {
+    await apply(TASKMASTER, { model: state.holon.lead.model, thinking: state.holon.lead.thinking });
   }
   return blocked;
 }

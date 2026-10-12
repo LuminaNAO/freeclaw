@@ -190,7 +190,15 @@ export function scheduleFollowupDrain(
       defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
     } finally {
       queue.draining = false;
-      if (queue.items.length === 0 && queue.droppedCount === 0) {
+      const current = FOLLOWUP_QUEUES.get(key);
+      if (current !== queue) {
+        // The queue was cleared (/stop, reset) while this drain ran and a new one was
+        // created under the same key. Never delete that one: its prompts (and their
+        // stack files) would be orphaned. Drain it instead (stale replay ARCH §1.2).
+        if (current && (current.items.length > 0 || current.droppedCount > 0)) {
+          scheduleFollowupDrain(key, runFollowupRaw);
+        }
+      } else if (queue.items.length === 0 && queue.droppedCount === 0) {
         FOLLOWUP_QUEUES.delete(key);
       } else {
         scheduleFollowupDrain(key, runFollowupRaw);

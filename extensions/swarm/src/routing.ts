@@ -20,9 +20,14 @@ export type RouteRow = {
 /** ARCH §5 default build template, as data. */
 export const DEFAULT_BUILD_ROUTES: readonly RouteRow[] = Object.freeze([
   { on: "BUILD_DONE", from: "build", to: "audit", message: "review {{sha}}" },
+  // Fan-out (§4.5): a settled lane reaches the lead, which drives the next hop itself.
+  { on: "BUILD_DONE", from: TASKMASTER, to: "audit", message: "review {{sha}}" },
   { on: "AUDIT_FAIL", from: "audit", to: "build", message: "audit findings" },
+  { on: "AUDIT_FAIL", from: TASKMASTER, to: "build", message: "audit findings" },
   { on: "AUDIT_PASS", from: "audit", to: "test", message: "test {{sha}}" },
+  { on: "AUDIT_PASS", from: TASKMASTER, to: "test", message: "test {{sha}}" },
   { on: "TEST_FAIL", from: "test", to: "build", message: "repro + failing test" },
+  { on: "TEST_FAIL", from: TASKMASTER, to: "build", message: "repro + failing test" },
   { on: "TEST_PASS", from: "test", to: TASKMASTER, message: "gate passed {{sha}}" },
   { on: "DONE", from: TASKMASTER, to: UPSTREAM, message: "done" },
   { on: "BLOCKED", from: TASKMASTER, to: UPSTREAM, message: "human needed" },

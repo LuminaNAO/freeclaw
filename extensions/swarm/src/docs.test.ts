@@ -23,7 +23,10 @@ describe("ARCH is the single source of truth", () => {
 
   it("states architecture-driven development in the ARCH preamble", () => {
     const arch = fs.readFileSync(path.join(root, "ARCH.md"), "utf8");
-    expect(arch).toContain("Development is architecture-driven: there is no separate spec.");
+    // v1: "Development is architecture-driven: there is no separate spec."; v2: "Architecture-
+    // driven: no separate spec". Both state the rule; accept either so v1 and v2 ARCH pass.
+    expect(arch).toMatch(/architecture-driven/i);
+    expect(arch).toMatch(/no\s+separate\s+spec/i);
     expect(arch).not.toContain("SPEC");
   });
 

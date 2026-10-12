@@ -248,6 +248,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/minimax-portal-auth/**"
+"extensions: model-badge":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/model-badge/**"
 "extensions: phone-control":
   - changed-files:
       - any-glob-to-any-file:

@@ -14,8 +14,17 @@ import {
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
+export const GroupMemorySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    historyLines: z.number().int().nonnegative().optional(),
+    maxContextBytes: z.number().int().positive().optional(),
+  })
+  .strict();
+
 export const AgentDefaultsSchema = z
   .object({
+    groupMemory: GroupMemorySchema.optional(),
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
     pdfModel: AgentModelSchema.optional(),

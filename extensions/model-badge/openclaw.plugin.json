@@ -1,0 +1,173 @@
+{
+  "id": "model-badge",
+  "name": "Model Badge",
+  "description": "Keeps each chat target's avatar showing the badge of the model its session will use next. Every picture is generated on the host at runtime; no art is shipped.",
+  "uiHints": {
+    "providers": {
+      "label": "Providers",
+      "help": "Channel providers to drive, e.g. [\"signal\"]. Each reads its own block below."
+    },
+    "signal.accountId": {
+      "label": "Signal Account",
+      "help": "freeclaw Signal account id (channels.signal.accounts.<id>). The daemon is resolved from this account; empty uses the default account."
+    },
+    "signal.profileSessionKey": {
+      "label": "Profile Session",
+      "help": "Session whose model the account's own profile avatar shows. Empty leaves the profile alone.",
+      "advanced": true
+    },
+    "signal.profileBaseImage": {
+      "label": "Profile Base Image",
+      "help": "Optional absolute path to a local picture used as the profile base instead of the generated one (a runtime input).",
+      "advanced": true
+    },
+    "operators": {
+      "label": "Operators",
+      "help": "Authenticated sender ids allowed to run /badge and add global style rules."
+    },
+    "badges": {
+      "label": "Badge Rules",
+      "help": "Ordered rules mapping model ids to marks: { pattern (regex), letter, color (#RRGGBB), textDark? }. Unmatched models get a generated mark."
+    },
+    "targets": {
+      "label": "Target Overrides",
+      "help": "Per target id: { motif: rings|waves|facets|dots, palette: ocean|forest|dusk|ember|slate|plum|sand|mint }.",
+      "advanced": true
+    },
+    "steering.allowGroupMembers": {
+      "label": "Members May Steer Their Group",
+      "help": "Let group members add style rules scoped to their own group. Global rules stay operator-only."
+    },
+    "steering.rules": { "label": "Default Style Rules", "advanced": true },
+    "imageGen": {
+      "label": "Image Generation",
+      "help": "Optional. Generate target bases with an image system instead of vector art. Keys by SecretRef only.",
+      "advanced": true
+    },
+    "paths.stateDir": {
+      "label": "State Directory",
+      "help": "Defaults to <gateway state dir>/plugins/model-badge. Must be readable by the channel daemon (Signal attaches avatars by path).",
+      "advanced": true
+    },
+    "timing": { "label": "Timing Overrides", "advanced": true },
+    "limits": { "label": "Failure Limits", "advanced": true }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "providers": { "type": "array", "items": { "type": "string" } },
+      "agentId": { "type": "string" },
+      "operators": { "type": "array", "items": { "type": "string" } },
+      "badges": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pattern": { "type": "string" },
+            "letter": { "type": "string" },
+            "color": { "type": "string" },
+            "textDark": { "type": "boolean" }
+          },
+          "required": ["pattern", "letter", "color"]
+        }
+      },
+      "targets": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "motif": { "type": "string" },
+            "palette": { "type": "string" }
+          }
+        }
+      },
+      "steering": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowGroupMembers": { "type": "boolean" },
+          "rules": { "type": "array", "items": { "type": "object" } }
+        }
+      },
+      "imageGen": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "type": "string", "enum": ["openai-images", "command"] },
+          "baseUrl": { "type": "string" },
+          "model": { "type": "string" },
+          "size": { "type": "string" },
+          "seed": { "type": "boolean" },
+          "apiKey": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "source": { "type": "string", "enum": ["env", "file", "exec"] },
+              "provider": { "type": "string" },
+              "id": { "type": "string" }
+            },
+            "required": ["source", "provider", "id"]
+          },
+          "command": { "type": "string" },
+          "args": { "type": "array", "items": { "type": "string" } },
+          "timeoutMs": { "type": "number" },
+          "maxAttempts": { "type": "number" },
+          "maxPerDay": { "type": "number" },
+          "maxPerRun": { "type": "number" }
+        },
+        "required": ["kind"]
+      },
+      "signal": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "accountId": { "type": "string" },
+          "profileSessionKey": { "type": "string" },
+          "profileBaseImage": { "type": "string" }
+        }
+      },
+      "paths": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stateDir": { "type": "string" }
+        }
+      },
+      "timing": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "watchMs": { "type": "number" },
+          "debounceMs": { "type": "number" },
+          "queueSpacingMs": { "type": "number" },
+          "reconcileIntervalMs": { "type": "number" },
+          "rpcTimeoutMs": { "type": "number" },
+          "renderTimeoutMs": { "type": "number" },
+          "renderConcurrency": { "type": "number" },
+          "pruneGraceMs": { "type": "number" },
+          "listTargetsMinRefreshMs": { "type": "number" },
+          "rateLimitBaseMs": { "type": "number" },
+          "rateLimitMaxBackoffMs": { "type": "number" },
+          "captchaMinPauseMs": { "type": "number" },
+          "captchaMaxPauseMs": { "type": "number" },
+          "errorBackoffBaseMs": { "type": "number" },
+          "imageGenBackoffMs": { "type": "number" },
+          "leaseHeartbeatMs": { "type": "number" },
+          "leaseTtlMs": { "type": "number" }
+        }
+      },
+      "limits": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxAttempts": { "type": "number" },
+          "maxArtAttempts": { "type": "number" },
+          "ioErrorParkThreshold": { "type": "number" }
+        }
+      }
+    }
+  }
+}

@@ -33,6 +33,7 @@ const bundledExtensionSubpathLoaders = [
     id: "minimax-portal-auth",
     load: () => import("openclaw/plugin-sdk/minimax-portal-auth"),
   },
+  { id: "model-badge", load: () => import("openclaw/plugin-sdk/model-badge") },
   { id: "nextcloud-talk", load: () => import("openclaw/plugin-sdk/nextcloud-talk") },
   { id: "nostr", load: () => import("openclaw/plugin-sdk/nostr") },
   { id: "open-prose", load: () => import("openclaw/plugin-sdk/open-prose") },

@@ -12,7 +12,6 @@ import { currentRound, ROUND_STARTED, roundLine } from "./rounds.js";
 import { readEvents, readTasksIndex, writeTasksIndex } from "./store.js";
 import { cancelTask, listTasks, showTask, startTask } from "./tasks.js";
 import { makeStubRuntime } from "./test-runtime.js";
-import { WallDeadline, type Clock } from "./wall.js";
 
 // ARCH §12: follow-up rounds on the same worker sessions.
 
@@ -351,58 +350,5 @@ describe("swarm continue (ARCH §12)", () => {
       expect.stringMatching(/^round 1 \(seq \d+\)\s+original brief/),
       expect.stringMatching(/^round 2 \(seq \d+\)\s+round two/),
     ]);
-  });
-});
-
-class FakeClock implements Clock {
-  t = Date.parse("2026-01-01T00:00:00.000Z");
-  timers: Array<{ at: number; fn: () => void; id: number }> = [];
-  private next = 1;
-  now = () => this.t;
-  setTimeout = (fn: () => void, ms: number) => {
-    const id = this.next++;
-    this.timers.push({ at: this.t + ms, fn, id });
-    return id;
-  };
-  clearTimeout = (h: unknown) => {
-    this.timers = this.timers.filter((x) => x.id !== h);
-  };
-}
-
-describe("per-round wall budget (ARCH §12)", () => {
-  it("the round's wall starts at ROUND_STARTED and uses the follow-up's budget.wall", async () => {
-    const { stateDir, runtime, engine } = await doneTask();
-    const clock = new FakeClock();
-    const wall = new WallDeadline(engine, clock);
-    // Pretend the task was created long ago: round 1's wall would already be past.
-    const index = readTasksIndex(stateDir);
-    index[TASK] = { ...index[TASK]!, createdAt: "2020-01-01T00:00:00.000Z" };
-    writeTasksIndex(stateDir, index);
-    await continueTask(engine, TASK, {
-      followUpYaml: "input: round two\nbudget: { wall: 30m }\n",
-    });
-    const round = readEvents(stateDir, TASK).find((e) => e.event === ROUND_STARTED)!;
-    clock.t = round.ts;
-    wall.rearm(TASK);
-    expect(clock.timers.map((t) => t.at)).toEqual([round.ts + 30 * 60_000]);
-
-    // Round 1's upstream DONE does not count as round 2's report: the wall escalates.
-    await runtime.endAll();
-    const before = runtime.runs.filter((r) => r.sessionKey === UPSTREAM).length;
-    await wall.fire(TASK);
-    const up = runtime.runs.filter((r) => r.sessionKey === UPSTREAM);
-    expect(up).toHaveLength(before + 1);
-    expect(up.at(-1)?.message).toMatch(/budget.wall \(30m\)/);
-  });
-
-  it("without budget.wall in the follow-up, the round uses the contract's wall from ROUND_STARTED", async () => {
-    const { stateDir, engine } = await doneTask();
-    const clock = new FakeClock();
-    const wall = new WallDeadline(engine, clock);
-    await continueTask(engine, TASK, { followUpYaml: FOLLOWUP });
-    const round = readEvents(stateDir, TASK).find((e) => e.event === ROUND_STARTED)!;
-    clock.t = round.ts;
-    wall.arm(TASK);
-    expect(clock.timers.map((t) => t.at)).toEqual([round.ts + 4 * 3_600_000]);
   });
 });

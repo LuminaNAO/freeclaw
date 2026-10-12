@@ -8,9 +8,7 @@ import { resolveGroupAdapter } from "./src/group.js";
 import { createSwarmHooks } from "./src/hooks.js";
 import { createSwarmMethods } from "./src/methods.js";
 import { resumeOpenTasks } from "./src/resume.js";
-import { ROUND_STARTED } from "./src/rounds.js";
 import { createRuntimeChannelSender } from "./src/upstream.js";
-import { WallDeadline } from "./src/wall.js";
 
 type SwarmPluginConfig = {
   stateDir?: string;
@@ -35,7 +33,6 @@ export default function register(api: OpenClawPluginApi) {
     budget: cfg.budget,
   };
   let engine: SwarmEngine | undefined;
-  let wall: WallDeadline | undefined;
   const getEngine = () => engine;
 
   api.registerTool(createSwarmEmitToolFactory(getEngine), { name: SWARM_EMIT_TOOL });
@@ -62,19 +59,9 @@ export default function register(api: OpenClawPluginApi) {
         logger: api.logger,
         channelSender: createRuntimeChannelSender(api.runtime.channel),
         group: resolveGroupAdapter(cfg.group?.kind),
-        onEvent: (taskId, event) => {
-          if (event.event === "TASK_STARTED") {
-            wall?.arm(taskId);
-          } else if (event.event === ROUND_STARTED) {
-            // ARCH §12: the round's wall budget starts at ROUND_STARTED.
-            wall?.rearm(taskId);
-          }
-        },
       });
       hooks.attach(engine);
-      wall = new WallDeadline(engine);
       const summary = await resumeOpenTasks(engine);
-      wall.armAll();
       if (summary.tasks > 0) {
         api.logger.info(
           `[swarm] resumed ${summary.tasks} task(s): resent=${summary.resent} ` +
@@ -83,8 +70,6 @@ export default function register(api: OpenClawPluginApi) {
       }
     },
     stop: () => {
-      wall?.stop();
-      wall = undefined;
       engine = undefined;
     },
   });

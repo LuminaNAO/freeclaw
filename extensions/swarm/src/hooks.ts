@@ -2,7 +2,7 @@ import type { PluginHookAgentContext, PluginHookLlmInputEvent } from "openclaw/p
 import type { RunEnd } from "./delivery.js";
 import { lastInputSeqFor, type SwarmEngine, type TaskState } from "./engine.js";
 import { TASKMASTER } from "./routing.js";
-import { isSwarmSessionKey, parseSwarmSessionKey } from "./sessions.js";
+import { isSwarmSessionKey, laneRoleOf, parseSwarmSessionKey } from "./sessions.js";
 import type { SwarmEvent } from "./store.js";
 
 // Run end: exit enforcement and run errors (ARCH §5, §7), plus the model check (ARCH §3, §10.5).
@@ -167,9 +167,12 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
     }
     const engine = getEngine();
     const ref = parseSwarmSessionKey(ctx.sessionKey);
-    if (!engine || !ref || ref.role === TASKMASTER) {
+    if (!engine || !ref) {
       return;
     }
+    const isLead = ref.role === TASKMASTER;
+    // The lead is checked when its holon names a lead model (ARCH §3.2); a v1 holon's lead
+    // is the gateway default, so there is nothing to check against (§11).
     const runKey = `${ctx.sessionKey}:${event.runId}`;
     if (recordedModelRuns.has(runKey)) {
       return;
@@ -182,6 +185,9 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
       } catch {
         return;
       }
+      if (isLead && state.holon.v1) {
+        return; // v1: the taskmaster runs the gateway default model, as before (§11)
+      }
       const observed = `${event.provider}/${event.model}`;
       engine.record(ref.taskId, {
         kind: "system",
@@ -189,18 +195,32 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
         from: ref.role,
         data: { provider: event.provider, model: event.model, runId: event.runId },
       });
-      const expected = state.contract.workers[ref.role]?.model;
-      if (expected && expected !== observed) {
-        // ARCH §3: a worker must never silently run on another model. Stop the run, refuse
-        // its emits (engine.emit checks MODEL_MISMATCH), and escalate; model remap is post-MVP.
+      const expectedModel = isLead
+        ? state.holon.lead.model
+        : (() => {
+            const lane = state.holon.lanes.find((l) => l.role === laneRoleOf(ref.role));
+            const models = lane?.models;
+            return (
+              (models && models.length > 0
+                ? models[
+                    // The member's own model in a redundant lane's model cycle (ARCH §4.3).
+                    (Number(ref.role.slice(ref.role.lastIndexOf(":") + 1)) || 1) - 1
+                  ] || models[0]
+                : undefined) ?? state.contract.workers[laneRoleOf(ref.role)]?.model
+            );
+          })();
+      if (expectedModel && expectedModel !== observed) {
+        // ARCH §3: a participant must never silently run on another model. Stop the run,
+        // refuse its emits (engine.emit checks MODEL_MISMATCH), and escalate.
         engine.record(ref.taskId, {
           kind: "system",
           event: "MODEL_MISMATCH",
           from: ref.role,
-          data: { expected, observed },
+          data: { expected: expectedModel, observed },
         });
         await engine.runtime.subagent.abortSession?.({ sessionKey: ctx.sessionKey ?? "" });
-        const body = `worker ${ref.role} ran on ${observed}, but its contract model is ${expected}; run stopped`;
+        const who = isLead ? "lead" : "worker";
+        const body = `${who} ${ref.role} ran on ${observed}, but its holon model is ${expectedModel}; run stopped`;
         await engine.toUpstream(ref.taskId, state, {
           event: "BLOCKED",
           from: ref.role,

@@ -1,4 +1,8 @@
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agents/agent-scope.js";
+import { updateGroupMemoryMetaOnInbound } from "../agents/group-memory.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveGroupSessionKey } from "../config/sessions/group.js";
+import { logVerbose } from "../globals.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
@@ -32,6 +36,35 @@ export async function withReplyDispatcher<T>(params: {
   }
 }
 
+/**
+ * group-memory ARCH §3: on each inbound group message the gateway maintains
+ * meta.json in <workspace>/group-memory/<channel>/<id>/ — create on first
+ * sight (name from the channel's group subject when known), refresh lastSeen,
+ * add new sender ids to members. Channel adapters already expose the group id
+ * and subject in the inbound context; this shared hook needs no per-adapter
+ * edits. Best-effort: group memory must never break message handling.
+ */
+function recordGroupMemoryMetaOnInbound(ctx: FinalizedMsgContext, cfg: OpenClawConfig): void {
+  try {
+    const group = resolveGroupSessionKey(ctx);
+    if (!group?.channel || !group.id) {
+      return;
+    }
+    const agentId = resolveSessionAgentId({ sessionKey: ctx.SessionKey, config: cfg });
+    updateGroupMemoryMetaOnInbound({
+      workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+      channel: group.channel,
+      groupId: group.id,
+      groupName: ctx.GroupSubject?.trim() || undefined,
+      senderId: ctx.SenderId?.trim() || undefined,
+      cfg,
+      agentId,
+    });
+  } catch (err) {
+    logVerbose(`group memory meta update failed: ${String(err)}`);
+  }
+}
+
 export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
@@ -40,6 +73,7 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
+  recordGroupMemoryMetaOnInbound(finalized, params.cfg);
   return await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>

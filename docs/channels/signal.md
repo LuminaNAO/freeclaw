@@ -79,9 +79,21 @@ Disable with:
 ## Setup path A: link existing Signal account (QR)
 
 1. Install `signal-cli` (JVM or native build).
-2. Link a bot account:
-   - `signal-cli link -n "OpenClaw"` then scan the QR in Signal.
-3. Configure Signal and start the gateway.
+2. Link with the helper (it preflights the binary, config dir and running daemons, shows the QR, renews it if it expires, verifies the link, and can write the config):
+
+```bash
+openclaw signal link --write-config
+```
+
+Useful flags: `--account <id>` for a named account, `--name <deviceName>` for the linked-device name (default: `gateway.instanceName`, else `openclaw`), `--number <E.164>` to require a specific number, `--png <path>` to also write the QR as a PNG (mode 0600), `--on-qr <command>` to run a command with the PNG path as its only argument the moment the PNG is written (and again after each auto-renew; never awaited — provisioning uses this to send the QR to the human over chat), `--timeout <seconds>` (default 600), `--json` for machine-readable output. The link URI is never printed, logged, or written as text, and never appears in the `--on-qr` arguments or environment.
+
+Scan the QR in Signal on the phone that owns the number: Settings → Linked devices → Link new device. The QR expires after about 2 minutes; the helper renews it automatically up to 3 times.
+
+If the number already has a local signal-cli account, the command stops; pass `--relink` to remove only that account's local data (it asks y/N, or `--yes`).
+
+3. Restart the gateway (the helper tells you when this is the next step) and send a test message.
+
+If you prefer to do it by hand: `signal-cli link -n "OpenClaw"`, scan the QR in Signal, then set `channels.signal.account` yourself.
 
 Example:
 

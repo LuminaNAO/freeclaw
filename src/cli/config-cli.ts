@@ -291,6 +291,27 @@ function parseRequiredPath(path: string): PathSegment[] {
   return parsedPath;
 }
 
+/**
+ * The exact write path of `openclaw config set <path> <value>` as a library
+ * call: parse + blocked-segment validation, setAtPath on the resolved
+ * (pre-runtime-defaults) snapshot, then writeConfigFile's own schema
+ * validation. Used by `openclaw signal link --write-config` (signal link
+ * helper ARCH §1.7).
+ */
+export async function setConfigValueLikeConfigSet(params: {
+  path: string;
+  value: unknown;
+}): Promise<void> {
+  const parsedPath = parseRequiredPath(params.path);
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.valid) {
+    throw new Error(`Config invalid at ${shortenHomePath(snapshot.path)}.`);
+  }
+  const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+  setAtPath(next, parsedPath, params.value);
+  await writeConfigFile(next as OpenClawConfig);
+}
+
 function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
   return (
     path.length === expected.length && path.every((segment, index) => segment === expected[index])

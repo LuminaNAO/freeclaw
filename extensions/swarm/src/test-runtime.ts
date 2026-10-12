@@ -125,6 +125,20 @@ export function makeStubRuntime(
       await end([...live.values()][0]!.sessionKey);
     }
   }
+  /**
+   * Settle every live run WITHOUT the swarm's run-end handlers (for scripted fan-out tests
+   * that drive emits by hand; the sessions are scripted, so exit enforcement is not under
+   * test here). The mailbox still releases each session and flushes its queue.
+   */
+  async function settleAll() {
+    for (let guard = 0; guard < 50 && live.size > 0; guard += 1) {
+      const [runId, r] = [...live][0]!;
+      live.delete(runId);
+      r.settle({ status: "ok" });
+      await drain();
+      await drain();
+    }
+  }
   const liveIn = (sessionKey: string) =>
     [...live.values()].filter((r) => r.sessionKey === sessionKey).length;
   return {
@@ -136,6 +150,7 @@ export function makeStubRuntime(
     subagent,
     end,
     endAll,
+    settleAll,
     drain,
     liveIn,
     maxLive,

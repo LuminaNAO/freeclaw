@@ -35,6 +35,7 @@ const pluginSdkEntrypoints = [
   "memory-core",
   "memory-lancedb",
   "minimax-portal-auth",
+  "model-badge",
   "nextcloud-talk",
   "nostr",
   "open-prose",

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import {
   bindStackFiles,
   finishStackFiles,
@@ -77,6 +78,22 @@ describe("session prompt stack store (§3)", () => {
     finishStackFiles(stackFilesOf(owner));
     expect(fs.existsSync(a)).toBe(true);
     finishStackFiles(handed);
+    expect(fs.existsSync(a)).toBe(false);
+  });
+
+  it("ownership survives spreading and is shared by every bundled copy (stale replay ARCH §1.2)", async () => {
+    const a = writeStackFile({ sessionKey: "k", source: "inbound", payload: 1, stateDir });
+    const ctx = { Body: "hi", MessageSid: "m1" };
+    bindStackFiles(ctx, [a]);
+    expect(stackFilesOf({ ...ctx })).toEqual([a]);
+    const other = await importFreshModule<typeof import("./session-stack.js")>(
+      import.meta.url,
+      "./session-stack.js?copy=other",
+    );
+    expect(other.stackFilesOf(ctx)).toEqual([a]);
+    // Not part of the payload: JSON (stored and replayed bytes) is unchanged.
+    expect(JSON.stringify(ctx)).toBe(JSON.stringify({ Body: "hi", MessageSid: "m1" }));
+    other.finishStackFiles(other.stackFilesOf(ctx));
     expect(fs.existsSync(a)).toBe(false);
   });
 });

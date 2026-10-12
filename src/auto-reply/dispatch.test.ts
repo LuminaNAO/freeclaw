@@ -1,4 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi, afterEach } from "vitest";
+import {
+  readGroupMemoryMeta,
+  resetGroupMemoryMetaThrottleForTests,
+  resolveGroupMemoryDir,
+} from "../agents/group-memory.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { dispatchInboundMessage, withReplyDispatcher } from "./dispatch.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
@@ -87,5 +95,94 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
+  });
+});
+
+describe("dispatchInboundMessage group memory meta (group-memory ARCH §3)", () => {
+  const roots: string[] = [];
+  function tmpWorkspace(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dispatch-groupmem-"));
+    roots.push(dir);
+    return dir;
+  }
+  afterEach(() => {
+    resetGroupMemoryMetaThrottleForTests();
+    while (roots.length) {
+      fs.rmSync(roots.pop() as string, { recursive: true, force: true });
+    }
+  });
+
+  function silentDispatcher(): ReplyDispatcher {
+    return {
+      sendToolResult: () => true,
+      sendBlockReply: () => true,
+      sendFinalReply: () => true,
+      getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      markComplete: () => {},
+      waitForIdle: async () => {},
+    };
+  }
+
+  it("creates/updates meta.json for a group message on any channel", async () => {
+    const ws = tmpWorkspace();
+    const cfg = {
+      agents: { defaults: { workspace: ws } },
+    } as OpenClawConfig;
+    await dispatchInboundMessage({
+      ctx: buildTestCtx({
+        From: "signal:group:dgvzda==",
+        To: "signal:+15550001234",
+        ChatType: "group",
+        Provider: "signal",
+        Surface: "signal",
+        GroupSubject: "Ops Room",
+        SenderId: "+10000000001",
+      }),
+      cfg,
+      dispatcher: silentDispatcher(),
+      replyResolver: async () => ({ text: "ok" }),
+    });
+    const dir = resolveGroupMemoryDir({ workspaceDir: ws, channel: "signal", groupId: "dgvzda==" });
+    const meta = readGroupMemoryMeta(dir);
+    expect(meta?.name).toBe("Ops Room");
+    expect(meta?.members).toEqual(["+10000000001"]);
+    expect(meta?.channel).toBe("signal");
+    expect(meta?.groupId).toBe("dgvzda==");
+  });
+
+  it("never writes meta for a DM", async () => {
+    const ws = tmpWorkspace();
+    const cfg = { agents: { defaults: { workspace: ws } } } as OpenClawConfig;
+    await dispatchInboundMessage({
+      ctx: buildTestCtx({
+        From: "signal:+10000000001",
+        ChatType: "direct",
+        Provider: "signal",
+        Surface: "signal",
+      }),
+      cfg,
+      dispatcher: silentDispatcher(),
+      replyResolver: async () => ({ text: "ok" }),
+    });
+    expect(fs.existsSync(path.join(ws, "group-memory"))).toBe(false);
+  });
+
+  it("disabled config stops meta writes", async () => {
+    const ws = tmpWorkspace();
+    const cfg = {
+      agents: { defaults: { workspace: ws, groupMemory: { enabled: false } } },
+    } as OpenClawConfig;
+    await dispatchInboundMessage({
+      ctx: buildTestCtx({
+        From: "signal:group:dgvzda==",
+        ChatType: "group",
+        Provider: "signal",
+        Surface: "signal",
+      }),
+      cfg,
+      dispatcher: silentDispatcher(),
+      replyResolver: async () => ({ text: "ok" }),
+    });
+    expect(fs.existsSync(path.join(ws, "group-memory"))).toBe(false);
   });
 });

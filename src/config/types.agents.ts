@@ -1,5 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
+import type { AgentDefaultsConfig, GroupMemoryAgentConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
@@ -74,6 +74,8 @@ export type AgentConfig = {
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
+  /** Per-agent group memory override (group-memory ARCH §5). */
+  groupMemory?: GroupMemoryAgentConfig;
   subagents?: {
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];

@@ -1,173 +1,149 @@
-# Swarm orchestration — ARCH
+# Holonic swarm — ARCH (v2 of extensions/swarm)
 
-Source of truth for `extensions/swarm`. This document is owned by the operator; engineers do not edit it.
-Development is architecture-driven: there is no separate spec. Code and README follow this file; each commit
-names the ARCH section it implements. A conflict is a defect: stop and raise it (`BLOCKED`), do not resolve
-it in code.
+Source of truth for `extensions/swarm`. Owned by the operator; engineers do not edit it. Architecture-driven: no
+separate spec; each commit names the section it implements. A conflict is a defect: raise `BLOCKED`, do not
+resolve it in code. v2 replaces the v1 ARCH; everything v1 does keeps working (§11).
+
+Background: a **holon** (Koestler) is a whole that is also a part of a larger whole. It runs itself within rules
+handed down from above, reports up as one unit, and escalates only what falls outside its rules. A tree of holons
+is a **holarchy**; every level has the same shape.
 
 ## 1. Principles
-1. **Swarm, not hierarchy.** Modules click together. Each one MUST either push forward, return backward, or
-   report upstream. Nobody polls and there is no central router service.
-2. **Everything is a session in one gateway**: taskmasters and workers. Workers are the same agent (same
-   identity) in different sessions.
-3. **Session = mailbox.** One run at a time per session. Messages that arrive mid-run queue up (`collect`) and
-   arrive together as the next turn. Parallelism = more sessions.
-4. **Normal flow vs exceptions.** Routing drives the normal flow. API errors, quota, gateway restarts and silent
-   workers are exceptions with their own layer (§7). Deadlines only catch silence; they never drive flow.
-5. **Visibility = session switching**, plus an optional channel group per taskmaster. Nothing about who the
-   operator is, or which channel exists, is hard-coded.
-6. **Durable by file.** All task state lives on disk, so any task resumes after a gateway restart.
-7. **Channels are optional.** With no channel configured (or the channel unavailable) a task runs exactly the
-   same; the operator follows it by switching sessions or via `swarm list/show`. A missing channel never
-   blocks or fails a task.
-8. **Generic and reusable.** No person, agent, phone number, group id, host or org path anywhere. Upstream
-   targets, models, thinking levels and repos come from the task contract or plugin config.
+1. **Lean.** Plain files, no database, no new dependency, no money, no time or token limits, no timers, no
+   scheduler service. Fewest moving parts wins.
+2. **Every holon has the same shape** (§2), from "fix this test file" to "build a website". A task is a holon.
+3. **Nothing just dies.** Every participant turn MUST end by pushing forward, returning backward, or reporting up
+   (v1 exit enforcement, kept). A holon that cannot proceed escalates; it never goes quiet.
+4. **Stack, don't interrupt.** Work piled onto a holon or a participant queues behind the current turn and is
+   delivered together next turn (freeclaw `collect` + the session prompt stack). Only `urgent` (stop, rules
+   changed) interrupts. Nothing is lost on a gateway restart.
+5. **Rules down, summaries up.** A holon gets its rules (canon) from its parent and may only tighten them for its
+   children. It reports up as one unit (status, progress, blockers), never raw chatter.
+6. **One level at a time.** A holon talks to its parent and its own children only. Escalation climbs one level at
+   a time.
+7. **Durable by file**, one folder per holon. A crash loses at most the turn in flight, never the tree.
+8. **Generic.** No person, agent, number, group, host or org path in code. Everything comes from the holon file
+   or plugin config.
 
-## 2. Roles
-| Role | What it is | Channel group | Lifetime |
-|---|---|---|---|
-| Upstream | whoever started the task: a session key and/or a channel target, from contract/config | n/a | permanent |
-| Taskmaster | owns one task, drives workers, reports upstream | optional, disposable | until done |
-| Worker | builder / auditor / tester / researcher / any role | none (session only) | per task |
-| Child task | a taskmaster started by a taskmaster (e.g. an auth task mid-build) — post-MVP | optional | until done |
-
-## 3. Task contract (`<stateDir>/swarm/<task-id>/contract.yaml`)
+## 2. The holon (`<stateDir>/swarm/<root-id>/<path>/holon.yaml`)
 ```yaml
-id: <task-id>
-kind: build                 # template
-input: <brief / path / ask>
+id: website-acme              # human-readable, unique within its parent: <repo-or-area>-<plain words>
+goal: <what and why, plain language>
 done_when: <checkable condition>
-workers:
-  build: { count: 1, model: <provider/model>, thinking: off }
-  audit: { count: 1, model: <provider/model>, thinking: high }
+lead: { kind: agent, model: <provider/model>, thinking: high }      # or { kind: human, channel: <target> }
+recipe: build-audit-test      # optional; or omitted = the lead plans the structure itself
+lanes:                        # optional; the work inside this holon (§4)
+  build: { count: 3, model: <provider/model>, thinking: off, partition: true }
+  audit: { count: 5, model: [<m1>, <m2>], thinking: high, join: all }
   test:  { count: 1, model: <provider/model>, thinking: off }
-routes: <§5 table, or the template default>
-upstream: { sessionKey: <optional>, channel: <optional>, events: [DONE, BLOCKED, FAILED] }
-budget: { wall: 4h, step_silence: 30m }
-repo: <path to the working checkout>
+children: []                  # child holon ids, each its own holon.yaml in a sub-folder (§5)
+canon:                        # rules from the parent; children may only tighten
+  scope: <paths / repo / area>
+  never: [push, merge, deploy]  # actions forbidden in this subtree
+  approve: [plan]             # gates that need the parent lead's yes (default: none)
+  depth: 3                    # how many more child levels are allowed
+repo: <path>                  # optional working checkout
+upstream: { sessionKey: <optional>, channel: <optional> }   # root only; children report to their parent
 ```
-- `model` and `thinking` per role are **applied to the worker session** (not just mentioned in its brief).
-  A worker must never silently run on a different model than its contract says.
-- `count` > 1 and `join` are reserved for §6 and rejected in the MVP.
+- A holon's **state** is derived from its event log (`events.jsonl`): `planning | running | blocked | done |
+  failed | cancelled`. No separate state file.
+- **Participants** are the lead plus every lane member. Each agent participant is its own session
+  `agent:<a>:swarm:<root>:<path>:<role>[:<n>]`; its `model`/`thinking` are applied to the session, never just
+  mentioned.
 
-## 4. Messages (the only coupling)
-Every handoff is a gateway agent message to the target session, with a header:
-```
-TASK <id> | FROM <role> | TO <role|taskmaster|upstream>
-EVENT <BUILD_DONE|AUDIT_PASS|AUDIT_FAIL|TEST_PASS|TEST_FAIL|BLOCKED|DONE|...> @ <sha>
-<body: findings / evidence / ask>
-```
-- **The sha is information, not a gate.** An event carries the sha the sender is talking about; it is logged
-  and passed on as-is. Nothing is refused for its sha. `swarm show` reports the repo head.
-- **Every emit is routed.** There is no duplicate rule: a worker may emit BLOCKED and later BUILD_DONE for the
-  same input, and both route. The session lane already allows one run at a time per session.
-- **Logged.** Every send is appended to `events.jsonl`: the audit trail, the board feed and the resume source.
-- **Urgent** messages (stop, ARCH changed) interrupt the run (`steer`); everything else queues (`collect`).
-- Task wake-ups are always agent messages to the task's own sessions — never main-session system events
-  (those run on the heartbeat model, not the worker's model).
+## 3. Leads (any model, or a human)
+1. The lead owns the holon: plans its lanes/children within the canon, drives them, judges results, reports up.
+   The v1 "taskmaster" is exactly an agent lead.
+2. **Agent lead:** any configured model, set per holon (`lead.model`, `lead.thinking`). No more dependence on the
+   gateway default model.
+3. **Human lead:** the holon's events addressed to the lead are sent to `lead.channel` as short plain messages
+   (one line: what happened, what is needed). The human answers in plain chat. A small **relay session** for
+   that holon reads the reply and turns it into exactly one routed event (e.g. `APPROVED`, `RETRY`, `BLOCKED`,
+   `DONE`), confirming back what it understood. The relay never decides on its own; if a reply is unclear it
+   asks once. No commands for the human to learn.
+4. The parent lead picks a child's lead; the root owner (whoever started the root) can override any lead
+   (`swarm lead <holon> <spec>`).
 
-## 5. Routing (default build template; data, not code; per-task override)
-| On | From | Push / return |
-|---|---|---|
-| BUILD_DONE @X | build | → audit "review X" |
-| AUDIT_FAIL @X | audit | ← build, findings |
-| AUDIT_PASS @X | audit | → test "test X" |
-| TEST_FAIL @X | test | ← build, repro + failing test |
-| TEST_PASS @X | test | → taskmaster "gate passed X" |
-| gate passed | taskmaster | merge → DONE upstream |
-| BLOCKED | anyone | → taskmaster, then upstream if a human is needed |
+## 4. Lanes and fan-out (inside one holon)
+1. A lane is a role with `count` ≥ 1 members. v1's single build → audit → test is the special case count = 1.
+2. **Partitioned lane** (`partition: true`, builders): the lead splits the work into `count` scopes, written into
+   the holon's `plan.md` (one line each). Member n gets scope n and its own branch/worktree
+   `<holon-branch>-p<n>`. When all members are done, the lead (or a named `integrate` role) merges them into
+   the holon branch and emits one `BUILD_DONE` for the merged head.
+3. **Redundant lane** (auditors/testers): every member gets the same input. `model` may be a list; members cycle
+   through it so blind spots differ.
+4. **Join** (per lane, default `all`): `all` = every member passes on the same head; `quorum:<k>` = k passes
+   proceed and every dissenting finding is answered by build and re-checked by its dissenter; `any` = first pass
+   wins, the rest are told to stop. The join **deduplicates findings** so build receives one list.
+5. The join is done by the lead from the members' events; there is no join service. A lane's result is one event
+   upward to the lead (`AUDIT_PASS`/`AUDIT_FAIL` with the merged findings), so routing (§6) stays linear.
 
-An example, not final: each template ships its own table, and a task may override it.
+## 5. Child holons (the holarchy)
+1. A lead may create child holons within its canon and `depth` (`swarm spawn` from the lead's session, or by
+   writing the child `holon.yaml` through the tool the plugin gives leads). Example: "fix the test suite" →
+   three children `lane-a`, `lane-b`, `lane-c`, each a build/audit/test holon on its own scope and branch.
+2. A child inherits the canon; any loosening is refused at spawn (e.g. a child cannot drop `never: [push]` or
+   add a scope outside the parent's).
+3. A child reports to its parent lead only: `CHILD_DONE`, `CHILD_BLOCKED`, `CHILD_FAILED`, each with a 1-5 line
+   summary. The parent decides what to do (integrate, retry, re-plan, escalate).
+4. **Escalation:** anything outside a holon's canon, or a `BLOCKED` its lead cannot resolve, goes to the parent
+   lead; if that lead is also stuck it goes one more level; the root escalates to `upstream`. There are no timers:
+   silence is impossible by construction, because every turn must emit (§6.3).
 
-**Exit enforcement.** A worker run that ends without emitting a routed event is invalid. The taskmaster is told
-"worker X ended without exit", re-prompts it once, then escalates upstream.
+## 6. Messages and routing (v1 §4-§5, kept)
+1. Every handoff is an agent message with the v1 header, extended with the holon path:
+   `TASK <root>/<path> | FROM <role[:n]> | TO <role|lead|parent>` / `EVENT <name> @ <sha>` / body.
+2. Routing is data per recipe (v1 §5 table), plus the fan-out rules of §4 and the child rules of §5. Every emit is
+   routed; the sha is information, not a gate.
+3. **Exit enforcement (kept):** a participant turn that ends without a routed event is invalid; the lead is told,
+   re-prompts once, then escalates. Applies to agent leads as well (their parent re-prompts them).
+4. **Stacking (principle 4):** messages to a busy session queue (`collect`); a holon can be given more work at any
+   time with `swarm add <holon> <file>` — it is queued to the lead like any other message, never interrupting.
+   `urgent: true` messages steer.
 
-**One run per session, no races.** A re-prompt is an ordinary message to the worker's session: it queues
-behind any run still active there. The swarm never starts a second run in a session, never aborts a run to
-re-prompt, and never re-prompts a session that has an active run.
+## 7. Exceptions (v1 §7, kept) and resume (v1 §8, kept)
+- Run error, quota, provider down, gateway restart, silent participant: exactly as v1, applied per participant.
+- Resume walks every open holon in the tree, resends unacknowledged outbox entries, and re-delivers each
+  session's last undelivered input (until the gateway prompt stack covers it). Children resume independently;
+  a crash in one branch never blocks its siblings.
+- **No time or token limits.** A holon runs until it is done, blocked, failed or cancelled. Old contracts'
+  `budget` fields are accepted and ignored.
 
-**Operator answers.** `openclaw swarm answer <task> <message>` logs an `OPERATOR` event and delivers the
-message to the taskmaster. It is the only operator side channel; interventions are always in `events.jsonl`.
+## 8. Groups and visibility
+1. A holon that has a human participant gets one channel group (members: those humans, the root owner, the
+   agent identity running it), named `<root> · <holon id>`; closed when the holon is done. Agent-only holons get
+   no group (session switching, as v1).
+2. A participant sees its own holon plus the summaries of its parent and children; the root owner can read
+   everything (`swarm show <root> --tree`).
+3. No channel configured or available → everything still runs; humans are then unreachable and their holons
+   escalate as `BLOCKED: no channel`.
 
-## 6. Fan-out / join (designed now, built after the MVP)
-- **Fan-out** = one event to N worker sessions:
-  - auditors by redundancy (same sha, different models, so blind spots differ);
-  - testers by dimension (functional, adversarial, platform);
-  - builders by partition (one worktree/branch each; the join is an integrator that merges).
-- **Join** = a module (a taskmaster role, or its own session) that must push or return:
-  - `all` (default for gates): every result green on the same sha;
-  - `quorum-k`: k passes proceed; dissent must be answered (build replies to each dissenting finding, the
-    dissenter re-checks);
-  - `any`: first success wins, the rest are cancelled;
-  - the join deduplicates findings, so build gets one list instead of N.
-- **Width** is set in the contract; the taskmaster may widen it per policy (e.g. security-tagged → 3 auditors).
+## 9. Commands
+`swarm start <holon.yaml>` · `swarm list` (tree view, one line per holon: path, state, lead, age) ·
+`swarm show <holon> [--tree] [--json]` · `swarm add <holon> <file>` · `swarm answer <holon> <msg>` ·
+`swarm lead <holon> <spec>` · `swarm cancel <holon>` (cancels its subtree) · `swarm continue` (v1 §12, kept).
+Every read works with the gateway down (reads the files).
 
-## 7. Exceptions (separate from the normal flow)
-| Exception | Detect | Handle |
-|---|---|---|
-| Worker silent | a run ended without an emit (exit enforcement, §5); a long run is never "silent" | §5 |
-| Run error / provider down | run ends in error | retry once → upstream FAILED (fallback model post-MVP) |
-| Quota exhausted | 403/429 quota text | upstream BLOCKED with reason (remap post-MVP); never wait silently |
-| Gateway restart | sessions persist | resume (§8), resend undelivered messages |
-| Taskmaster dies / loses context | no upstream event past `budget.wall` | escalate; post-MVP respawn from contract + events |
+## 10. v2 build order
+1. Holon file + tree folders + derived state + per-holon lead model (§2, §3.1-3.2). v1 contracts load as a root
+   holon with one lane per role.
+2. Fan-out lanes: partition, redundancy, join `all | quorum | any`, findings dedup (§4).
+3. Child holons, canon inheritance and refusal of loosening, one-level escalation (§5).
+4. Stacking command `add`, tree `list/show`, `lead` override (§6.4, §9).
+5. Human lead/participant via channel + relay session; groups for holons with humans (§3.3, §8).
 
-There is no step-silence watchdog. `budget.step_silence` is accepted in old contracts and ignored.
+## 11. Compatibility
+Every v1 contract, `continue` round and resume behaviour keeps working unchanged. v1 tests stay green. A v1
+contract is a root holon whose lead is the gateway default model (as today) unless `lead` is given.
 
-## 8. Resume
-- State = `contract.yaml` + `events.jsonl` + `outbox.jsonl` (sent, not yet acknowledged).
-- After a gateway restart, for each open task:
-  1. resend unacknowledged outbox entries (idempotent, never double-delivered);
-  2. for each session (workers and taskmaster) whose last delivered input has no emit after it and that has
-     no active run: deliver that same input again, with one line on top: `[gateway restarted during this
-     input; check what is already done, then finish and emit]`.
-- That is the whole rule. It holds on every restart, however many in a row: there is no "already re-prompted"
-  skip and no counter. A task that keeps crashing the gateway is stopped by the operator (`swarm cancel`).
-- When the gateway's own session prompt stack lands, step 2 is deleted: the stack replays the unfinished
-  prompt itself. Until then step 2 is the swarm's resume.
-- Acceptance includes killing the gateway mid-task, twice in a row on the same input; it finishes with no
-  human action.
-
-## 9. MVP scope
-- One worker per role, linear routes (§5), default build template + per-task override.
-- Contract, event log, outbox, emit path, routing, exit enforcement, resume, upstream delivery,
-  start/list/show/cancel/answer with `--json` on reads, channel-less operation.
-- Reserved and rejected for now: fan-out/join (§6), child tasks, model remap, channel group creation
-  (interface + no-group mode only).
-
-## 10. Acceptance (MVP)
-1. A dummy build task runs build → audit → test → DONE with zero operator messages after start; upstream
-   receives DONE.
-2. An injected defect bounces back to build and the flow re-runs to DONE.
-3. A worker that stops without emitting is re-prompted by the taskmaster.
-4. Killing the gateway mid-task, then restarting, finishes the task with no human action; killing it twice in
-   a row on the same input does too.
-5. All of the above with no channel configured, and each worker verifiably ran on its contract model.
-6. A worker that emits BLOCKED and later BUILD_DONE for the same input has both routed.
-7. An event whose sha differs from the last one is routed, not refused.
-8. A long-running worker turn (longer than any old step_silence) raises no alarm.
-9. `swarm answer` reaches the taskmaster and appears in `events.jsonl` as `OPERATOR`.
-
-## 12. Continue (follow-up rounds on the same workers)
-A follow-up to a task reuses that task's sessions, so the workers keep the context they built. A new task id
-is for new work only.
-- `swarm continue <task-id> --file <followup.yaml>`. The follow-up file has `input` (required), `done_when`
-  (optional, replaces the task's) and `budget.wall` (optional, replaces it for this round). Any other key is
-  refused. The task's contract, worker sessions, models, thinking, routes, repo and upstream are unchanged.
-- Allowed for a `done` (closed) task or an `open` task whose workers are all idle (no active run); refused
-  for a `cancelled` task, and for an open task with an active run (say so; use `swarm answer` instead).
-- It appends `ROUND_STARTED {round: n, input}` to the same `events.jsonl` (round 1 = the original start), then
-  delivers the follow-up through the normal kickoff route, exactly as `start` does, to the same session keys.
-  The task's status is `open` again until the next `TASK_CLOSED`. Nothing is reset: outbox, seq and the event
-  log continue.
-- The kickoff message names the round and carries only the new input plus one line: `[round n of task <id>:
-  you already hold this task's context; re-read only what changed]`. It does not resend the original brief.
-- Wall budget for the round starts at `ROUND_STARTED`. Resume (§8) is unchanged and applies per round.
-- `swarm list` shows the round number; `swarm show` groups the timeline by round.
-- Acceptance: continue a done task → the same session ids receive the round-2 kickoff (asserted by session id,
-  not key), the round runs build → audit → test → DONE, round 1 events are untouched; continue is refused for a
-  cancelled task, a busy open task, and a follow-up file with an unknown key; a gateway restart mid-round 2
-  resumes round 2 (§8).
-
-## 11. Later
-Fan-out/join (§6); child tasks with a depth limit; a reserved concurrency lane for interactive sessions;
-per-role thinking defaults from R&D; a board generated from `events.jsonl`.
+## 12. Acceptance
+1. A dev task whose lead splits it into 3 partitioned builders, 5 redundant auditors (2 models, join `quorum:4`)
+   and 1 tester runs to DONE with zero operator messages; findings reach build deduplicated.
+2. A root holon spawns 3 child build/audit/test holons on separate scopes; each finishes; the root integrates and
+   reports DONE. A child trying to loosen the canon (drop `never: push`) is refused.
+3. Work added with `swarm add` while the lead is mid-turn is queued and handled next turn; nothing interrupts.
+4. A participant ending a turn without an emit is re-prompted, then escalated one level, never silent.
+5. Gateway killed mid-task twice in a row: every open holon in the tree resumes and finishes.
+6. A human lead (test channel or a loopback fake channel) approves a plan in plain words; the relay turns it into
+   one event and the holon proceeds.
+7. All v1 acceptance tests still pass.

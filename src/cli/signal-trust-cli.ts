@@ -9,6 +9,7 @@ import { canonicalizeTrustInput, type SignalTrustEntry } from "../signal/trust/i
 import { readSignalTrustStoreForCli, updateSignalTrustStore } from "../signal/trust/store.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { registerSignalLinkCli } from "./signal-link-cli.js";
 
 function resolveAccountOption(opts: { account?: unknown }): string {
   return normalizeAccountId(typeof opts.account === "string" ? opts.account : undefined);
@@ -34,6 +35,7 @@ function formatEntry(entry: SignalTrustEntry): string {
  */
 export function registerSignalTrustCli(program: Command) {
   const signal = program.command("signal").description("Signal channel operator tools");
+  registerSignalLinkCli(signal);
   const trust = signal
     .command("trust")
     .description(

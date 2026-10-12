@@ -10,6 +10,54 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { CONFIG_DIR } from "../utils.js";
 
+/**
+ * Minimum signal-cli version accepted for linking (fresh-install ARCH §1.2).
+ * 0.14.5 fails linking with "network failed" on current phones (observed live).
+ */
+export const MIN_SIGNAL_CLI_VERSION = "0.14.9";
+
+/**
+ * Compare two dotted version strings. Returns a negative number when a < b,
+ * zero when equal, positive when a > b. Non-numeric suffixes are ignored.
+ */
+export function compareVersions(a: string, b: string): number {
+  const parse = (v: string) =>
+    v
+      .trim()
+      .replace(/^signal-cli\s+/i, "")
+      .replace(/^v/, "")
+      .split(/[.-]/)
+      .map((part) => {
+        const num = Number.parseInt(part, 10);
+        return Number.isFinite(num) ? num : 0;
+      });
+  const pa = parse(a);
+  const pb = parse(b);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i += 1) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return 0;
+}
+
+/** Extract a dotted version from `signal-cli --version` output (e.g. "signal-cli 0.14.9"). */
+export function parseSignalCliVersion(output: string): string | null {
+  const match = /(\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.-]+)?)/.exec(output.trim());
+  return match?.[1] ?? null;
+}
+
+/** True when the found signal-cli is below MIN_SIGNAL_CLI_VERSION (unparseable = refuse). */
+export function isSignalCliVersionBelowMinimum(versionOutput: string): boolean {
+  const parsed = parseSignalCliVersion(versionOutput);
+  if (!parsed) {
+    return true;
+  }
+  return compareVersions(parsed, MIN_SIGNAL_CLI_VERSION) < 0;
+}
+
 export type ReleaseAsset = {
   name?: string;
   browser_download_url?: string;

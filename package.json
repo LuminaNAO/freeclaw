@@ -148,6 +148,10 @@
       "types": "./dist/plugin-sdk/minimax-portal-auth.d.ts",
       "default": "./dist/plugin-sdk/minimax-portal-auth.js"
     },
+    "./plugin-sdk/model-badge": {
+      "types": "./dist/plugin-sdk/model-badge.d.ts",
+      "default": "./dist/plugin-sdk/model-badge.js"
+    },
     "./plugin-sdk/nextcloud-talk": {
       "types": "./dist/plugin-sdk/nextcloud-talk.d.ts",
       "default": "./dist/plugin-sdk/nextcloud-talk.js"

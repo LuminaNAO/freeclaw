@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/model-badge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Model badge plugin: keep each chat target's avatar showing the badge of the model its session will use next. Every picture is generated on the host at runtime.",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

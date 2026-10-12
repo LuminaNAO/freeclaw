@@ -77,6 +77,8 @@ const requiredPathGroups = [
   "dist/plugin-sdk/memory-lancedb.d.ts",
   "dist/plugin-sdk/minimax-portal-auth.js",
   "dist/plugin-sdk/minimax-portal-auth.d.ts",
+  "dist/plugin-sdk/model-badge.js",
+  "dist/plugin-sdk/model-badge.d.ts",
   "dist/plugin-sdk/nextcloud-talk.js",
   "dist/plugin-sdk/nextcloud-talk.d.ts",
   "dist/plugin-sdk/nostr.js",

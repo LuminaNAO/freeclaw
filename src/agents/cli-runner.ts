@@ -2,6 +2,7 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { parseGroupKey } from "../gateway/session-utils.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -36,6 +37,7 @@ import {
 } from "./cli-runner/helpers.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
+import { buildGroupMemoryPromptBlock } from "./group-memory.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -139,8 +141,19 @@ export async function runCliAgent(params: {
   const normalizedModel = normalizeCliModel(modelId, backend);
   const modelDisplay = `${params.provider}/${modelId}`;
 
+  const sessionKeyGroup = parseGroupKey(params.sessionKey?.trim() ?? "");
+  const groupMemoryBlock = sessionKeyGroup?.channel
+    ? buildGroupMemoryPromptBlock({
+        workspaceDir,
+        sessionKey: params.sessionKey,
+        channel: sessionKeyGroup.channel,
+        groupId: sessionKeyGroup.id,
+        cfg: params.config,
+      })
+    : undefined;
   const extraSystemPrompt = [
     params.extraSystemPrompt?.trim(),
+    groupMemoryBlock?.trim(),
     "Tools are disabled in this session. Do not call tools.",
   ]
     .filter(Boolean)

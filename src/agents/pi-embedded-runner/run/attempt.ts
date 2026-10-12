@@ -60,6 +60,7 @@ import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { buildGroupMemoryPromptBlock } from "../../group-memory.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -1695,12 +1696,29 @@ export async function runEmbeddedAttempt(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
+    // group-memory ARCH §2: group sessions get a "## Group memory" block rebuilt
+    // from the group's files every turn (survives compaction and /new). DM/main
+    // sessions and other groups never see it.
+    const groupMemoryBlock = params.groupId
+      ? buildGroupMemoryPromptBlock({
+          workspaceDir: effectiveWorkspace,
+          sessionKey: params.sessionKey,
+          channel: runtimeChannel,
+          groupId: params.groupId,
+          cfg: params.config,
+          agentId: sessionAgentId,
+        })
+      : undefined;
+    const extraSystemPromptWithGroupMemory =
+      [params.extraSystemPrompt, groupMemoryBlock]
+        .filter((part) => typeof part === "string" && part.trim().length > 0)
+        .join("\n\n") || undefined;
 
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
-      extraSystemPrompt: params.extraSystemPrompt,
+      extraSystemPrompt: extraSystemPromptWithGroupMemory,
       ownerNumbers: params.ownerNumbers,
       ownerDisplay: ownerDisplay.ownerDisplay,
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,

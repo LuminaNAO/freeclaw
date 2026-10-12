@@ -104,6 +104,9 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  "signal.link.start",
+  "signal.link.status",
+  "signal.link.cancel",
 ];
 
 export function listGatewayMethods(): string[] {

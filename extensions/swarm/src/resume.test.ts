@@ -6,7 +6,8 @@ import { createSwarmEmitTool } from "./emit.js";
 import { SwarmEngine } from "./engine.js";
 import { RESTART_LINE, resumeOpenTasks, withResendMarker } from "./resume.js";
 import { appendOutbox, readEvents, readOutbox } from "./store.js";
-import { seedTask } from "./test-fixtures.js";
+import { startTask } from "./tasks.js";
+import { seedTask, initScratchRepo } from "./test-fixtures.js";
 import { makeStubRuntime } from "./test-runtime.js";
 
 const tmp = fs.mkdtempSync(path.join(tmpdir(), "swarm-resume-test-"));
@@ -400,5 +401,92 @@ describe("swarm resume (ARCH §8)", () => {
     const runtime = makeStubRuntime();
     const summary = await resumeOpenTasks(new SwarmEngine({ stateDir, runtime }));
     expect(summary.resent).toBe(1);
+  });
+});
+
+describe("resume with a fan-out lane in flight (ARCH §4.5, §7)", () => {
+  const FANOUT_TASK = "task-350";
+  const fkey = (member: string) => `agent:main:swarm:${FANOUT_TASK}:${member}`;
+
+  async function startedFanout(stateDir: string) {
+    const runtime = makeStubRuntime();
+    const engine = new SwarmEngine({ stateDir, runtime });
+    await startTask(engine, {
+      contractYaml: `
+id: ${FANOUT_TASK}
+kind: build
+input: x
+done_when: y
+lead: { kind: agent, model: cb-sonnet/claude-sonnet-5-5 }
+lanes:
+  build: { count: 1, model: cb-sonnet/claude-sonnet-5-5 }
+  audit: { count: 2, model: cb-sonnet/claude-sonnet-5-5, join: all }
+  test: { count: 1, model: cb-sonnet/claude-sonnet-5-5 }
+upstream: { sessionKey: agent:main:up }
+`,
+    });
+    await runtime.settleAll();
+    const emit = async (member: string, event: string, sha = "abc123", body = "") => {
+      await createSwarmEmitTool({ engine, callerSessionKey: fkey(member) }).execute("c", {
+        event,
+        sha,
+        body,
+      });
+      await runtime.settleAll();
+    };
+    return { runtime, engine, emit };
+  }
+
+  it("a member verdict never reaches the next lane early on restart; the join still governs", async () => {
+    const stateDir = path.join(tmp, `s-${Math.random().toString(36).slice(2)}`);
+    fs.mkdirSync(stateDir, { recursive: true });
+    const { emit } = await startedFanout(stateDir);
+    await emit("build", "BUILD_DONE");
+    // audit:1 passes; the join (all, count 2) is still waiting for audit:2.
+    await emit("audit:1", "AUDIT_PASS");
+    const before = readEvents(stateDir, FANOUT_TASK);
+    expect(before.some((e) => e.event === "LANE_WAITING")).toBe(true);
+    expect(before.some((e) => e.event === "LANE_SETTLED")).toBe(false);
+
+    // Restart: nothing goes to test; the waiting member's input is what is redelivered.
+    const runtime2 = makeStubRuntime();
+    const summary = await resumeOpenTasks(new SwarmEngine({ stateDir, runtime: runtime2 }));
+    expect(runtime2.runs.filter((r) => r.sessionKey === fkey("test"))).toHaveLength(0);
+    const audit2 = runtime2.runs.filter((r) => r.sessionKey === fkey("audit:2"));
+    expect(audit2).toHaveLength(1);
+    expect(audit2[0]?.message).toContain(RESTART_LINE);
+    expect(audit2[0]?.message).toContain("EVENT BUILD_DONE");
+    expect(summary.redelivered).toBeGreaterThanOrEqual(1);
+    const events = readEvents(stateDir, FANOUT_TASK);
+    expect(events.some((e) => e.event === "REDELIVERED" && e.data?.role === "audit:2")).toBe(true);
+    expect(events.some((e) => e.event === "REDELIVERED" && e.data?.role === "test")).toBe(false);
+  });
+
+  it("the partition member branches follow the holon branch, not the task id (ARCH §4.2)", async () => {
+    const stateDir = path.join(tmp, `s-${Math.random().toString(36).slice(2)}`);
+    fs.mkdirSync(stateDir, { recursive: true });
+    const repo = initScratchRepo(); // checked-out branch: master, not the task id
+    const runtime = makeStubRuntime();
+    const engine = new SwarmEngine({ stateDir, runtime });
+    const task = await startTask(engine, {
+      contractYaml: `
+id: task-351
+kind: build
+input: x
+done_when: y
+lanes:
+  build: { count: 2, model: cb-sonnet/claude-sonnet-5-5, partition: true }
+  test: { count: 1, model: cb-sonnet/claude-sonnet-5-5 }
+upstream: { sessionKey: agent:main:up }
+repo: ${repo}
+`,
+    });
+    await runtime.settleAll();
+    expect(fs.existsSync(path.join(repo, "worktrees", "master-p1"))).toBe(true);
+    expect(fs.existsSync(path.join(repo, "worktrees", "master-p2"))).toBe(true);
+    // The member brief names its real branch.
+    const run1 = runtime.runs.find((r) => r.sessionKey.endsWith(":build:1"));
+    expect(run1?.extraSystemPrompt).toContain("master-p1");
+    expect(task.taskId).toBe("task-351");
   });
 });

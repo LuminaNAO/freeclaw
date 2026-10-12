@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { taskmasterBrief, workerBrief } from "./briefs.js";
-import { parseContract, serializeContract, SwarmContractError, taskDirFor } from "./contract.js";
+import { leadBrief, workerBrief } from "./briefs.js";
+import { parseContract, SwarmContractError, taskDirFor, type Contract } from "./contract.js";
 import { readRepoHead, type SwarmEngine } from "./engine.js";
+import { parseHolon, targetMembers, type Holon } from "./holon.js";
+import { readPlan, setupPartition, holonBranch, memberBranch, writePlan } from "./partition.js";
 import { ROUND_STARTED, roundStarts } from "./rounds.js";
 import { TASKMASTER, UPSTREAM } from "./routing.js";
+import { laneRoleOf } from "./sessions.js";
 import {
   readEvents,
   readOutbox,
@@ -40,9 +43,10 @@ export function firstRole(routes: { from: string }[], workers: string[]): string
 }
 
 /**
- * Validate, apply each worker's model+thinking to its session (ARCH §3), then create the task
- * and deliver the first worker's brief plus a kickoff to the taskmaster. If any session patch
- * fails, nothing is created and no message is sent.
+ * Validate, apply every participant's model+thinking to its session (ARCH §2, §3: every lane
+ * member and the lead), then create the holon and deliver the first lane's briefs plus a
+ * kickoff to the lead. If any session patch fails, nothing is created and no message is sent.
+ * A v1 contract starts exactly as before (one member per role, lead on the default model, §11).
  */
 export async function startTask(
   engine: SwarmEngine,
@@ -54,7 +58,10 @@ export async function startTask(
   if (!yaml) {
     throw new SwarmContractError("swarm.start needs a contract file or contract text");
   }
-  const contract = parseContract(yaml, engine.defaults);
+  const holon = parseHolon(yaml, engine.defaults);
+  // v1 detection: the start input names v1 fields (workers/input) and no v2-only ones (§11).
+  const v1 = /(^|\n)workers:/.test(yaml) && !/(^|\n)(lanes|lead|children|canon):/.test(yaml);
+  const contract = holon.contract;
   const dir = taskDirFor(engine.stateDir, contract.id);
   if (readTasksIndex(engine.stateDir)[contract.id] || fs.existsSync(dir)) {
     throw new SwarmContractError(`task "${contract.id}" already exists`);
@@ -69,42 +76,90 @@ export async function startTask(
       label?: string;
     }) => Promise<{ provider: string; model: string }>;
   };
-  for (const [role, spec] of Object.entries(contract.workers)) {
-    const sessionKey = engine.sessionKey(contract.id, role);
-    if (!patch.patchSession) {
-      throw new Error("runtime cannot apply worker models (patchSession unavailable)");
+  if (!patch.patchSession) {
+    throw new Error("runtime cannot apply worker models (patchSession unavailable)");
+  }
+  for (const lane of holon.lanes) {
+    for (let n = 1; n <= lane.count; n += 1) {
+      const member = lane.count > 1 ? `${lane.role}:${n}` : lane.role;
+      const model = lane.models[(n - 1) % lane.models.length];
+      const sessionKey = engine.sessionKey(contract.id, member);
+      let resolved: { provider: string; model: string };
+      try {
+        resolved = await patch.patchSession({
+          sessionKey,
+          label: `swarm:${contract.id}:${member}`,
+          ...(model && { model }),
+          ...(lane.thinking && { thinkingLevel: lane.thinking }),
+        });
+      } catch (err) {
+        throw new SwarmContractError(
+          `cannot apply model to worker ${member}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      workers[member] = {
+        model,
+        thinking: lane.thinking,
+        provider: resolved.provider,
+        resolved: `${resolved.provider}/${resolved.model}`,
+      };
     }
-    let resolved: { provider: string; model: string };
+  }
+  // ARCH §3.2: the lead's own model. A v1 holon has none; its session is labeled only.
+  if (!v1 && (holon.lead.model || holon.lead.thinking)) {
     try {
-      resolved = await patch.patchSession({
-        sessionKey,
-        label: `swarm:${contract.id}:${role}`,
-        ...(spec.model && { model: spec.model }),
-        ...(spec.thinking && { thinkingLevel: spec.thinking }),
+      const resolved = await patch.patchSession({
+        sessionKey: engine.sessionKey(contract.id, TASKMASTER),
+        label: `swarm:${contract.id}:${TASKMASTER}`,
+        ...(holon.lead.model && { model: holon.lead.model }),
+        ...(holon.lead.thinking && { thinkingLevel: holon.lead.thinking }),
       });
+      workers[TASKMASTER] = {
+        model: holon.lead.model,
+        thinking: holon.lead.thinking,
+        provider: resolved.provider,
+        resolved: `${resolved.provider}/${resolved.model}`,
+      };
     } catch (err) {
       throw new SwarmContractError(
-        `cannot apply model to worker ${role}: ${err instanceof Error ? err.message : String(err)}`,
+        `cannot apply the lead model: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    workers[role] = {
-      model: spec.model,
-      thinking: spec.thinking,
-      provider: resolved.provider,
-      resolved: `${resolved.provider}/${resolved.model}`,
-    };
+  } else {
+    await patch
+      .patchSession?.({
+        sessionKey: engine.sessionKey(contract.id, TASKMASTER),
+        label: `swarm:${contract.id}:${TASKMASTER}`,
+      })
+      .catch(() => undefined);
   }
-  await patch
-    .patchSession?.({
-      sessionKey: engine.sessionKey(contract.id, TASKMASTER),
-      label: `swarm:${contract.id}:${TASKMASTER}`,
-    })
-    .catch(() => undefined);
+
+  /** ARCH §4.2: partitioned lanes get their worktrees/branches and the plan file up front. */
+  const partitioned = holon.lanes.filter((l) => l.partition && l.count > 1);
+  if (partitioned.length > 0 && !contract.repo) {
+    throw new SwarmContractError("a partitioned lane needs holon.repo");
+  }
 
   const sha = readRepoHead(contract.repo) ?? "init";
   const now = new Date().toISOString();
   fs.mkdirSync(dir, { recursive: true });
-  writeFileAtomic(path.join(dir, "contract.yaml"), serializeContract(contract));
+  // The holon branch is the repo's checked-out branch at start (§4.2); member branches are
+  // <holon branch>-p<n>. Stored on the task so a restart merges the same names.
+  const base = contract.repo ? holonBranch(contract.repo) : contract.id;
+  for (const lane of partitioned) {
+    setupPartition(contract.repo!, base, lane.count);
+  }
+  if (partitioned.length > 0) {
+    // Default split until the lead writes its own plan.md (§4.2); equal slices by position.
+    const firstLane = partitioned[0]!;
+    writePlan(
+      dir,
+      Array.from({ length: firstLane.count }, (_, i) => `part ${i + 1} of ${firstLane.count}`),
+    );
+  }
+  // The holon file is the start input, stored as holon.yaml for v2 and contract.yaml for v1
+  // (loadHolon reads either, §11); plan.md holds the partition split.
+  writeFileAtomic(path.join(dir, v1 ? "contract.yaml" : "holon.yaml"), yaml);
   const index = readTasksIndex(engine.stateDir);
   index[contract.id] = { status: "open", sha, createdAt: now, updatedAt: now };
   writeTasksIndex(engine.stateDir, index);
@@ -128,44 +183,75 @@ export async function startTask(
       data: { ...applied },
     });
   }
+  const first = firstRole(
+    contract.routes,
+    holon.lanes.map((l) => l.role),
+  );
   const startRec = engine.record(contract.id, {
     kind: "system",
     event: "TASK_STARTED",
-    to: firstRole(contract.routes, Object.keys(contract.workers)),
+    to: first,
     sha,
     body: contract.input,
   });
 
   await engine.locks.run(contract.id, async () => {
-    const first = firstRole(contract.routes, Object.keys(contract.workers));
-    await engine.sendTo(contract.id, state, {
-      to: first,
-      from: TASKMASTER,
-      event: "TASK_STARTED",
-      sha,
-      body: `Start the task.\n${contract.input}\nDone when: ${contract.done_when}`,
-      seqs: [startRec.seq],
-      extraSystemPrompt: workerBrief(contract, first),
-    });
+    const members = targetMembers(state.holon, first);
+    const plan = readPlan(dir);
+    for (const member of members) {
+      await engine.sendTo(contract.id, state, {
+        to: member,
+        from: TASKMASTER,
+        event: "TASK_STARTED",
+        sha,
+        body: `Start the task.\n${contract.input}\nDone when: ${contract.done_when}`,
+        seqs: [startRec.seq],
+        extraSystemPrompt: memberBrief(state.holon, plan, member, base),
+        salt: `start-${member}`,
+      });
+    }
     await engine.sendTo(contract.id, state, {
       to: TASKMASTER,
       from: UPSTREAM,
       event: "TASK_STARTED",
       sha,
-      body: `Task started; ${first} has the brief. Wait for events; do not do the work yourself.`,
+      body: `Task started; ${members.join(", ")} ${members.length > 1 ? "have" : "has"} the brief. Wait for events; do not do the work yourself.`,
       seqs: [startRec.seq],
       salt: "kickoff",
-      extraSystemPrompt: taskmasterBrief(contract),
+      extraSystemPrompt: leadBrief(state.holon.contract, state.holon.lanes),
     });
   });
 
   const sessions: Record<string, string> = {
     [TASKMASTER]: engine.sessionKey(contract.id, TASKMASTER),
   };
-  for (const role of Object.keys(contract.workers)) {
-    sessions[role] = engine.sessionKey(contract.id, role);
+  for (const lane of holon.lanes) {
+    for (const member of targetMembers(holon, lane.role)) {
+      sessions[member] = engine.sessionKey(contract.id, member);
+    }
   }
   return { taskId: contract.id, id: contract.id, status: "open", sha, dir, sessions, workers };
+}
+
+/** Brief for one member: partition brief for a partitioned member, else the worker brief. */
+function memberBrief(
+  holon: { contract: Contract; lanes: Holon["lanes"] },
+  plan: string[],
+  member: string,
+  base: string,
+): string {
+  const lane = holon.lanes.find((l) => l.role === laneRoleOf(member));
+  if (lane?.partition && member.includes(":")) {
+    const n = Number(member.slice(member.lastIndexOf(":") + 1));
+    const scope = plan[n - 1];
+    return [
+      `You are ${member}, member ${n} of the partitioned ${lane.role} lane of a swarm task.`,
+      ...(scope ? [`Your scope (only this): ${scope}`] : []),
+      `Work in your own worktree on branch ${memberBranch(base, n)}; commit there and emit with its sha.`,
+      workerBrief(holon.contract, lane.role).split("\n").slice(1).join("\n"),
+    ].join("\n");
+  }
+  return workerBrief(holon.contract, laneRoleOf(member));
 }
 
 export type TaskSummary = {
@@ -378,7 +464,8 @@ export async function cancelTask(engine: SwarmEngine, taskId: string, reason = "
     }
     engine.close(taskId, "cancelled");
     const rec = engine.record(taskId, { kind: "system", event: "CANCELLED", body: reason });
-    for (const role of [TASKMASTER, ...Object.keys(state.contract.workers)]) {
+    const members = state.holon.lanes.flatMap((l) => targetMembers(state.holon, l.role));
+    for (const role of [TASKMASTER, ...members]) {
       await engine.sendTo(taskId, state, {
         to: role,
         from: UPSTREAM,

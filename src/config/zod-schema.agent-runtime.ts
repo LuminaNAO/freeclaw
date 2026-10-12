@@ -750,6 +750,14 @@ export const AgentEntrySchema = z
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
+    groupMemory: z
+      .object({
+        enabled: z.boolean().optional(),
+        historyLines: z.number().int().nonnegative().optional(),
+        maxContextBytes: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     subagents: z
       .object({
         allowAgents: z.array(z.string()).optional(),

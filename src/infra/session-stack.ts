@@ -132,16 +132,24 @@ export function finishStackFiles(files: string[] | undefined): void {
 
 // Ownership: the prompts a context/queued run currently carries. The array is
 // shared, so handing it on (splice) leaves the previous owner with nothing.
-const ownedFiles = new WeakMap<object, string[]>();
+//
+// The paths ride on the owner as a plain field under a process-wide symbol
+// (stale replay ARCH §1.2). Unlike a module-local WeakMap keyed by identity it
+// survives `{ ...ctx }` copies and is visible to every bundled copy of this
+// module (the followup queues are process-wide too). JSON ignores symbol keys,
+// so the stored and replayed payload stays byte-identical (v2 §2.1).
+const STACK_FILES = Symbol.for("openclaw.sessionStackFiles");
+
+type StackFilesOwner = { [STACK_FILES]?: string[] };
 
 export function bindStackFiles(owner: object, files: string[] | undefined): void {
   if (files && files.length > 0) {
-    ownedFiles.set(owner, files);
+    (owner as StackFilesOwner)[STACK_FILES] = files;
   }
 }
 
 export function stackFilesOf(owner: object | undefined): string[] | undefined {
-  return owner ? ownedFiles.get(owner) : undefined;
+  return owner ? (owner as StackFilesOwner)[STACK_FILES] : undefined;
 }
 
 /** Take the prompts away from their current owner (it no longer ends their turn). */

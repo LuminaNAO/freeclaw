@@ -66,6 +66,8 @@ const TOP_LEVEL_KEYS = new Set([
   "id",
   "kind",
   "input",
+  // ARCH §2: `goal` is the holon name of `input`; both accepted, never both set.
+  "goal",
   "done_when",
   "workers",
   "routes",
@@ -253,10 +255,14 @@ export function parseContract(yamlText: string, defaults: ContractDefaults = {})
   }
   const kind = typeof doc.kind === "string" && doc.kind.trim() ? doc.kind.trim() : "build";
   const workers = parseWorkers(doc.workers, defaults);
+  if (doc.input !== undefined && doc.goal !== undefined) {
+    throw new SwarmContractError("contract has both input and goal; they are the same field");
+  }
+  const input = requireString(doc.input !== undefined ? doc : { ...doc, input: doc.goal }, "input");
   const contract: Contract = {
     id,
     kind,
-    input: requireString(doc, "input"),
+    input,
     done_when: requireString(doc, "done_when"),
     workers,
     routes: parseRoutes(doc.routes, kind, new Set(Object.keys(workers))),
