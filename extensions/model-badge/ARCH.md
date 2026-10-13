@@ -151,6 +151,21 @@ fallback for hosts with no image model at all.
    generate` overrides per target. Tests: first sight adopts; restyle keeps adopted; regenerate replaces and restore
    brings it back; a target with no avatar or with our own mark gets a generated base.
 
+9. **Adopted artwork is full-frame, never inset (operator, 2026-10-13 live finding).** §2c.8's "contain on a
+   blurred fill" produced a half-size copy of the artwork floating over a blurred copy of itself, and re-badged
+   artwork that already carried a mark. Both are defects. Rules:
+   - An adopted base is drawn **full-frame** (square, fills the whole 512x512). No inset, no blurred background, no
+     darkening. Source avatars are already square; a non-square source is centre-cropped (slice) to a square, but only
+     after the format guard.
+   - The model mark (colour + letter) is composited on top **once**, in the corner mark position only. No second badge.
+   - **Already-marked artwork is not adopted.** Before adopting, detect our own mark (known corner mark region match,
+     or a prior-applied record for that target) and record `none: "ours"`; such a target gets the state-dir base we
+     last applied instead, or a generated base, never a mark stacked on a mark.
+   - Layout tag changes from `contain-v1` to `full-v1`, so existing adopted targets repaint once.
+   Tests: adopted base renders full-frame (pixel check at the centre and the four corners outside the mark); no blur
+   filter in the SVG; mark appears exactly once; already-marked source is refused as a base; layout tag bump repaints
+   once and is then idempotent.
+
 ## 3. Lifecycle (generated and removed as the world changes)
 
 1. **Turn on** (`plugins.entries.model-badge.enabled` + provider config): first reconcile generates the required
