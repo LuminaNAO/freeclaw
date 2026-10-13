@@ -1057,6 +1057,45 @@ describe("handleCommands /allowlist", () => {
     );
   });
 
+  it("refuses to write a Signal phone entry and writes Signal uuids as uuid:<uuid> (signal uuid ARCH §3.3)", async () => {
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { signal: { allowFrom: [] } },
+    } as OpenClawConfig;
+    const phone = await handleCommands(
+      buildPolicyParams("/allowlist add dm +15550001111", cfg, {
+        Provider: "signal",
+        Surface: "signal",
+      }),
+    );
+    expect(phone.shouldContinue).toBe(false);
+    expect(phone.reply?.text).toContain("uuid:<uuid> only");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+
+    await withTempConfigPath({ channels: { signal: { allowFrom: [] } } }, async (configPath) => {
+      readConfigFileSnapshotMock.mockResolvedValueOnce({
+        valid: true,
+        parsed: { channels: { signal: { allowFrom: [] } } },
+      });
+      validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+        ok: true,
+        config,
+      }));
+      // (the pairing-channel mock lists telegram only, so this exercises the config write)
+      await handleCommands(
+        buildPolicyParams("/allowlist add dm 00000000-0000-4000-8000-00000000000A", cfg, {
+          Provider: "signal",
+          Surface: "signal",
+        }),
+      );
+      const written = await readJsonFile<OpenClawConfig>(configPath);
+      expect(written.channels?.signal?.allowFrom).toEqual([
+        "uuid:00000000-0000-4000-8000-00000000000a",
+      ]);
+    });
+  });
+
   it("writes store entries to the selected account scope", async () => {
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       valid: true,

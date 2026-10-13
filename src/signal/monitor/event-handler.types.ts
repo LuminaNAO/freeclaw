@@ -119,6 +119,7 @@ export type SignalEventHandlerDeps = {
     targets?: SignalReactionTarget[];
     sender?: SignalSender | null;
     allowlist?: string[];
+    accountId?: string;
   }) => boolean;
   buildSignalReactionSystemEventText: (params: {
     emojiLabel: string;

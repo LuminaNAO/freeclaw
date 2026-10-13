@@ -90,6 +90,23 @@ describe("channels dock", () => {
     expect(formatted).toEqual(["+14155550100", "*"]);
   });
 
+  it("signal allowFrom formatter keeps uuid entries as uuid:<uuid> (uuid ARCH §3.1)", () => {
+    const signalDock = getChannelDock("signal");
+    const formatted = signalDock?.config?.formatAllowFrom?.({
+      cfg: emptyConfig(),
+      allowFrom: [
+        "uuid:00000000-0000-4000-8000-00000000000A",
+        "00000000-0000-4000-8000-00000000000b",
+        "signal:+15550001111",
+      ],
+    });
+    expect(formatted).toEqual([
+      "uuid:00000000-0000-4000-8000-00000000000a",
+      "uuid:00000000-0000-4000-8000-00000000000b",
+      "+15550001111",
+    ]);
+  });
+
   it("telegram allowFrom formatter trims, strips prefix, and lowercases", () => {
     const telegramDock = getChannelDock("telegram");
 

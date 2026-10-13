@@ -33,6 +33,7 @@ import {
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "../../security/dm-policy-shared.js";
 import { normalizeE164 } from "../../utils.js";
+import { migrateSignalDmSessionToUuid } from "../dm-session-rekey.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -44,7 +45,7 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
-import { resolveSignalInboundRoute } from "../inbound-route.js";
+import { buildSignalDirectSessionKey, resolveSignalInboundRoute } from "../inbound-route.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import type { SignalTrustedSender } from "../trust/gate.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
@@ -85,6 +86,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     senderDisplay: string;
     senderRecipient: string;
     senderPeerId: string;
+    /**
+     * Number Signal supplied alongside the uuid (ARCH §2.1). Secondary match key only:
+     * used for the §4 DM re-key, legacy allow-list owner pins and SenderMatchE164; never an id.
+     */
+    senderE164?: string;
     groupId?: string;
     groupName?: string;
     isGroup: boolean;
@@ -129,6 +135,26 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const storePath = resolveStorePath(deps.cfg.session?.store, {
       agentId: route.agentId,
     });
+    // ARCH §4.1/§4.2: a DM sender who used to resolve by number had a phone-keyed session;
+    // move it to the uuid key (same sessionId/transcript/overrides) before this turn uses it.
+    if (!entry.isGroup && entry.senderE164 && entry.senderPeerId.startsWith("uuid:")) {
+      try {
+        await migrateSignalDmSessionToUuid({
+          storePath,
+          phoneSessionKey: buildSignalDirectSessionKey({
+            agentId: route.agentId,
+            accountId: route.accountId,
+            peerId: entry.senderE164,
+          }),
+          uuidSessionKey: route.sessionKey,
+          phoneE164: entry.senderE164,
+          uuidRecipient: entry.senderRecipient,
+          log: (message) => deps.runtime.log?.(message),
+        });
+      } catch (err) {
+        deps.runtime.error?.(`signal: DM session re-key failed: ${String(err)}`);
+      }
+    }
     const envelopeOptions = resolveEnvelopeFormatOptions(deps.cfg);
     const previousTimestamp = readSessionUpdatedAt({
       storePath,
@@ -196,6 +222,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
       SenderName: entry.senderName,
       SenderId: entry.senderDisplay,
+      // ARCH §1/§3.1: the number is a secondary match key only, never SenderE164/SenderId.
+      SenderMatchE164: entry.senderE164,
       Provider: "signal" as const,
       Surface: "signal" as const,
       MessageSid: entry.messageId,
@@ -231,9 +259,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               if (!pinnedOwner) {
                 return undefined;
               }
+              // ARCH §3.1: a legacy phone owner entry still pins the owner's uuid sender.
+              const ownerMatchesByNumber =
+                entry.senderE164 != null && pinnedOwner === entry.senderE164;
               return {
                 ownerRecipient: pinnedOwner,
-                senderRecipient: entry.senderRecipient,
+                senderRecipient: ownerMatchesByNumber ? pinnedOwner : entry.senderRecipient,
                 onSkip: ({ ownerRecipient, senderRecipient }) => {
                   logVerbose(
                     `signal: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
@@ -429,6 +460,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       targets,
       sender: params.sender,
       allowlist: deps.reactionAllowlist,
+      accountId: deps.accountId,
     });
     if (!shouldNotify) {
       return true;
@@ -502,12 +534,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    // Check if the message is from our own account to prevent loop/self-reply
-    // This handles both phone number and UUID based identification
+    // Check if the message is from our own account to prevent loop/self-reply.
+    // ARCH §2.5: match either the account uuid or the account number (both forms),
+    // including a uuid sender whose secondary e164 is our number.
     const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
+    const accountUuid = deps.accountUuid?.trim().toLowerCase() || undefined;
     const isOwnMessage =
-      (sender.kind === "phone" && normalizedAccount != null && sender.e164 === normalizedAccount) ||
-      (sender.kind === "uuid" && deps.accountUuid != null && sender.raw === deps.accountUuid);
+      (normalizedAccount != null && sender.e164 === normalizedAccount) ||
+      (sender.kind === "uuid" && accountUuid != null && sender.raw.toLowerCase() === accountUuid);
     if (isOwnMessage) {
       return;
     }
@@ -641,8 +675,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;
     const commandDmAllow = isGroup ? deps.allowFrom : effectiveDmAllow;
-    const ownerAllowedForCommands = isSignalSenderAllowed(sender, commandDmAllow);
-    const groupAllowedForCommands = isSignalSenderAllowed(sender, effectiveGroupAllow);
+    const ownerAllowedForCommands = isSignalSenderAllowed(sender, commandDmAllow, {
+      accountId: deps.accountId,
+    });
+    const groupAllowedForCommands = isSignalSenderAllowed(sender, effectiveGroupAllow, {
+      accountId: deps.accountId,
+    });
     const hasControlCommandInMessage = hasControlCommand(messageText, deps.cfg);
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
@@ -825,6 +863,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       senderDisplay,
       senderRecipient,
       senderPeerId,
+      senderE164: sender.kind === "uuid" ? sender.e164 : undefined,
       groupId,
       groupName,
       isGroup,

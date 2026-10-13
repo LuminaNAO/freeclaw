@@ -6,6 +6,24 @@ import {
   type ResolvedAgentRoute,
 } from "../routing/resolve-route.js";
 
+/**
+ * Signal DM session key for a peer id (`uuid:<uuid>` or, for legacy/phone-only
+ * senders, the E.164 number). Shared by inbound routing and the §4 re-key.
+ */
+export function buildSignalDirectSessionKey(params: {
+  agentId: string;
+  accountId?: string | null;
+  peerId: string;
+}): string {
+  return buildAgentSessionKey({
+    agentId: params.agentId,
+    channel: "signal",
+    accountId: params.accountId,
+    peer: { kind: "direct", id: params.peerId },
+    dmScope: "per-channel-peer",
+  }).toLowerCase();
+}
+
 export function resolveSignalInboundRoute(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -28,13 +46,11 @@ export function resolveSignalInboundRoute(params: {
 
   // Signal DMs default to sender-scoped sessions so independent senders do not
   // share and pollute the agent main session.
-  const sessionKey = buildAgentSessionKey({
+  const sessionKey = buildSignalDirectSessionKey({
     agentId: route.agentId,
-    channel: "signal",
     accountId: route.accountId,
-    peer: { kind: "direct", id: params.senderPeerId },
-    dmScope: "per-channel-peer",
-  }).toLowerCase();
+    peerId: params.senderPeerId,
+  });
 
   return {
     ...route,

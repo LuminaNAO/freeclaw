@@ -56,6 +56,14 @@ function parseTarget(raw: string): SignalTarget {
   if (normalized.startsWith("u:")) {
     return { type: "username", username: value.trim() };
   }
+  // uuid ARCH §2.2: `uuid:<uuid>` (pairing ids, sender ids) is sent to signal-cli as the bare uuid.
+  if (normalized.startsWith("uuid:")) {
+    const uuid = value.slice("uuid:".length).trim();
+    if (!uuid) {
+      throw new Error("Signal recipient is required");
+    }
+    return { type: "recipient", recipient: uuid };
+  }
   return { type: "recipient", recipient: value };
 }
 

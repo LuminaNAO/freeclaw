@@ -30,7 +30,8 @@ export async function resolveSignalAccessState(params: {
       allowFrom: params.allowFrom,
       groupAllowFrom: params.groupAllowFrom,
       storeAllowFrom,
-      isSenderAllowed: (allowEntries) => isSignalSenderAllowed(params.sender, allowEntries),
+      isSenderAllowed: (allowEntries) =>
+        isSignalSenderAllowed(params.sender, allowEntries, { accountId: params.accountId }),
     });
   const dmAccess = resolveAccessDecision(false);
   return {

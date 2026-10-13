@@ -116,7 +116,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   },
   onboarding: signalOnboardingAdapter,
   pairing: {
-    idLabel: "signalNumber",
+    // uuid ARCH §2.3: pairing ids are `uuid:<uuid>` (a number only for uuid-less senders).
+    idLabel: "signalSenderId",
     normalizeAllowEntry: (entry) => entry.replace(/^signal:/i, ""),
     notifyApproval: async ({ id }) => {
       await getSignalRuntime().channel.signal.sendMessageSignal(id, PAIRING_APPROVED_MESSAGE);

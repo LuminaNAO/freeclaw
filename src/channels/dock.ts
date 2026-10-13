@@ -20,11 +20,11 @@ import {
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
+import { formatSignalAllowEntryForMatch } from "../signal/identity.js";
 import { inspectSlackAccount } from "../slack/account-inspect.js";
 import { resolveSlackReplyToMode } from "../slack/accounts.js";
 import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
 import { inspectTelegramAccount } from "../telegram/account-inspect.js";
-import { normalizeE164 } from "../utils.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
@@ -508,8 +508,8 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       formatAllowFrom: ({ allowFrom }) =>
         formatNormalizedAllowFromEntries({
           allowFrom,
-          normalizeEntry: (entry) =>
-            entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, "")),
+          // uuid ARCH §3.1: uuids stay `uuid:<uuid>`; only numbers are E.164-normalized.
+          normalizeEntry: (entry) => formatSignalAllowEntryForMatch(entry) ?? "",
         }),
       resolveDefaultTo: ({ cfg, accountId }) =>
         resolveOptionalConfigString(resolveSignalAccount({ cfg, accountId }).config.defaultTo),

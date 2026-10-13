@@ -209,6 +209,7 @@ function shouldEmitSignalReactionNotification(params: {
   targets?: SignalReactionTarget[];
   sender?: ReturnType<typeof resolveSignalSender> | null;
   allowlist?: string[];
+  accountId?: string;
 }) {
   const { mode, account, targets, sender, allowlist } = params;
   const effectiveMode = mode ?? "own";
@@ -232,7 +233,7 @@ function shouldEmitSignalReactionNotification(params: {
     if (!sender || !allowlist || allowlist.length === 0) {
       return false;
     }
-    return isSignalSenderAllowed(sender, allowlist);
+    return isSignalSenderAllowed(sender, allowlist, { accountId: params.accountId });
   }
   return true;
 }
@@ -606,6 +607,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
             baseUrl,
             account,
             accountUuid: accountInfo.config.accountUuid,
+            accountId: accountInfo.accountId,
             groupAllowFrom,
             log: (message) => runtime.log?.(message),
           });

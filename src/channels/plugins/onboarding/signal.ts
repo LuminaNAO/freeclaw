@@ -52,10 +52,10 @@ export function parseSignalAllowFromEntries(raw: string): { entries: string[]; e
       if (!id) {
         return { error: "Invalid uuid entry" };
       }
-      return { value: `uuid:${id}` };
+      return { value: `uuid:${id.toLowerCase()}` };
     }
     if (isUuidLike(entry)) {
-      return { value: `uuid:${entry}` };
+      return { value: `uuid:${entry.toLowerCase()}` };
     }
     const normalized = normalizeSignalAccountInput(entry);
     if (!normalized) {
@@ -254,12 +254,21 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
       initialValue: false,
     });
     if (!allowDms) {
+      // uuid ARCH §3.3: what onboarding writes into groupAllowFrom is `uuid:<uuid>` only.
       const rawOperatorId = await prompter.text({
-        message: "Your Signal id (uuid or E.164) for group invites/admin",
-        placeholder: "uuid:123e4567-e89b-12d3-a456-426614174000 or +15555550123",
+        message: "Your Signal uuid (ACI) for group invites/admin",
+        placeholder: "uuid:123e4567-e89b-12d3-a456-426614174000",
         validate: (value) => {
           const parsed = parseSignalAllowFromEntries(value ?? "");
-          return parsed.error ?? (parsed.entries.length === 1 ? undefined : "Enter exactly one id");
+          if (parsed.error) {
+            return parsed.error;
+          }
+          if (parsed.entries.length !== 1) {
+            return "Enter exactly one id";
+          }
+          return parsed.entries[0]?.startsWith("uuid:")
+            ? undefined
+            : "Enter your Signal uuid (Signal identity is the uuid, not the phone number)";
         },
       });
       const operatorEntry = parseSignalAllowFromEntries(rawOperatorId).entries[0];

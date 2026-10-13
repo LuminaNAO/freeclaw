@@ -57,6 +57,9 @@ function recordGroupMemoryMetaOnInbound(ctx: FinalizedMsgContext, cfg: OpenClawC
       groupId: group.id,
       groupName: ctx.GroupSubject?.trim() || undefined,
       senderId: ctx.SenderId?.trim() || undefined,
+      // Signal uuid ARCH §3.3: a member recorded under their number is converted to the
+      // uuid id on their next message (the number is known then); others are untouched.
+      legacySenderIds: ctx.SenderMatchE164?.trim() ? [ctx.SenderMatchE164.trim()] : undefined,
       cfg,
       agentId,
     });

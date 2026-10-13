@@ -65,4 +65,19 @@ describe("sendMessageSignal", () => {
       expect.objectContaining({ baseUrl: "http://signal.local" }),
     );
   });
+
+  it("sends to the bare uuid for uuid:<uuid> targets (uuid ARCH §2.2)", async () => {
+    await sendMessageSignal("uuid:00000000-0000-4000-8000-00000000000a", "hi");
+    expect(rpcMock).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ recipient: ["00000000-0000-4000-8000-00000000000a"] }),
+      expect.anything(),
+    );
+    await sendMessageSignal("signal:uuid:00000000-0000-4000-8000-00000000000b", "hi");
+    expect(rpcMock).toHaveBeenLastCalledWith(
+      "send",
+      expect.objectContaining({ recipient: ["00000000-0000-4000-8000-00000000000b"] }),
+      expect.anything(),
+    );
+  });
 });

@@ -150,6 +150,41 @@ describe("dispatchInboundMessage group memory meta (group-memory ARCH §3)", () 
     expect(meta?.groupId).toBe("dgvzda==");
   });
 
+  it("converts a member recorded as a number to the uuid sender id (signal uuid ARCH §3.3)", async () => {
+    const ws = tmpWorkspace();
+    const cfg = { agents: { defaults: { workspace: ws } } } as OpenClawConfig;
+    const dir = resolveGroupMemoryDir({ workspaceDir: ws, channel: "signal", groupId: "dgvzda==" });
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "meta.json"),
+      JSON.stringify({
+        channel: "signal",
+        groupId: "dgvzda==",
+        name: "Ops Room",
+        members: ["+15550001111", "+15550002222"],
+        firstSeen: new Date(0).toISOString(),
+        lastSeen: new Date(0).toISOString(),
+      }),
+    );
+    await dispatchInboundMessage({
+      ctx: buildTestCtx({
+        From: "signal:group:dgvzda==",
+        ChatType: "group",
+        Provider: "signal",
+        Surface: "signal",
+        SenderId: "uuid:00000000-0000-4000-8000-00000000000a",
+        SenderMatchE164: "+15550001111",
+      }),
+      cfg,
+      dispatcher: silentDispatcher(),
+      replyResolver: async () => ({ text: "ok" }),
+    });
+    expect(readGroupMemoryMeta(dir)?.members).toEqual([
+      "uuid:00000000-0000-4000-8000-00000000000a",
+      "+15550002222",
+    ]);
+  });
+
   it("never writes meta for a DM", async () => {
     const ws = tmpWorkspace();
     const cfg = { agents: { defaults: { workspace: ws } } } as OpenClawConfig;

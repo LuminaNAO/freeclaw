@@ -217,6 +217,8 @@ function resolveSenderCandidates(params: {
   accountId?: string | null;
   senderId?: string | null;
   senderE164?: string | null;
+  /** Secondary match key (Signal uuid sender's number); tried after the primary ids. */
+  senderMatchE164?: string | null;
   from?: string | null;
   chatType?: string | null;
 }): string[] {
@@ -236,6 +238,7 @@ function resolveSenderCandidates(params: {
     pushCandidate(params.senderId);
     pushCandidate(params.senderE164);
   }
+  pushCandidate(params.senderMatchE164);
   if (
     candidates.length === 0 &&
     shouldUseFromAsSenderFallback({ from: params.from, chatType: params.chatType })
@@ -334,6 +337,7 @@ export function resolveCommandAuthorization(params: {
     accountId: ctx.AccountId,
     senderId: ctx.SenderId,
     senderE164: ctx.SenderE164,
+    senderMatchE164: ctx.SenderMatchE164,
     from,
     chatType: ctx.ChatType,
   });
@@ -343,7 +347,15 @@ export function resolveCommandAuthorization(params: {
   const matchedCommandOwner = ownerCandidatesForCommands.length
     ? senderCandidates.find((candidate) => ownerCandidatesForCommands.includes(candidate))
     : undefined;
-  const senderId = matchedSender ?? senderCandidates[0];
+  // A secondary match key (Signal uuid sender's number) may authorize, but it never becomes
+  // the reported sender id: the primary id stays first (Signal ARCH §1/§3.1).
+  const secondaryCandidates = ctx.SenderMatchE164?.trim()
+    ? normalizeAllowFromEntry({ dock, cfg, accountId: ctx.AccountId, value: ctx.SenderMatchE164 })
+    : [];
+  const senderId =
+    matchedSender && !secondaryCandidates.includes(matchedSender)
+      ? matchedSender
+      : (senderCandidates[0] ?? matchedSender);
 
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
   const senderIsOwnerByIdentity = Boolean(matchedSender);

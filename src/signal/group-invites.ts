@@ -1,5 +1,10 @@
 import { signalRpcRequest } from "./client.js";
-import { isSignalSenderAllowed, resolveSignalSender, type SignalSender } from "./identity.js";
+import {
+  formatSignalSenderDisplay,
+  isSignalSenderAllowed,
+  resolveSignalSender,
+  type SignalSender,
+} from "./identity.js";
 
 /**
  * fresh-install ARCH §1.4, gateway side: a group invite addressed to the
@@ -88,6 +93,8 @@ export async function acceptPendingGroupInvites(params: {
   account: string;
   /** Own ACI; without it we cannot tell which pending entries are ours. */
   accountUuid?: string;
+  /** Account id; scopes the once-per-entry legacy phone allow-list warning (uuid ARCH §3.2). */
+  accountId?: string;
   groupAllowFrom: string[];
   /**
    * Resolve the inviter for a pending group. Real signal-cli listGroups has
@@ -159,12 +166,16 @@ export async function acceptPendingGroupInvites(params: {
     const name =
       typeof group.name === "string" && group.name.trim() ? group.name.trim() : undefined;
     const inviter = resolveInviter(group);
-    const inviterLabel = inviter
-      ? inviter.kind === "phone"
-        ? inviter.e164
-        : `uuid:${inviter.raw}`
-      : undefined;
-    if (inviter && isSignalSenderAllowed(inviter, params.groupAllowFrom)) {
+    // uuid ARCH §2.4: inviter labels are uuid-first (`uuid:<uuid>`), never the number
+    // when a uuid is known.
+    const inviterLabel = inviter ? formatSignalSenderDisplay(inviter) : undefined;
+    if (
+      inviter &&
+      isSignalSenderAllowed(inviter, params.groupAllowFrom, {
+        accountId: params.accountId,
+        warn: log,
+      })
+    ) {
       try {
         await acceptInvite(groupId);
         log(

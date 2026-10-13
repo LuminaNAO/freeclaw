@@ -127,6 +127,13 @@ export type MsgContext = {
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
+  /**
+   * Secondary match key only (Signal ARCH §2.1/§3.1): a phone number the channel
+   * supplied for a sender whose identity is something else (the Signal uuid).
+   * Used to keep legacy phone allow-list entries matching; never an id, never
+   * rendered into agent-visible metadata.
+   */
+  SenderMatchE164?: string;
   Timestamp?: number;
   /** Provider label (e.g. whatsapp, telegram). */
   Provider?: string;

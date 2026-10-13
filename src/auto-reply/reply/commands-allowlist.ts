@@ -25,6 +25,7 @@ import {
 } from "../../routing/session-key.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveSignalAccount } from "../../signal/accounts.js";
+import { toSignalUuidAllowEntry } from "../../signal/identity.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
@@ -594,6 +595,21 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   });
   if (disabled) {
     return disabled;
+  }
+
+  // Signal uuid ARCH §3.3: freeclaw writes Signal allow-list entries as `uuid:<uuid>` only.
+  // Removing a legacy phone entry stays possible; adding one is refused.
+  if (channelId === "signal" && parsed.action === "add" && parsed.entry.trim() !== "*") {
+    const uuidEntry = toSignalUuidAllowEntry(parsed.entry);
+    if (!uuidEntry) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ Signal allowlist entries are written as uuid:<uuid> only (Signal identity is the uuid, not the phone number).",
+        },
+      };
+    }
+    parsed.entry = uuidEntry;
   }
 
   const shouldUpdateConfig = parsed.target !== "store";

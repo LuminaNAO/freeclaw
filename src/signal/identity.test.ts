@@ -26,14 +26,14 @@ describe("looksLikeUuid", () => {
 });
 
 describe("signal sender identity", () => {
-  it("prefers sourceNumber over sourceUuid", () => {
+  it("prefers sourceUuid over sourceNumber, keeping the number as secondary e164 (uuid ARCH §2.1)", () => {
     const sender = resolveSignalSender({
       sourceNumber: " +15550001111 ",
       sourceUuid: "123e4567-e89b-12d3-a456-426614174000",
     });
     expect(sender).toEqual({
-      kind: "phone",
-      raw: "+15550001111",
+      kind: "uuid",
+      raw: "123e4567-e89b-12d3-a456-426614174000",
       e164: "+15550001111",
     });
   });

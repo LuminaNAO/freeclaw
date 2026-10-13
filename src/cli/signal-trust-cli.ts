@@ -44,20 +44,28 @@ export function registerSignalTrustCli(program: Command) {
 
   trust
     .command("add")
-    .description("Trust a sender (number and/or uuid; pass both to bind them together)")
-    .argument("<id>", "E.164 number or uuid")
-    .argument("[id2]", "Optional second id (the other kind) to bind in the same entry")
+    .description("Trust a sender by uuid (Signal identity is the uuid, not the phone number)")
+    .argument("<uuid>", "Sender uuid (optionally uuid:<id>)")
+    .argument("[id2]", "Deprecated second id; a number here is accepted but never stored")
     .option("--account <accountId>", "Signal account id", "default")
     .action(async (id: string, id2: string | undefined, opts) => {
       const accountId = resolveAccountOption(opts);
-      const ids = [parseIdOrThrow(id), ...(id2 ? [parseIdOrThrow(id2)] : [])];
-      const entry: SignalTrustEntry = { addedAt: new Date().toISOString() };
-      for (const parsed of ids) {
-        if (entry[parsed.kind] !== undefined) {
-          throw new Error("Pass at most one number and one uuid.");
-        }
-        entry[parsed.kind] = parsed.value;
+      const parsedIds = [parseIdOrThrow(id), ...(id2 ? [parseIdOrThrow(id2)] : [])];
+      // uuid ARCH §3.3: `signal trust add` writes the uuid only. Existing number entries
+      // keep matching (no lock-outs); they are never created here.
+      const uuids = parsedIds.filter((parsed) => parsed.kind === "uuid");
+      if (uuids.length !== 1) {
+        throw new Error(
+          "signal trust add takes exactly one sender uuid (uuid:<id>); phone numbers are not written. Existing number entries keep working.",
+        );
       }
+      const parsedId = uuids[0];
+      if (parsedIds.length > uuids.length) {
+        defaultRuntime.log(
+          theme.warn("Ignoring the phone number: trust entries are stored by uuid only."),
+        );
+      }
+      const entry: SignalTrustEntry = { uuid: parsedId.value, addedAt: new Date().toISOString() };
       const result = await updateSignalTrustStore({
         accountId,
         mutate: (current) => {
@@ -149,7 +157,7 @@ export function registerSignalTrustCli(program: Command) {
   trust
     .command("import-allowfrom")
     .description(
-      "One-shot copy of canonical channels.signal allowFrom entries into the trust store",
+      "One-shot copy of canonical channels.signal allowFrom uuid entries into the trust store",
     )
     .option("--account <accountId>", "Signal account id", "default")
     .action(async (opts) => {
@@ -164,6 +172,11 @@ export function registerSignalTrustCli(program: Command) {
           skipped.push(
             value === "*" ? '"*" (wildcards are never imported)' : "<non-canonical entry>",
           );
+          continue;
+        }
+        // uuid ARCH §3.3: only uuids are written; a phone entry is reported, never copied.
+        if (parsed.kind !== "uuid") {
+          skipped.push("<phone entry> (numbers are not written; replace it with the uuid)");
           continue;
         }
         additions.push({ [parsed.kind]: parsed.value, addedAt: new Date().toISOString() });

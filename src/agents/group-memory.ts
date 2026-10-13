@@ -172,11 +172,29 @@ const lastMetaWriteAtByDir = new Map<string, number>();
  * throttled tick defers a new member instead of silently losing them.
  */
 const pendingMembersByDir = new Map<string, Set<string>>();
+/**
+ * Legacy member ids awaiting conversion (old id -> current id), deferred while
+ * throttled the same way new members are (Signal uuid ARCH §3.3).
+ */
+const pendingRenamesByDir = new Map<string, Map<string, string>>();
 
 /** @internal Test hook: reset the §3 throttle state. */
 export function resetGroupMemoryMetaThrottleForTests(): void {
   lastMetaWriteAtByDir.clear();
   pendingMembersByDir.clear();
+  pendingRenamesByDir.clear();
+}
+
+/** Replace legacy member ids with their current id, keeping order and dropping duplicates. */
+function applyMemberRenames(members: Set<string>, renames: Map<string, string>): Set<string> {
+  if (renames.size === 0) {
+    return members;
+  }
+  const next = new Set<string>();
+  for (const member of members) {
+    next.add(renames.get(member) ?? member);
+  }
+  return next;
 }
 
 /**
@@ -192,6 +210,12 @@ export function updateGroupMemoryMetaOnInbound(params: {
   groupName?: string;
   /** Sender id of the inbound message, added to members when new. */
   senderId?: string;
+  /**
+   * Older ids for the same sender (Signal uuid ARCH §3.3: the number a member was
+   * recorded under before identity became the uuid). Any of these already in
+   * members is replaced by senderId; members not named here are left as they are.
+   */
+  legacySenderIds?: string[];
   cfg?: OpenClawConfig;
   agentId?: string;
   now?: number;
@@ -210,11 +234,20 @@ export function updateGroupMemoryMetaOnInbound(params: {
   const existing = readGroupMemoryMeta(dir);
   const senderId = params.senderId?.trim();
   const groupName = params.groupName?.trim();
-  const members = new Set(
+  let members = new Set(
     Array.isArray(existing?.members)
       ? existing.members.filter((m): m is string => typeof m === "string")
       : [],
   );
+  const renames = new Map<string, string>();
+  if (senderId) {
+    for (const legacy of params.legacySenderIds ?? []) {
+      const legacyId = legacy?.trim();
+      if (legacyId && legacyId !== senderId && members.has(legacyId)) {
+        renames.set(legacyId, senderId);
+      }
+    }
+  }
   const persistedOrDeferredHasSender = (id: string) =>
     members.has(id) || (pendingMembersByDir.get(dir)?.has(id) ?? false);
   const hadSender = senderId ? persistedOrDeferredHasSender(senderId) : true;
@@ -237,14 +270,26 @@ export function updateGroupMemoryMetaOnInbound(params: {
     return { dir, written: true };
   }
 
-  const nothingToWrite = !groupName && (hadSender || !senderId) && !pendingMembersByDir.has(dir);
+  const nothingToWrite =
+    !groupName &&
+    (hadSender || !senderId) &&
+    renames.size === 0 &&
+    !pendingMembersByDir.has(dir) &&
+    !pendingRenamesByDir.has(dir);
   const lastWrite = lastMetaWriteAtByDir.get(dir) ?? 0;
   if (now - lastWrite < GROUP_MEMORY_META_WRITE_THROTTLE_MS) {
-    // Defer, don't drop: remember a new sender so the next write merges them.
-    if (senderId && !hadSender) {
+    // Defer, don't drop: remember a new sender (or a member conversion) for the next write.
+    if (senderId && !hadSender && renames.size === 0) {
       const pending = pendingMembersByDir.get(dir) ?? new Set<string>();
       pending.add(senderId);
       pendingMembersByDir.set(dir, pending);
+    }
+    if (renames.size > 0) {
+      const pendingRenames = pendingRenamesByDir.get(dir) ?? new Map<string, string>();
+      for (const [from, to] of renames) {
+        pendingRenames.set(from, to);
+      }
+      pendingRenamesByDir.set(dir, pendingRenames);
     }
     return { dir, written: false, reason: "throttled" };
   }
@@ -256,6 +301,9 @@ export function updateGroupMemoryMetaOnInbound(params: {
   for (const pending of pendingMembersByDir.get(dir) ?? []) {
     members.add(pending);
   }
+  // Apply member conversions (deferred + current); stored ids are rewritten in place.
+  const allRenames = new Map<string, string>([...(pendingRenamesByDir.get(dir) ?? []), ...renames]);
+  members = applyMemberRenames(members, allRenames);
 
   const next: GroupMemoryMeta = {
     ...existing,
@@ -277,6 +325,7 @@ export function updateGroupMemoryMetaOnInbound(params: {
   writeFile0600(metaPath, `${JSON.stringify(next, null, 2)}\n`);
   lastMetaWriteAtByDir.set(dir, now);
   pendingMembersByDir.delete(dir);
+  pendingRenamesByDir.delete(dir);
   return { dir, written: true };
 }
 

@@ -45,7 +45,7 @@ function resolveAllowFromFormatter(params: {
       accountId: params.accountId,
       allowFrom: values,
     })
-      .map((entry) => String(entry).trim())
+      .map((entry) => entry.trim())
       .filter(Boolean);
 }
 
@@ -95,6 +95,15 @@ function isApprovedElevatedSender(params: {
     addFormattedTokens({
       formatAllowFrom: params.formatAllowFrom,
       values: [params.ctx.SenderE164],
+      tokens: senderE164Tokens,
+    });
+  }
+  // Signal ARCH §3.1: a uuid sender's number is a secondary match key so legacy phone
+  // entries keep matching (no lock-outs); it is never the sender id.
+  if (params.ctx.SenderMatchE164?.trim()) {
+    addFormattedTokens({
+      formatAllowFrom: params.formatAllowFrom,
+      values: [params.ctx.SenderMatchE164],
       tokens: senderE164Tokens,
     });
   }

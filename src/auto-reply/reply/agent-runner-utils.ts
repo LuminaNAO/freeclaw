@@ -152,7 +152,7 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
 };
 
 export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
-  Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
+  run.enforceFinalTag === true || isReasoningTagProvider(provider);
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
   return {
@@ -233,7 +233,7 @@ export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
     senderId: sessionCtx.SenderId?.trim() || undefined,
     senderName: sessionCtx.SenderName?.trim() || undefined,
     senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
-    senderE164: sessionCtx.SenderE164?.trim() || undefined,
+    senderE164: sessionCtx.SenderE164?.trim() || sessionCtx.SenderMatchE164?.trim() || undefined,
   };
 }
 

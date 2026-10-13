@@ -252,6 +252,59 @@ describe("acceptPendingGroupInvites (fresh-install ARCH §1.4)", () => {
     expect(accepted).toEqual(["group-8"]);
   });
 
+  it("labels an inviter known by uuid and number (uuid ARCH §2.4) as uuid:<uuid>, never the number", async () => {
+    const logs: string[] = [];
+    const summary = await acceptPendingGroupInvites({
+      ...baseParams,
+      groupAllowFrom: [`uuid:${ALLOWED_UUID}`],
+      listGroupsFn: async () => [
+        realGroupEntry({
+          id: "group-u",
+          pendingMembers: [{ number: null, uuid: OWN_ACI }],
+          invitedByNumber: ALLOWED_NUMBER,
+          invitedByUuid: ALLOWED_UUID,
+        }),
+      ],
+      acceptInviteFn: async () => ({}),
+      log: (line) => logs.push(line),
+    });
+    expect(summary.accepted[0]?.inviter).toBe(`uuid:${ALLOWED_UUID}`);
+    expect(logs.join("\n")).not.toContain(ALLOWED_NUMBER);
+  });
+
+  it("a legacy phone groupAllowFrom entry still accepts the uuid inviter and warns once (§3.1/§3.2)", async () => {
+    const logs: string[] = [];
+    const summary = await acceptPendingGroupInvites({
+      ...baseParams,
+      accountId: "invites-legacy",
+      groupAllowFrom: [ALLOWED_NUMBER],
+      listGroupsFn: async () => [
+        realGroupEntry({
+          id: "group-l1",
+          pendingMembers: [{ number: null, uuid: OWN_ACI }],
+          invitedByNumber: ALLOWED_NUMBER,
+          invitedByUuid: ALLOWED_UUID,
+        }),
+        realGroupEntry({
+          id: "group-l2",
+          pendingMembers: [{ number: null, uuid: OWN_ACI }],
+          invitedByNumber: ALLOWED_NUMBER,
+          invitedByUuid: ALLOWED_UUID,
+        }),
+      ],
+      acceptInviteFn: async () => ({}),
+      log: (line) => logs.push(line),
+    });
+    expect(summary.accepted.map((entry) => entry.inviter)).toEqual([
+      `uuid:${ALLOWED_UUID}`,
+      `uuid:${ALLOWED_UUID}`,
+    ]);
+    const warnings = logs.filter((line) => line.startsWith("signal allowFrom entry"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`matched uuid:${ALLOWED_UUID}`);
+    expect(logs.join("\n")).not.toContain(ALLOWED_NUMBER);
+  });
+
   it("handles a non-array listGroups result defensively", async () => {
     const summary = await acceptPendingGroupInvites({
       ...baseParams,
@@ -274,5 +327,15 @@ describe("resolveGroupInviteSender", () => {
       raw: ALLOWED_UUID,
     });
     expect(resolveGroupInviteSender({ id: "g1" })).toBeNull();
+  });
+
+  it("uuid wins when both inviter fields are present (uuid ARCH §2.1)", () => {
+    expect(
+      resolveGroupInviteSender({
+        id: "g1",
+        invitedByNumber: ALLOWED_NUMBER,
+        invitedByUuid: ALLOWED_UUID,
+      }),
+    ).toEqual({ kind: "uuid", raw: ALLOWED_UUID, e164: ALLOWED_NUMBER });
   });
 });

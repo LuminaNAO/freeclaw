@@ -500,7 +500,7 @@ export async function runPreparedReply(
       senderId: sessionCtx.SenderId?.trim() || undefined,
       senderName: sessionCtx.SenderName?.trim() || undefined,
       senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
-      senderE164: sessionCtx.SenderE164?.trim() || undefined,
+      senderE164: sessionCtx.SenderE164?.trim() || sessionCtx.SenderMatchE164?.trim() || undefined,
       senderIsOwner: command.senderIsOwner,
       sessionFile,
       workspaceDir,
