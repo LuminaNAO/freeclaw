@@ -21,8 +21,8 @@ function xmlEscape(s: string): string {
 }
 
 // Mark geometry as fractions of the asset size: the colour bar along the bottom and the
-// letter disc bottom-right (with its ring). Shared with the adopted-base frame (§2c.8),
-// which must keep clear of both.
+// letter disc bottom-right (with its ring). Shared with the mark detector (§2c.9), which
+// refuses artwork that already carries our mark.
 export const MARK_GEOMETRY = {
   bar: { x: 0.08, y: 0.9, w: 0.5, h: 0.025 },
   disc: { c: 0.79, r: 0.15, stroke: 0.022 },
@@ -69,100 +69,33 @@ function rasterBody(base: RasterBase, size: number): string {
   );
 }
 
-// ---------------- adopted bases (§2c.8): contain, never slice ----------------
+// ---------------- adopted bases (§2c.9): full-frame ----------------
 
-// The frame (fractions of the asset size) a group's own artwork is fitted into: the
-// largest square, centred left-to-right, whose four corners lie inside the visible
-// circle and clear of the mark (bar and disc), each with a safety margin. With the
-// current mark this is about 51% of the asset, raised slightly; a centred 70% square
-// would put its bottom-right corner under the mark disc. The image is fitted inside it
-// whole (contain); the rest of the square is a darkened, blurred copy of the same image.
-// Derived from MARK_GEOMETRY, so a mark change moves the frame too.
-export const ADOPTED_MARGIN = 0.02;
+// Layout tag in the adopted base's identity (§2c.9): changing the layout repaints adopted
+// targets once, and nothing else. `contain-v1` (§2c.8, an inset frame on a blurred fill)
+// is retired.
+export const ADOPTED_LAYOUT = "full-v1";
 
-export type Frame = { x: number; y: number; s: number };
-
-function pointClear(px: number, py: number, m: number): boolean {
-  const { bar, disc } = MARK_GEOMETRY;
-  if (Math.hypot(px - 0.5, py - 0.5) > 0.5 - m) {
-    return false;
-  }
-  if (Math.hypot(px - disc.c, py - disc.c) <= disc.r + disc.stroke / 2 + m) {
-    return false;
-  }
-  return !(
-    px >= bar.x - m &&
-    px <= bar.x + bar.w + m &&
-    py >= bar.y - m &&
-    py <= bar.y + bar.h + m
-  );
-}
-
-export function frameCorners(f: Frame): Array<[number, number]> {
-  return [
-    [f.x, f.y],
-    [f.x + f.s, f.y],
-    [f.x, f.y + f.s],
-    [f.x + f.s, f.y + f.s],
-  ];
-}
-
-export function frameClear(f: Frame, margin = ADOPTED_MARGIN): boolean {
-  return frameCorners(f).every(([x, y]) => pointClear(x, y, margin));
-}
-
-function computeAdoptedFrame(): Frame {
-  for (let si = 1000; si >= 100; si--) {
-    const s = si / 1000;
-    const x = 0.5 - s / 2;
-    // The most centred vertical position that fits.
-    for (let d = 0; d <= 500; d++) {
-      for (const y of [0.5 - s / 2 - d / 1000, 0.5 - s / 2 + d / 1000]) {
-        if (y >= 0 && y + s <= 1 && frameClear({ x, y, s })) {
-          return { x, y, s };
-        }
-      }
-    }
-  }
-  return { x: 0.4, y: 0.4, s: 0.2 };
-}
-
-export const ADOPTED_FRAME: Frame = computeAdoptedFrame();
-
-// Layout tag in the adopted base's identity: changing the layout repaints adopted
-// targets only.
-export const ADOPTED_LAYOUT = `contain-v1:${ADOPTED_FRAME.s.toFixed(3)}`;
-
+// A group's own artwork drawn full-frame: one image filling the whole square, no inset,
+// no blurred background, no darkening. Avatars are square already; a non-square source
+// is centre-cropped (slice) here, after the format guard has accepted it.
 function adoptedBody(base: RasterBase, size: number): string {
   const href = `data:${base.mime};base64,${base.bytes.toString("base64")}`;
-  const n = (v: number) => (Math.round(v * 10) / 10).toString();
-  const f = ADOPTED_FRAME;
   return (
-    `<defs><filter id="mb-blur" x="-10%" y="-10%" width="120%" height="120%">` +
-    `<feGaussianBlur stdDeviation="${n(size * 0.035)}"/></filter></defs>` +
-    // Background: the same image filling the square, blurred and darkened.
-    `<image width="${size}" height="${size}" preserveAspectRatio="xMidYMid slice" ` +
-    `filter="url(#mb-blur)" href="${href}" xlink:href="${href}"/>` +
-    `<rect width="${size}" height="${size}" fill="#000000" fill-opacity="0.45"/>` +
-    // Foreground: the whole image, contained in the frame. Never sliced.
-    `<image data-adopted="contain" x="${n(f.x * size)}" y="${n(f.y * size)}" ` +
-    `width="${n(f.s * size)}" height="${n(f.s * size)}" preserveAspectRatio="xMidYMid meet" ` +
-    `href="${href}" xlink:href="${href}"/>`
+    `<image data-adopted="full" width="${size}" height="${size}" ` +
+    `preserveAspectRatio="xMidYMid slice" href="${href}" xlink:href="${href}"/>`
   );
 }
 
+// The base alone, full-frame: the format guard's decode step for an adopted base, and
+// the picture the mark detector looks at.
+export function adoptedBaseSvg(base: RasterBase, size: number): string {
+  return svgDoc(size, adoptedBody(base, size));
+}
+
+// The adopted base with the model mark composited once, in the corner mark position.
 export function adoptedAssetSvg(base: RasterBase, mark: Mark, size: number): string {
   return svgDoc(size, adoptedBody(base, size) + markLayerSvg(mark, size));
-}
-
-// The format guard's decode step for an adopted base: the whole image, contained.
-export function containBaseSvg(base: RasterBase, size: number): string {
-  const href = `data:${base.mime};base64,${base.bytes.toString("base64")}`;
-  return svgDoc(
-    size,
-    `<image width="${size}" height="${size}" preserveAspectRatio="xMidYMid meet" ` +
-      `href="${href}" xlink:href="${href}"/>`,
-  );
 }
 
 export function vectorAssetSvg(params: BaseParams, mark: Mark, size: number): string {

@@ -110,14 +110,15 @@ for (const backend of ["signal", "fakechat"] as const) {
       expect(showsGenerated(w, IDS.b)).toBe(true);
       expect(e.targetSummary(w.tk(IDS.a))!.desired).toMatchObject({ base: "raster" });
       expect(e.targetSummary(w.tk(IDS.b))!.desired).toMatchObject({ base: "vector" });
-      // Captured once, in the state dir, format-guarded; the original bytes are kept whole
-      // (never cropped), and composited contained, not sliced.
+      // Captured once, in the state dir, format-guarded; the original bytes are kept and
+      // drawn full-frame (§2c.9): one image, no blur, the mark once.
       const key = seedFor(backend, IDS.a.toLowerCase());
       const stored = w.fs.files.get(`${w.paths.stateDir}/adopted/${key}.img`)!.data;
       expect(stored.equals(OWN)).toBe(true);
       const svg = sentText(w, w.targetSends(IDS.a).at(-1)!.avatar);
-      expect(svg).toContain('data-adopted="contain"');
-      expect(svg).toMatch(/feGaussianBlur/);
+      expect(svg).toContain('data-adopted="full"');
+      expect(svg).not.toMatch(/feGaussianBlur|<filter/);
+      expect(svg.match(/data-mark=/g)).toHaveLength(1);
       expect(e.status().adopted).toEqual({ seen: 3, adopted: 1, active: 1 });
       // The capture happens once: later passes and restarts never read it again, so our
       // own paint on the group is never mistaken for its artwork.
@@ -419,45 +420,202 @@ describe("§2c.8 config, provider and parity", () => {
   });
 });
 
-describe("§2c.8 addendum: the adopted image is contained, never sliced", () => {
-  it("the frame's corners lie inside the visible circle and outside the mark (bar and disc)", async () => {
-    const { ADOPTED_FRAME, frameClear, frameCorners, MARK_GEOMETRY } =
-      await import("./core/render.js");
-    const f = ADOPTED_FRAME;
-    const { bar, disc } = MARK_GEOMETRY;
-    expect(frameClear(f)).toBe(true);
-    for (const [x, y] of frameCorners(f)) {
-      // Inside the circle Signal shows.
-      expect(Math.hypot(x - 0.5, y - 0.5)).toBeLessThan(0.5);
-      // Outside the mark disc (with its ring) …
-      expect(Math.hypot(x - disc.c, y - disc.c)).toBeGreaterThan(disc.r + disc.stroke / 2);
-      // … and outside the bottom bar.
-      expect(x >= bar.x && x <= bar.x + bar.w && y >= bar.y && y <= bar.y + bar.h).toBe(false);
-    }
-    // Horizontally centred and as large as fits.
-    expect(f.x + f.s / 2).toBeCloseTo(0.5, 6);
-    expect(f.s).toBeGreaterThan(0.5);
-    expect(frameClear({ x: 0.5 - (f.s + 0.01) / 2, y: f.y, s: f.s + 0.01 })).toBe(false);
-    // A centred 70% square would put a corner under the mark disc: it must not be used.
-    expect(frameClear({ x: 0.15, y: 0.15, s: 0.7 })).toBe(false);
+describe("§2c.9 adopted artwork is full-frame, never inset or double-marked", () => {
+  const mark = { letter: "F", color: "#FFD700", text: "#111111", scale: 1 };
+  const img = { mime: "image/jpeg" as const, bytes: OWN };
+
+  it("the adopted asset is one full-frame image (no inset, no blur, no darkening)", async () => {
+    const { adoptedAssetSvg } = await import("./core/render.js");
+    const a = adoptedAssetSvg(img, mark, 512);
+    const images = [...a.matchAll(/<image[^>]*>/g)].map((m) => m[0]);
+    expect(images).toHaveLength(1);
+    // Fills the whole square from the origin.
+    expect(images[0]).toContain('width="512" height="512"');
+    expect(images[0]).not.toMatch(/\s(x|y)="/);
+    expect(images[0]).toContain("xMidYMid slice");
+    expect(images[0]).not.toContain("filter=");
+    expect(a).not.toMatch(/<filter|feGaussianBlur|mb-blur|fill-opacity|data-adopted="contain"/);
   });
 
-  it("adopted assets embed the image with meet (contain) only; generated bases keep the fill", async () => {
-    const { adoptedAssetSvg, rasterAssetSvg } = await import("./core/render.js");
-    const mark = { letter: "F", color: "#FFD700", text: "#111111", scale: 1 };
-    const img = { mime: "image/jpeg" as const, bytes: OWN };
+  it("the mark appears exactly once, in the corner mark position, and after the base", async () => {
+    const { adoptedAssetSvg, MARK_GEOMETRY } = await import("./core/render.js");
     const a = adoptedAssetSvg(img, mark, 512);
-    // The foreground image is contained; the only slice is the blurred background fill.
-    const images = [...a.matchAll(/<image[^>]*>/g)].map((m) => m[0]);
-    expect(images).toHaveLength(2);
-    expect(images.filter((t) => t.includes("slice"))).toHaveLength(1);
-    expect(images.find((t) => t.includes("slice"))).toContain("filter=");
-    expect(images.find((t) => t.includes('data-adopted="contain"'))).toContain("xMidYMid meet");
-    // Generated (image-model) bases are unchanged: one image, filling the square.
-    const g = rasterAssetSvg(img, mark, 512);
-    expect([...g.matchAll(/<image[^>]*>/g)].map((m) => m[0])).toEqual([
-      expect.stringContaining("xMidYMid slice"),
-    ]);
-    expect(g).not.toContain("feGaussianBlur");
+    expect(a.match(/data-mark=/g)).toHaveLength(1);
+    expect(a.match(/<circle/g)).toHaveLength(1);
+    const c = Math.round(512 * MARK_GEOMETRY.disc.c * 10) / 10;
+    expect(a).toContain(`<circle cx="${c}" cy="${c}"`);
+    expect(a.indexOf("data-mark=")).toBeGreaterThan(a.indexOf("<image"));
   });
+
+  it("the old contain/blur layout is gone from the renderer", async () => {
+    const render = await import("./core/render.js");
+    for (const dead of [
+      "ADOPTED_FRAME",
+      "ADOPTED_MARGIN",
+      "frameClear",
+      "frameCorners",
+      "containBaseSvg",
+    ]) {
+      expect(dead in render, dead).toBe(false);
+    }
+    expect(render.ADOPTED_LAYOUT).toBe("full-v1");
+  });
+
+  for (const backend of ["signal", "fakechat"] as const) {
+    it(`${backend}: already-marked artwork (our stamp) is refused as a base: none "ours", generated base`, async () => {
+      const ours = stampPng(fakePng(512, 512, '<svg data-mark="F"/>'));
+      const { w, e } = await world({ backend, avatars: { [IDS.a]: ours } });
+      const key = seedFor(backend, IDS.a.toLowerCase());
+      const index = w.fs.getJson<{ targets: Record<string, unknown> }>(
+        `${w.paths.stateDir}/adopted/index.json`,
+      );
+      expect(index.targets[key]).toMatchObject({ none: "ours" });
+      expect(w.fs.exists(`${w.paths.stateDir}/adopted/${key}.img`)).toBe(false);
+      const sent = sentText(w, w.targetSends(IDS.a).at(-1)!.avatar);
+      expect(sent).not.toContain(ours.toString("base64").slice(0, 40));
+      expect(sent.match(/data-mark=/g)).toHaveLength(1);
+      await e.stop();
+    });
+
+    it(`${backend}: a target with a prior-applied record of ours is refused; it keeps the base we last applied`, async () => {
+      // We painted A (image base) before adoption existed; its avatar now is ours.
+      const { w, e, gen } = await world({ backend, image: true });
+      const before = w.targetSends(IDS.a).at(-1)!;
+      const shown = sentText(w, before.avatar);
+      await e.stop();
+      // Forget the adoption record (as before §2c.8); the channel returns our picture,
+      // re-encoded without the stamp.
+      const key = seedFor(backend, IDS.a.toLowerCase());
+      const idxPath = `${w.paths.stateDir}/adopted/index.json`;
+      const idx = w.fs.getJson<{ version: 1; targets: Record<string, unknown> }>(idxPath);
+      delete idx.targets[key];
+      w.fs.putJson(idxPath, idx);
+      w.backend.setAvatar(IDS.a, fakePng(512, 512, shown));
+      const sends = w.targetSends(IDS.a).length;
+      const e2 = await w.startEngine({ instanceId: "restart", imageGenerator: gen });
+      await w.settle();
+      expect(
+        w.fs.getJson<{ targets: Record<string, unknown> }>(idxPath).targets[key],
+      ).toMatchObject({
+        none: "ours",
+      });
+      expect(e2.status().adopted).toMatchObject({ adopted: 0 });
+      // Nothing was stacked: A still shows the base we last applied (no repaint at all).
+      expect(w.targetSends(IDS.a)).toHaveLength(sends);
+      expect(e2.targetSummary(w.tk(IDS.a))!.converged).toBe(true);
+      await e2.stop();
+    });
+  }
+
+  it("a base adopted before §2c.9 that carries our mark is refused once on load; its bytes are kept", async () => {
+    const { w, e } = await world({ avatars: { [IDS.a]: OWN } });
+    await e.stop();
+    const key = seedFor(w.backend.name, IDS.a.toLowerCase());
+    const idxPath = `${w.paths.stateDir}/adopted/index.json`;
+    const file = `${w.paths.stateDir}/adopted/${key}.img`;
+    // §2c.8 adopted our own (stamped) picture: put that state on disk, unchecked.
+    const ours = stampPng(fakePng(512, 512, '<svg data-mark="F"/>'));
+    w.fs.files.get(file)!.data = ours;
+    const { sha256 } = await import("./core/hash.js");
+    const idx = w.fs.getJson<{ version: 1; targets: Record<string, Record<string, unknown>> }>(
+      idxPath,
+    );
+    idx.targets[key] = { seenAt: 1, sha: sha256(ours), active: true };
+    w.fs.putJson(idxPath, idx);
+    const a0 = w.targetSends(IDS.a).length;
+    const e2 = await w.startEngine({ instanceId: "restart" });
+    await w.settle();
+    expect(w.fs.getJson<typeof idx>(idxPath).targets[key]).toEqual({ seenAt: 1, none: "ours" });
+    expect(w.fs.exists(file)).toBe(true);
+    // Repainted once with a generated base: one mark, never the marked picture.
+    expect(w.targetSends(IDS.a)).toHaveLength(a0 + 1);
+    const sent = sentText(w, w.targetSends(IDS.a).at(-1)!.avatar);
+    expect(sent).not.toContain(ours.toString("base64").slice(0, 40));
+    expect(sent.match(/data-mark=/g)).toHaveLength(1);
+    await e2.runPass("periodic");
+    await w.settle();
+    expect(w.targetSends(IDS.a)).toHaveLength(a0 + 1);
+    await e2.stop();
+  });
+
+  it('a pre-§2c.9 "painted" record reads as ours', async () => {
+    const { w, e } = await world({ avatars: { [IDS.a]: OWN } });
+    await e.stop();
+    const idxPath = `${w.paths.stateDir}/adopted/index.json`;
+    const idx = w.fs.getJson<{ version: 1; targets: Record<string, Record<string, unknown>> }>(
+      idxPath,
+    );
+    const keyB = seedFor(w.backend.name, IDS.b.toLowerCase());
+    idx.targets[keyB] = { seenAt: 1, none: "painted" };
+    w.fs.putJson(idxPath, idx);
+    const e2 = await w.startEngine({ instanceId: "restart" });
+    await w.settle();
+    expect(w.fs.getJson<typeof idx>(idxPath).targets[keyB]).toEqual({ seenAt: 1, none: "ours" });
+    await e2.stop();
+  });
+
+  for (const backend of ["signal", "fakechat"] as const) {
+    it(`${backend}: the layout tag bump (contain-v1 → full-v1) repaints adopted targets once, then is idempotent`, async () => {
+      const { canonicalJSON, sha256 } = await import("./core/hash.js");
+      const { RENDERER_VERSION } = await import("./core/render.js");
+      const { w, e } = await world({ backend, avatars: { [IDS.a]: OWN } });
+      await e.stop();
+      // Rewind the state to what §2c.8 left: A's applied hash under contain-v1, and its
+      // adopted record not yet checked under full-v1.
+      const key = seedFor(backend, IDS.a.toLowerCase());
+      const appliedPath = `${w.paths.stateDir}/applied.json`;
+      const applied = w.fs.getJson<{
+        version: 1;
+        targets: Record<string, { hash: string; base?: { sha: string } }>;
+      }>(appliedPath);
+      const recA = applied.targets[w.tk(IDS.a)]!;
+      const sha = recA.base!.sha;
+      const mark = { letter: "F", color: "#FFD700", text: "#111111", scale: 1 };
+      const oldHash = sha256(
+        canonicalJSON({
+          badge: mark,
+          base: { kind: "raster", sha, layout: "contain-v1:0.515" },
+          renderer: RENDERER_VERSION,
+          size: { width: 512, height: 512 },
+        }),
+      );
+      expect(oldHash).not.toBe(recA.hash);
+      recA.hash = oldHash;
+      w.fs.putJson(appliedPath, applied);
+      const idxPath = `${w.paths.stateDir}/adopted/index.json`;
+      const idx = w.fs.getJson<{ version: 1; targets: Record<string, Record<string, unknown>> }>(
+        idxPath,
+      );
+      expect(idx.targets[key]).toMatchObject({ checked: "full-v1" });
+      delete idx.targets[key]!.checked;
+      w.fs.putJson(idxPath, idx);
+
+      const a0 = w.targetSends(IDS.a).length;
+      const b0 = w.targetSends(IDS.b).length;
+      const e2 = await w.startEngine({ instanceId: "upgrade" });
+      await w.settle();
+      // Exactly one repaint of the adopted target, full-frame; nothing else moves.
+      expect(w.targetSends(IDS.a)).toHaveLength(a0 + 1);
+      expect(w.targetSends(IDS.b)).toHaveLength(b0);
+      expect(sentText(w, w.targetSends(IDS.a).at(-1)!.avatar)).toContain('data-adopted="full"');
+      expect(showsOwn(w, IDS.a)).toBe(true);
+      // The old base was checked once and is still adopted (it carries no mark).
+      expect(w.fs.getJson<typeof idx>(idxPath).targets[key]).toMatchObject({
+        active: true,
+        checked: "full-v1",
+      });
+      // Idempotent: more passes and a restart repaint nothing.
+      await e2.runPass("periodic");
+      await w.settle();
+      await e2.stop();
+      const e3 = await w.startEngine({ instanceId: "again" });
+      await w.settle();
+      await e3.runPass("periodic");
+      await w.settle();
+      expect(w.targetSends(IDS.a)).toHaveLength(a0 + 1);
+      expect(w.targetSends(IDS.b)).toHaveLength(b0);
+      expect(w.backend.avatarReads()).toBe(3);
+      await e3.stop();
+    });
+  }
 });

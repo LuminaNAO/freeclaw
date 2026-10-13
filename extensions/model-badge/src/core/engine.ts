@@ -760,8 +760,9 @@ export function createEngine(deps: EngineDeps) {
   }
 
   // First sight: capture the avatar each new group target shows, once. A target we have
-  // already painted, one with no avatar, or one showing our own mark gets nothing adopted
-  // (and a generated base). Transient read failures are retried on later passes.
+  // already painted, one with no avatar, or one showing our own mark (stamp or pixels,
+  // §2c.9) gets nothing adopted: it keeps the base we last applied, or a generated one.
+  // Transient read failures are retried on later passes.
   async function adoptNew() {
     if (role !== "writer" || !view) {
       return;
@@ -772,8 +773,9 @@ export function createEngine(deps: EngineDeps) {
         continue;
       }
       const key = view.imageWant(t.ref).key;
+      // §2c.9: a prior-applied record means the target shows our mark: never adopted.
       if (applied.targets[k] || status.inflight[k]) {
-        await adopted.markSeen(key, "painted");
+        await adopted.markSeen(key, "ours");
         continue;
       }
       if (!provider.currentAvatar) {

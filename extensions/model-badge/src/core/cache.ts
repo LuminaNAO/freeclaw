@@ -36,8 +36,8 @@ export function baseIdentity(base: AssetBase): Record<string, unknown> {
   if (base.kind === "vector") {
     return { kind: "vector", ...base.params };
   }
-  // §2c.8: an adopted base is laid out differently (contain on a blurred fill), so its
-  // layout is part of the identity.
+  // §2c.9: an adopted base's layout (full-frame, `full-v1`) is part of its identity, so a
+  // layout change repaints adopted targets once and nothing else.
   return base.source === "adopted"
     ? { kind: "raster", sha: base.sha, layout: ADOPTED_LAYOUT }
     : { kind: "raster", sha: base.sha };
@@ -129,7 +129,7 @@ export function createAssetCache(opts: {
     if (!mime) {
       throw new Error("raster base is not a PNG or JPEG");
     }
-    // §2c.8: a group's own artwork is never slice-cropped.
+    // §2c.9: a group's own artwork is drawn full-frame, the mark once on top.
     return job.base.source === "adopted"
       ? adoptedAssetSvg({ mime, bytes }, job.mark, size.width)
       : rasterAssetSvg({ mime, bytes }, job.mark, size.width);

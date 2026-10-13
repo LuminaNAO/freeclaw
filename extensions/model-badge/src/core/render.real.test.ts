@@ -6,18 +6,21 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createAdoptedStore } from "./adopted.js";
 import { createImageBases, type BaseArtGenerator } from "./baseart.js";
 import { assetHash, createAssetCache, type AssetBase, type AssetJob } from "./cache.js";
 import { contrastRatio, TEXT_DARK, TEXT_LIGHT } from "./color.js";
 import { createNodeFs } from "./fsio.js";
 import { sha256 } from "./hash.js";
+import { carriesMark, decodePng } from "./marked.js";
 import { baseParamsForSeed, renderBaseSvg, seedFor } from "./motif.js";
 import {
-  ADOPTED_FRAME,
   adoptedAssetSvg,
+  adoptedBaseSvg,
   createRenderer,
   detectRasteriser,
   isStamped,
+  MARK_GEOMETRY,
   rasterBaseSvg,
   verifyPng,
   type RasteriserId,
@@ -261,68 +264,163 @@ describe.skipIf(!rasteriser)(`real render pipeline (${rasteriser ?? RENDERER_UNA
     });
   });
 
-  it.skipIf(!hasMagick)(
-    "ARCH §2c.8: an adopted image is shown whole (contain) on a darkened blurred fill; its corners are visible and clear of the mark",
-    async () => {
-      await withDir(async (dir) => {
-        const r = renderer();
-        // A wide picture with text-like detail at its very edges: red left edge, blue
-        // right edge, green bottom strip ("logo text" at the bottom). Slice-cropping
-        // would drop the side edges; covering would hide the bottom strip.
-        const srcSvg = path.join(dir, "own.svg");
-        await fsp.writeFile(
-          srcSvg,
-          '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400">' +
-            '<rect width="800" height="400" fill="#F0F0F0"/>' +
-            '<rect width="40" height="400" fill="#FF0000"/>' +
-            '<rect x="760" width="40" height="400" fill="#0000FF"/>' +
-            '<rect y="360" width="800" height="40" fill="#00FF00"/></svg>',
-        );
-        const srcPng = path.join(dir, "own.png");
-        await r.svgToPng(srcSvg, srcPng, { width: 800, height: 400 });
-        const bytes = await fsp.readFile(srcPng);
-        const mark = { letter: "O", color: "#9B59D0", text: TEXT_LIGHT, scale: 1 };
-        const svg = path.join(dir, "a.svg");
-        await fsp.writeFile(svg, adoptedAssetSvg({ mime: "image/png", bytes }, mark, SIZE.width));
-        const out = path.join(dir, "a.png");
-        await r.svgToPng(svg, out, SIZE);
-        const S = SIZE.width;
-        const f = ADOPTED_FRAME;
-        // Contained: an 800×400 image in the s×s frame is s wide, s/2 tall, centred.
-        const x0 = f.x * S;
-        const x1 = (f.x + f.s) * S;
-        const top = (f.y + f.s / 4) * S;
-        const bottom = (f.y + (3 * f.s) / 4) * S;
-        const midY = (top + bottom) / 2;
-        expect(near(pixel(out, Math.round(x0 + 3), Math.round(midY)), hex("#FF0000"), 40)).toBe(
-          true,
-        );
-        expect(near(pixel(out, Math.round(x1 - 4), Math.round(midY)), hex("#0000FF"), 40)).toBe(
-          true,
-        );
-        expect(
-          near(pixel(out, Math.round((x0 + x1) / 2), Math.round(bottom - 3)), hex("#00FF00"), 40),
-        ).toBe(true);
-        // The image corners are inside the visible circle and outside the mark.
-        for (const [cx, cy] of [
-          [x0, top],
-          [x1, top],
-          [x0, bottom],
-          [x1, bottom],
-        ] as const) {
-          expect(Math.hypot(cx - S / 2, cy - S / 2)).toBeLessThan(S / 2);
-          expect(Math.hypot(cx - 0.79 * S, cy - 0.79 * S)).toBeGreaterThan(0.161 * S);
+  // ARCH §2c.9: a source with a distinct colour in each corner region and at the centre,
+  // so an inset, a blur or a darkening shows up at once.
+  async function quadrantSource(dir: string, w = 512, h = 512): Promise<Buffer> {
+    const srcSvg = path.join(dir, `own-${w}x${h}.svg`);
+    await fsp.writeFile(
+      srcSvg,
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">` +
+        `<rect width="${w}" height="${h}" fill="#F0F0F0"/>` +
+        `<rect width="${w / 2}" height="${h / 2}" fill="#FF0000"/>` +
+        `<rect x="${w / 2}" width="${w / 2}" height="${h / 2}" fill="#0000FF"/>` +
+        `<rect y="${h / 2}" width="${w / 2}" height="${h / 2}" fill="#00FF00"/>` +
+        `<rect x="${w / 2}" y="${h / 2}" width="${w / 2}" height="${h / 2}" fill="#FFFF00"/>` +
+        `<rect x="${w / 2 - 20}" y="${h / 2 - 20}" width="40" height="40" fill="#FF00FF"/></svg>`,
+    );
+    const srcPng = path.join(dir, `own-${w}x${h}.png`);
+    await renderer().svgToPng(srcSvg, srcPng, { width: w, height: h });
+    return fsp.readFile(srcPng);
+  }
+
+  const px = (img: ReturnType<typeof decodePng>, x: number, y: number) => {
+    const i = (y * img.width + x) * 4;
+    return [img.rgba[i]!, img.rgba[i + 1]!, img.rgba[i + 2]!];
+  };
+
+  it("ARCH §2c.9: an adopted base renders full-frame (centre and the four corners), mark once on top", async () => {
+    await withDir(async (dir) => {
+      const bytes = await quadrantSource(dir);
+      const mark = { letter: "O", color: "#9B59D0", text: TEXT_LIGHT, scale: 1 };
+      const svgText = adoptedAssetSvg({ mime: "image/png", bytes }, mark, SIZE.width);
+      // No blur filter, no darkening overlay, one image, one mark.
+      expect(svgText).not.toMatch(/<filter|feGaussianBlur|mb-blur|fill-opacity/);
+      expect(svgText.match(/<image/g)).toHaveLength(1);
+      expect(svgText.match(/data-mark=/g)).toHaveLength(1);
+      const svg = path.join(dir, "a.svg");
+      await fsp.writeFile(svg, svgText);
+      const out = path.join(dir, "a.png");
+      await renderer().svgToPng(svg, out, SIZE);
+      const img = decodePng(await fsp.readFile(out));
+      const S = SIZE.width;
+      // The artwork's own colours, undimmed, right to the edges: centre and the four
+      // corners (bottom-right sampled at the corner, which lies outside the mark disc).
+      expect(near(px(img, S / 2, S / 2), hex("#FF00FF"))).toBe(true);
+      expect(near(px(img, 2, 2), hex("#FF0000"))).toBe(true);
+      expect(near(px(img, S - 3, 2), hex("#0000FF"))).toBe(true);
+      expect(near(px(img, 2, S - 3), hex("#00FF00"))).toBe(true);
+      expect(near(px(img, S - 3, S - 3), hex("#FFFF00"))).toBe(true);
+      // Those corners are outside the mark (bar and disc).
+      const { disc } = MARK_GEOMETRY;
+      expect(Math.hypot(S - 3 - disc.c * S, S - 3 - disc.c * S)).toBeGreaterThan(
+        (disc.r + disc.stroke / 2) * S,
+      );
+      // The mark is there, in the corner mark position, and detected as ours.
+      expect(
+        near(px(img, Math.round(0.79 * S), Math.round(0.79 * S - 0.12 * S)), hex("#9B59D0")),
+      ).toBe(true);
+      expect(carriesMark(img)).toBe(true);
+      // The base alone does not carry it.
+      const base = path.join(dir, "b.svg");
+      await fsp.writeFile(base, adoptedBaseSvg({ mime: "image/png", bytes }, S));
+      await renderer().svgToPng(base, path.join(dir, "b.png"), SIZE);
+      expect(carriesMark(decodePng(await fsp.readFile(path.join(dir, "b.png"))))).toBe(false);
+    });
+  });
+
+  it("ARCH §2c.9: a non-square source is centre-cropped to fill the square, after the format guard", async () => {
+    await withDir(async (dir) => {
+      const bytes = await quadrantSource(dir, 800, 400);
+      const svg = path.join(dir, "w.svg");
+      await fsp.writeFile(svg, adoptedBaseSvg({ mime: "image/png", bytes }, SIZE.width));
+      const out = path.join(dir, "w.png");
+      await renderer().svgToPng(svg, out, SIZE);
+      const img = decodePng(await fsp.readFile(out));
+      const S = SIZE.width;
+      // Filled edge to edge: the corners are the source's quadrant colours, no letterbox.
+      expect(near(px(img, 2, 2), hex("#FF0000"))).toBe(true);
+      expect(near(px(img, S - 3, S - 3), hex("#FFFF00"))).toBe(true);
+      expect(near(px(img, S / 2, S / 2), hex("#FF00FF"))).toBe(true);
+    });
+  });
+
+  it("ARCH §2c.9: artwork that already carries our mark is refused as a base, even re-encoded without the stamp", async () => {
+    await withDir(async (dir) => {
+      const fs = createNodeFs();
+      const S = SIZE.width;
+      const marks = [
+        { letter: "F", color: "#FFD700", text: TEXT_DARK, scale: 1 },
+        { letter: "KL", color: "#6C3483", text: TEXT_LIGHT, scale: 1 },
+        { letter: "?", color: "#95A5A6", text: TEXT_DARK, scale: 1 },
+      ];
+      const ourAssets: Buffer[] = [];
+      for (const [i, mark] of marks.entries()) {
+        const base = vectorBase(`marked-${i}`);
+        const h = assetHash(mark, base, SIZE);
+        const cacheDir = path.join(dir, "assets");
+        await createAssetCache({
+          fs,
+          renderer: renderer(),
+          cacheDir,
+          size: SIZE,
+          clock,
+          log,
+        }).ensure(new Map([[h, { hash: h, mark, base }]]));
+        ourAssets.push(await fsp.readFile(path.join(cacheDir, `${h}.png`)));
+      }
+      // Our assets over an adopted (full-frame) base too: the mark sits on their artwork.
+      const own = await quadrantSource(dir);
+      const ownSvg = path.join(dir, "own-marked.svg");
+      await fsp.writeFile(ownSvg, adoptedAssetSvg({ mime: "image/png", bytes: own }, marks[0]!, S));
+      await renderer().svgToPng(ownSvg, path.join(dir, "own-marked.png"), SIZE);
+      ourAssets.push(await fsp.readFile(path.join(dir, "own-marked.png")));
+
+      // A channel hands the avatar back re-encoded: no stamp, and (with magick) lossy JPEG.
+      const reencoded: Buffer[] = [];
+      for (const [i, a] of ourAssets.entries()) {
+        const plainSvg = path.join(dir, `plain-${i}.svg`);
+        await fsp.writeFile(plainSvg, adoptedBaseSvg({ mime: "image/png", bytes: a }, S));
+        const plain = path.join(dir, `plain-${i}.png`);
+        await renderer().svgToPng(plainSvg, plain, SIZE);
+        const b = await fsp.readFile(plain);
+        expect(isStamped(b)).toBe(false);
+        reencoded.push(b);
+        if (hasMagick) {
+          const jpg = path.join(dir, `plain-${i}.jpg`);
+          execFileSync("magick", [plain, "-quality", "70", jpg]);
+          reencoded.push(await fsp.readFile(jpg));
         }
-        // Outside the frame is the darkened blurred copy, not the light original.
-        const fill = pixel(out, 6, Math.round(S / 2));
-        expect(fill.every((v) => v < 200)).toBe(true);
-        // The mark is still composited on top.
-        expect(
-          near(pixel(out, Math.round(0.79 * S), Math.round(0.79 * S - 0.12 * S)), hex("#9B59D0")),
-        ).toBe(true);
+      }
+      const store = createAdoptedStore({
+        fs,
+        dir: path.join(dir, "adopted"),
+        renderer: renderer(),
+        size: SIZE,
+        clock,
+        log,
       });
-    },
-  );
+      await store.load();
+      for (const [i, b] of reencoded.entries()) {
+        const rec = await store.adopt(`k${i}`, b);
+        expect(rec, `source ${i}`).toMatchObject({ none: "ours" });
+        expect(rec.sha).toBeUndefined();
+        expect(store.active(`k${i}`)).toBeNull();
+      }
+      // Pictures without our mark are adopted: the plain quadrant artwork and vector bases.
+      const clean = [own];
+      for (const t of ["clean-a", "clean-b", "clean-c", "clean-d"]) {
+        const p = path.join(dir, `${t}.svg`);
+        await fsp.writeFile(p, renderBaseSvg(baseParamsForSeed(seedFor("signal", t)), S));
+        await renderer().svgToPng(p, path.join(dir, `${t}.png`), SIZE);
+        clean.push(await fsp.readFile(path.join(dir, `${t}.png`)));
+      }
+      for (const [i, b] of clean.entries()) {
+        const rec = await store.adopt(`c${i}`, b);
+        expect(rec.none, `clean ${i}`).toBeUndefined();
+        expect(store.active(`c${i}`)?.sha).toBe(sha256(b));
+      }
+    });
+  });
 
   it("a corrupt cached PNG fails verification and is re-rendered in place", async () => {
     await withDir(async (dir) => {
