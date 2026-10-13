@@ -10,7 +10,7 @@ import {
   type SpawnLike,
 } from "./core/baseart.js";
 import { normalizeConfig } from "./core/config.js";
-import { baseParamsForSeed, seedFor } from "./core/motif.js";
+import { baseParamsForSeed, imageSeedFor, seedFor } from "./core/motif.js";
 import { fakePng } from "./test-helpers/fakes.js";
 import { createWorld, IDS } from "./test-helpers/world.js";
 
@@ -56,7 +56,8 @@ async function imageWorld(
   return { w, e };
 }
 
-const seedOf = (id: string) => seedFor("signal", id.toLowerCase());
+// The image seed of a target at generation 0 (ARCH §2c.3).
+const seedOf = (id: string, generation = 0) => imageSeedFor("signal", id.toLowerCase(), generation);
 const baseOf = (w: Awaited<ReturnType<typeof createWorld>>, id: string) =>
   w.status().cache && (w.engines[0]!.targetSummary(w.tk(id))!.desired as { base: string }).base;
 
@@ -69,10 +70,10 @@ describe("image generation (ARCH §2b)", () => {
     await e.stop();
   });
 
-  it("probe fails → vector + health unavailable; nothing generated", async () => {
+  it("probe fails → vector for targets with no avatar + health retrying; nothing generated", async () => {
     const gen = fakeImageGen({ up: false });
     const { w, e } = await imageWorld(gen);
-    expect(e.status().health.imageGen).toBe("unavailable");
+    expect(e.status().health.imageGen).toBe("retrying");
     expect(gen.calls).toHaveLength(0);
     expect(baseOf(w, IDS.a)).toBe("vector");
     await e.stop();
@@ -162,7 +163,7 @@ describe("image generation (ARCH §2b)", () => {
     const { w, e } = await imageWorld(gen);
     const r = await e.regenerate(w.tk(IDS.a));
     expect(r.ok).toBe(true);
-    expect(gen.calls.map((c) => c.seed)).toEqual([seedOf(IDS.a), seedOf(IDS.b), seedOf(IDS.a)]);
+    expect(gen.calls.map((c) => c.seed)).toEqual([seedOf(IDS.a), seedOf(IDS.b), seedOf(IDS.a, 1)]);
     await e.stop();
   });
 

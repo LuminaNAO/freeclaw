@@ -206,7 +206,7 @@ describe("Signal provider", () => {
     const noop = async (): Promise<RpcOutcome> => S.ok(S.updateOk());
     expect(provider(noop).configError()).toBeNull();
     expect(provider(noop, { baseUrl: "unix:/run/signal/d.sock" }).configError()).toBeNull();
-    expect(provider(noop, { baseUrl: "http://203.0.113.40:8080" }).configError()).toMatch(
+    expect(provider(noop, { baseUrl: "http://signal-daemon.invalid:8080" }).configError()).toMatch(
       /must be local/,
     );
     expect(provider(noop, { account: null }).configError()).toMatch(/no number/);

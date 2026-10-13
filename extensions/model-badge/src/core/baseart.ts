@@ -14,7 +14,9 @@ import { rasterBaseSvg, sniffImage, verifyPng, type Renderer, type RenderSize } 
 // system. Only the base is ever generated; marks are composited by our renderer.
 
 export type BaseStyle = { motif?: string; palette?: string; prompt?: string };
-export type BaseTarget = { seed: string; params: BaseParams };
+// `seed` is the image seed (§2c.3: it covers the target's generation counter); `portrait`
+// marks the account's own profile picture (§2c.5).
+export type BaseTarget = { seed: string; params: BaseParams; portrait?: boolean };
 
 export interface BaseArtGenerator {
   readonly id: string;
@@ -34,13 +36,21 @@ const HOUSE_TEMPLATE =
   "Abstract square avatar background. {style}. Soft shapes, balanced composition, " +
   "no text, no letters, no numbers, no people, no faces, no logos.";
 
+// ARCH §2c.5: the profile picture is shown cropped to a circle, so its prompt asks for a
+// portrait-safe abstract: centred, nothing important near the corners.
+const PROFILE_TEMPLATE =
+  "Abstract square profile picture background, portrait-safe: a centred radial " +
+  "composition that still reads when cropped to a circle. {style}. Soft shapes, " +
+  "no text, no letters, no numbers, no people, no faces, no logos.";
+
 // Built only from style words and the generated base's own parameters. Group names,
 // member names and chat content are never inputs, so they can never leak into a prompt.
 export function buildPrompt(target: BaseTarget, style: BaseStyle): string {
   const words = style.prompt
     ? style.prompt
     : `${style.palette ?? target.params.palette} colour palette, ${style.motif ?? target.params.motif} motif`;
-  return HOUSE_TEMPLATE.replace("{style}", words.replace(/[\r\n]+/g, " ").trim());
+  const template = target.portrait ? PROFILE_TEMPLATE : HOUSE_TEMPLATE;
+  return template.replace("{style}", words.replace(/[\r\n]+/g, " ").trim());
 }
 
 export function seedNumber(seed: string): number {
@@ -189,12 +199,18 @@ export function createCommandGenerator(opts: {
   };
 }
 
-// ---------------- stored image bases (§2b.2, §2b.4, §2b.6, §2b.7) ----------------
+// ---------------- stored image bases (§2b.2, §2b.4, §2b.6, §2b.7, §2c.3, §2c.4) ----------------
 
-export type ImageGenState = "ok" | "unavailable" | "unconfigured";
+// ok: the backend answers. retrying: configured but the probe has not succeeded yet; it
+// is retried with backoff and never pins the extension to vector (§2c.4). unconfigured:
+// no imageGen → vector is the base generator.
+export type ImageGenState = "ok" | "retrying" | "unconfigured";
 
+// `key` is the target's stable base key; `target.seed` is the image seed for the target's
+// current generation (§2c.3), so each generation is stored under its own file.
 export type ImageWant = {
   key: string;
+  generation: number;
   target: BaseTarget;
   style: BaseStyle;
 };
@@ -202,6 +218,7 @@ export type ImageWant = {
 export type StoredBase = { sha: string; file: string; inputsKey: string };
 
 type Meter = { day: string; used: number };
+type Entry = StoredBase & { key: string; seed: string };
 
 function utcDay(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
@@ -215,20 +232,34 @@ export function createImageBases(opts: {
   size: RenderSize;
   clock: Clock;
   log: Logger;
-  limits: { maxPerDay: number; maxPerRun: number; maxAttempts: number; backoffMs: number };
+  limits: {
+    maxPerDay: number;
+    maxPerRun: number;
+    maxAttempts: number;
+    backoffMs: number;
+    maxBackoffMs?: number;
+  };
 }) {
   const { fs, dir, generator, clock, log, limits } = opts;
-  let state: ImageGenState = generator ? "unavailable" : "unconfigured";
-  const index = new Map<string, StoredBase>();
+  const maxBackoffMs = limits.maxBackoffMs ?? Number.POSITIVE_INFINITY;
+  let state: ImageGenState = generator ? "retrying" : "unconfigured";
+  let probeAttempts = 0;
+  let nextProbeAt = 0;
+  // Every stored base on disk, by image seed. More than one per target may exist while a
+  // target still shows an older generation; the old one is pruned once the new one is
+  // applied (§2c.3).
+  const stored = new Map<string, Entry>();
   const failures = new Map<
     string,
     { inputsKey: string; attempts: number; nextAt: number; error: string }
   >();
-  const forced = new Set<string>();
+  const generations = new Map<string, number>();
   let meter: Meter = { day: utcDay(clock.now()), used: 0 };
   const meterPath = path.join(dir, "meter.json");
+  const generationsPath = path.join(dir, "generations.json");
   const fileFor = (seed: string) => path.join(dir, `${seed}.png`);
   const manifestFor = (seed: string) => path.join(dir, `${seed}.json`);
+  const backoff = (n: number) => Math.min(limits.backoffMs * 2 ** Math.max(0, n - 1), maxBackoffMs);
 
   function inputsKeyOf(w: ImageWant): string {
     return sha256(
@@ -270,32 +301,87 @@ export function createImageBases(opts: {
     }
   }
 
+  async function dropEntry(e: Entry) {
+    stored.delete(e.seed);
+    await fs.unlink(fileFor(e.seed));
+    await fs.unlink(manifestFor(e.seed));
+  }
+
+  function current(w: ImageWant): StoredBase | null {
+    if (!generator) {
+      return null;
+    }
+    const e = stored.get(w.target.seed);
+    return e && e.key === w.key && e.inputsKey === inputsKeyOf(w)
+      ? { sha: e.sha, file: e.file, inputsKey: e.inputsKey }
+      : null;
+  }
+
+  function blocked(w: ImageWant, now: number): boolean {
+    const f = failures.get(w.key);
+    return Boolean(
+      f && f.inputsKey === inputsKeyOf(w) && (f.attempts >= limits.maxAttempts || now < f.nextAt),
+    );
+  }
+
   return {
     get state() {
       return state;
     },
 
+    // Startup probe. A failure leaves the state `retrying` and schedules the next probe.
     async probe(): Promise<ImageGenState> {
       if (!generator) {
         state = "unconfigured";
+        return state;
+      }
+      let ok = false;
+      try {
+        ok = await generator.available();
+      } catch {
+        ok = false;
+      }
+      if (ok) {
+        state = "ok";
+        probeAttempts = 0;
+        nextProbeAt = 0;
       } else {
-        let ok = false;
-        try {
-          ok = await generator.available();
-        } catch {
-          ok = false;
-        }
-        state = ok ? "ok" : "unavailable";
+        state = "retrying";
+        probeAttempts++;
+        nextProbeAt = clock.now() + backoff(probeAttempts);
+        log.warn(
+          `[model-badge] image generator probe failed (attempt ${probeAttempts}); retrying in ${Math.round(backoff(probeAttempts) / 1000)} s`,
+        );
       }
       return state;
     },
 
+    // §2c.4: periodic passes (and the watcher) re-probe once the backoff has elapsed.
+    // Returns true when this call brought the backend up.
+    async probeIfDue(): Promise<boolean> {
+      if (state !== "retrying" || clock.now() < nextProbeAt) {
+        return false;
+      }
+      return (await this.probe()) === "ok";
+    },
+
     async load(): Promise<void> {
-      index.clear();
+      stored.clear();
+      generations.clear();
       try {
         meter = JSON.parse(await fs.readText(meterPath)) as Meter;
       } catch {
         meter = { day: utcDay(clock.now()), used: 0 };
+      }
+      try {
+        const g = JSON.parse(await fs.readText(generationsPath)) as Record<string, unknown>;
+        for (const [k, v] of Object.entries(g ?? {})) {
+          if (Number.isInteger(v) && (v as number) > 0) {
+            generations.set(k, v as number);
+          }
+        }
+      } catch {
+        // No counters yet: every target is at generation 0.
       }
       let names: string[] = [];
       try {
@@ -308,30 +394,40 @@ export function createImageBases(opts: {
         if (!m) {
           continue;
         }
+        const seed = m[1] as string;
         try {
           const man = JSON.parse(await fs.readText(path.join(dir, n))) as {
             key?: string;
             sha?: string;
             inputsKey?: string;
           };
-          const file = fileFor(m[1] as string);
+          const file = fileFor(seed);
           const bytes = await fs.readFile(file);
           if (man.key && man.sha === sha256(bytes) && man.inputsKey) {
-            index.set(man.key, { sha: man.sha, file, inputsKey: man.inputsKey });
+            stored.set(seed, { key: man.key, seed, sha: man.sha, file, inputsKey: man.inputsKey });
           }
         } catch {
-          // A broken stored base is ignored; the target uses vector until regenerated.
+          // A broken stored base is ignored; the target keeps what it shows until a new one exists.
         }
       }
     },
 
-    // The stored base for a target, if it matches the target's current inputs.
-    current(w: ImageWant): StoredBase | null {
-      if (state !== "ok") {
-        return null;
+    // §2c.3: the target's generation counter (0 until the first regenerate).
+    generation(key: string): number {
+      return generations.get(key) ?? 0;
+    },
+
+    // The stored base for a target's current inputs and generation, if it exists.
+    current,
+
+    // A stored base by its bytes' hash (a base a target still shows), if still on disk.
+    bySha(sha: string): StoredBase | null {
+      for (const e of stored.values()) {
+        if (e.sha === sha) {
+          return { sha: e.sha, file: e.file, inputsKey: e.inputsKey };
+        }
       }
-      const s = index.get(w.key);
-      return s && s.inputsKey === inputsKeyOf(w) && !forced.has(w.key) ? s : null;
+      return null;
     },
 
     pending(wants: ImageWant[]): number {
@@ -339,21 +435,11 @@ export function createImageBases(opts: {
         return 0;
       }
       const now = clock.now();
-      return wants.filter((w) => {
-        if (this.current(w)) {
-          return false;
-        }
-        const f = failures.get(w.key);
-        return (
-          !f ||
-          f.inputsKey !== inputsKeyOf(w) ||
-          (f.attempts < limits.maxAttempts && now >= f.nextAt)
-        );
-      }).length;
+      return wants.filter((w) => !current(w) && !blocked(w, now)).length;
     },
 
-    // Generate what is missing, within the per-run and daily caps. Failures leave the
-    // target on vector and back off; excess targets wait for a later pass.
+    // Generate what is missing, within the per-run and daily caps. A target whose image
+    // is not ready keeps what it shows (§2c.4); failures back off, capped.
     async ensure(wants: ImageWant[]) {
       const summary = { generated: 0, failed: 0, deferred: 0 };
       if (state !== "ok" || !generator) {
@@ -363,18 +449,11 @@ export function createImageBases(opts: {
       let thisRun = 0;
       const now = clock.now();
       for (const w of wants) {
-        if (this.current(w)) {
+        if (current(w) || blocked(w, now)) {
           continue;
         }
         const inputsKey = inputsKeyOf(w);
         const f = failures.get(w.key);
-        if (
-          f &&
-          f.inputsKey === inputsKey &&
-          (f.attempts >= limits.maxAttempts || now < f.nextAt)
-        ) {
-          continue;
-        }
         if (thisRun >= limits.maxPerRun || meter.used >= limits.maxPerDay) {
           summary.deferred++;
           continue;
@@ -387,21 +466,22 @@ export function createImageBases(opts: {
           const raw = await generator.generate(w.target, w.style);
           const png = await normalise(raw, w.target.seed);
           const sha = sha256(png);
-          const file = fileFor(w.target.seed);
+          const seed = w.target.seed;
+          const file = fileFor(seed);
           await fs.writeAtomic(file, png);
           await fs.writeAtomic(
-            manifestFor(w.target.seed),
+            manifestFor(seed),
             JSON.stringify({
               key: w.key,
               sha,
               inputsKey,
+              generation: w.generation,
               generator: generator.id,
               generatedAt: clock.now(),
             }),
           );
-          index.set(w.key, { sha, file, inputsKey });
+          stored.set(seed, { key: w.key, seed, sha, file, inputsKey });
           failures.delete(w.key);
-          forced.delete(w.key);
           summary.generated++;
         } catch (err) {
           const prev = f && f.inputsKey === inputsKey ? f.attempts : 0;
@@ -409,30 +489,53 @@ export function createImageBases(opts: {
           failures.set(w.key, {
             inputsKey,
             attempts,
-            nextAt: clock.now() + limits.backoffMs * 2 ** (attempts - 1),
+            nextAt: clock.now() + backoff(attempts),
             error: String((err as Error)?.message ?? err).slice(0, 200),
           });
           summary.failed++;
           log.warn(
-            `[model-badge] image base generation failed (attempt ${attempts}/${limits.maxAttempts}); using vector for now`,
+            `[model-badge] image base generation failed (attempt ${attempts}/${limits.maxAttempts}); the target keeps what it shows for now`,
           );
         }
       }
       return summary;
     },
 
-    // `/badge regenerate <target>`: forget the stored base so the next pass makes a new one.
-    regenerate(key: string) {
-      forced.add(key);
+    // §2c.3: `regenerate` bumps the target's generation, which changes its image seed, so
+    // the next pass makes a new picture. The old one stays until the new one is applied.
+    async regenerate(key: string): Promise<number> {
+      const n = (generations.get(key) ?? 0) + 1;
+      generations.set(key, n);
       failures.delete(key);
+      await fs.mkdirp(dir);
+      await fs.writeAtomic(generationsPath, JSON.stringify(Object.fromEntries(generations)));
+      return n;
     },
 
-    async remove(key: string, seed: string) {
-      index.delete(key);
+    // Drops stored bases nothing needs: not the current one for a live target and not a
+    // base some target still shows (§2c.3: old generation pruned after the new is applied).
+    async prune(keep: { seeds: Set<string>; shas: Set<string> }): Promise<number> {
+      let n = 0;
+      for (const e of [...stored.values()]) {
+        if (!keep.seeds.has(e.seed) && !keep.shas.has(e.sha)) {
+          await dropEntry(e);
+          n++;
+        }
+      }
+      return n;
+    },
+
+    // A removed target loses every stored base and its counter (§3.3).
+    async remove(key: string) {
       failures.delete(key);
-      forced.delete(key);
-      await fs.unlink(fileFor(seed));
-      await fs.unlink(manifestFor(seed));
+      for (const e of [...stored.values()]) {
+        if (e.key === key) {
+          await dropEntry(e);
+        }
+      }
+      if (generations.delete(key)) {
+        await fs.writeAtomic(generationsPath, JSON.stringify(Object.fromEntries(generations)));
+      }
     },
 
     status() {
@@ -442,7 +545,9 @@ export function createImageBases(opts: {
         generator: generator?.id ?? null,
         usedToday: meter.used,
         maxPerDay: limits.maxPerDay,
-        stored: index.size,
+        maxPerRun: limits.maxPerRun,
+        stored: stored.size,
+        nextProbeAt: state === "retrying" ? nextProbeAt : null,
         failures: [...failures.values()].map((f) => ({ attempts: f.attempts, error: f.error })),
       };
     },

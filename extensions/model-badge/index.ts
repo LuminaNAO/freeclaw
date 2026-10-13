@@ -2,7 +2,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/model-badge";
 import { createBadgeCommand } from "./src/commands.js";
 import type { Engine } from "./src/core/engine.js";
 import { buildRuntime, type Runtime } from "./src/runtime.js";
-import { STYLE_TOOL, createStyleTool } from "./src/tool.js";
+import { TOOL_NAMES, createBadgeTool } from "./src/tool.js";
 
 // model-badge (ARCH §5.1). The writer runs as a plugin service; triggers are the closed
 // set of §5.2 (see README "Triggers"): startup and periodic passes, the store/models
@@ -12,29 +12,38 @@ export default function register(api: OpenClawPluginApi) {
   let runtime: Runtime | undefined;
   const engines = (): Engine[] => runtime?.engines ?? [];
 
-  api.registerTool(
-    (ctx) =>
-      runtime
-        ? createStyleTool({
-            steering: runtime.steering,
-            engines: runtime.engines,
-            senderId: ctx.requesterSenderId,
-            sessionKey: ctx.sessionKey,
-          })
-        : null,
-    { name: STYLE_TOOL },
-  );
-
-  const handle = createBadgeCommand({
+  const purge = async () => {
+    const r = runtime;
+    runtime = undefined;
+    await r?.purge();
+  };
+  const actionDeps = {
     engines,
     steering: () => runtime?.steering ?? null,
     operators: () => runtime?.config.operators ?? [],
-    purge: async () => {
-      const r = runtime;
-      runtime = undefined;
-      await r?.purge();
-    },
-  });
+    allowGroupMembers: () => runtime?.config.steering.allowGroupMembers ?? true,
+    purge,
+  };
+
+  // ARCH §2c.1: one tool, `model_badge`, covering every /badge subcommand; the §2a.3
+  // name `model_badge_style` is kept as an alias. The sender id comes from the gateway's
+  // tool context (§2c.2), never from tool arguments.
+  api.registerTool(
+    (ctx) =>
+      runtime
+        ? TOOL_NAMES.map((name) =>
+            createBadgeTool({
+              ...actionDeps,
+              name,
+              senderId: ctx.requesterSenderId,
+              sessionKey: ctx.sessionKey,
+            }),
+          )
+        : null,
+    { names: [...TOOL_NAMES] },
+  );
+
+  const handle = createBadgeCommand(actionDeps);
   api.registerCommand({
     name: "badge",
     description: "Model badge avatars: status, repaint, audit, regenerate, purge, style.",

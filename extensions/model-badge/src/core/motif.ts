@@ -37,6 +37,18 @@ export function seedFor(providerId: string, targetId: string, namespace?: "profi
   return sha256(namespace ? `${namespace}:${plain}` : plain);
 }
 
+// ARCH §2c.3: the image seed covers the target's generation counter, so a regenerate
+// asks the image model for a new picture while the vector base stays the same forever.
+export function imageSeedFor(
+  providerId: string,
+  targetId: string,
+  generation: number,
+  namespace?: "profile",
+): string {
+  const plain = `${providerId}:${targetId}:${generation}`;
+  return sha256(namespace ? `${namespace}:${plain}` : plain);
+}
+
 function word(seed: string, i: number): number {
   return Number.parseInt(seed.slice((i * 8) % 56, ((i * 8) % 56) + 8), 16);
 }

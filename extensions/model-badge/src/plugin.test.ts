@@ -18,12 +18,12 @@ import { buildRuntime } from "./runtime.js";
 import { createLog } from "./test-helpers/fakes.js";
 import * as S from "./test-helpers/signal-fixtures.js";
 import { createWorld, IDS } from "./test-helpers/world.js";
-import { createStyleTool, STYLE_TOOL } from "./tool.js";
+import { BADGE_TOOL, createBadgeTool, STYLE_TOOL } from "./tool.js";
 
 const OP = "+10000000002";
 
 describe("plugin registration (ARCH §5.1)", () => {
-  it("registers the writer service, /badge, the style tool and the session_start nudge", () => {
+  it("registers the writer service, /badge, the model_badge tool (+ alias) and the session_start nudge", () => {
     const seen = {
       services: [] as string[],
       commands: [] as string[],
@@ -39,14 +39,14 @@ describe("plugin registration (ARCH §5.1)", () => {
         runtime: {} as never,
         registerService: (s) => void seen.services.push(s.id),
         registerCommand: (c) => void seen.commands.push(c.name),
-        registerTool: (_t, o) => void seen.tools.push(String(o?.name)),
+        registerTool: (_t, o) => void seen.tools.push(...(o?.names ?? [String(o?.name)])),
         on: ((name: string) => void seen.hooks.push(name)) as never,
       }),
     );
     expect(seen).toEqual({
       services: ["model-badge"],
       commands: ["badge"],
-      tools: [STYLE_TOOL],
+      tools: [BADGE_TOOL, STYLE_TOOL],
       hooks: ["session_start"],
     });
   });
@@ -174,7 +174,7 @@ describe("/badge commands (ARCH §5.3)", () => {
     expect(
       (await handle({ channel: "signal", senderId: "+10000000099", args: `style remove ${id}` }))
         .text,
-    ).toMatch(/operator-only/);
+    ).toMatch(/operators only/);
     expect(
       (await handle({ channel: "signal", senderId: OP, args: `style remove ${id}` })).text,
     ).toBe(`Removed ${id}.`);
@@ -197,7 +197,16 @@ describe("/badge commands (ARCH §5.3)", () => {
       configRules: () => [],
       now: () => w.clock.now(),
     });
-    const tool = createStyleTool({ steering, engines: [e], senderId: OP, sessionKey: w.sk(IDS.a) });
+    const tool = createBadgeTool({
+      name: STYLE_TOOL,
+      engines: () => [e],
+      steering: () => steering,
+      operators: () => [OP],
+      allowGroupMembers: () => false,
+      purge: async () => {},
+      senderId: OP,
+      sessionKey: w.sk(IDS.a),
+    });
     const res = (await tool.execute("call-1", {
       action: "preview",
       rules: [{ match: { modelGlob: "*fable*" }, set: { tone: "dark" } }],

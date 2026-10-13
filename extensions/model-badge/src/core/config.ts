@@ -55,6 +55,8 @@ export const DEFAULT_TIMING = {
   captchaMaxPauseMs: 86_400_000,
   errorBackoffBaseMs: 60_000,
   imageGenBackoffMs: 600_000,
+  // ARCH §2c.4: image retries back off from imageGenBackoffMs, capped here.
+  imageGenMaxBackoffMs: 1_800_000,
   leaseHeartbeatMs: 30_000,
   leaseTtlMs: 120_000,
 };
@@ -88,7 +90,13 @@ export type NormalizeResult =
   | { ok: true; config: ModelBadgeConfig }
   | { ok: false; errors: string[]; config: ModelBadgeConfig };
 
-const IMAGE_DEFAULTS = { timeoutMs: 120_000, maxAttempts: 3, maxPerDay: 10, maxPerRun: 4 };
+// ARCH §2c.4: defaults sized for a local generator; operators lower them for metered backends.
+export const IMAGE_DEFAULTS = {
+  timeoutMs: 120_000,
+  maxAttempts: 10,
+  maxPerDay: 200,
+  maxPerRun: 16,
+};
 
 function obj(v: unknown): Record<string, unknown> {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -220,7 +228,8 @@ export function normalizeConfig(raw: unknown, ctx: { gatewayStateDir: string }):
 
   const steeringRaw = obj(c.steering);
   const steering = {
-    allowGroupMembers: steeringRaw.allowGroupMembers === true,
+    // ARCH §2c.2: members may act on their own group unless the operator turns it off.
+    allowGroupMembers: steeringRaw.allowGroupMembers !== false,
     rules: Array.isArray(steeringRaw.rules) ? steeringRaw.rules : [],
   };
 

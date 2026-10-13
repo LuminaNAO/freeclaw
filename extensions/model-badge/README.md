@@ -11,8 +11,10 @@ appears and pruned when it goes away.
 ## Layout
 
 ```
-index.ts                      plugin entry: service, /badge, model_badge_style tool, session_start nudge
+index.ts                      plugin entry: service, /badge, model_badge tool (+ model_badge_style alias), session_start nudge
 openclaw.plugin.json          config schema + uiHints
+src/actions.ts                one action dispatcher + authority for /badge and the tool (ARCH §2c.1, §2c.2)
+src/commands.ts src/tool.ts   /badge parser and the model_badge agent tool, both thin over actions.ts
 src/runtime.ts                wires the core to freeclaw (paths, providers, rasteriser, image backend)
 src/core/                     channel-agnostic core (never imports a provider)
   engine.ts                   single writer: lease, desired-state reconcile, debounce, paced queue,
@@ -44,15 +46,17 @@ src/providers/signal/         Signal provider on freeclaw's own Signal client (H
   "operators": ["<sender id>"],
   "badges": [{ "pattern": "opus", "letter": "O", "color": "#9B59D0" }],
   "targets": { "<target id>": { "motif": "waves", "palette": "ocean" } },
-  "steering": { "allowGroupMembers": false, "rules": [] },
+  "steering": { "allowGroupMembers": true, "rules": [] }, // false: operator-only
   "imageGen": null, // or { "kind": "openai-images", "baseUrl", "model", "apiKey": <SecretRef> }
   // or { "kind": "command", "command": "/abs/path", "args": [] }
+  // limits: "maxPerRun": 16, "maxPerDay": 200, "maxAttempts": 10 (defaults, sized for a
+  // local generator; lower them for metered backends)
 }
 ```
 
 State lives in `<gateway state dir>/plugins/model-badge/`: `style.json` (shared) and one
 directory per provider with `applied.json`, `status.json`, `writer.lease`, `assets/` and
-`bases/`. The Signal daemon opens avatars by path, so this directory must be readable by
+`bases/` (stored image bases plus `generations.json`, the per-target regenerate counter). The Signal daemon opens avatars by path, so this directory must be readable by
 the daemon's user, and the daemon must be local (loopback HTTP or the unix socket).
 
 ## Triggers (ARCH §5.2)
@@ -69,13 +73,36 @@ The set is closed. Which ones come from plugin events and which from the watcher
 | target removed          | provider listing at startup/periodic, or a `not-found` answer to a write                                                                                                                                  |
 | input change            | **watcher** — gateway config (default model, this plugin's config) and `style.json`                                                                                                                       |
 
-## Commands
+## Image first (ARCH §2c.4)
 
-`/badge status [all] | repaint [this|<target>|profile] | audit | regenerate [this|<target>] | purge confirm`
-(operators only, matched on the authenticated sender id), and
-`/badge style list | preview <json> | add <json> | remove <id…> | reset`
-(authority per ARCH §2a.4). The agent tool `model_badge_style` offers the same steering
-actions; it previews with rendered samples and adds only after the user confirms.
+With `imageGen` configured every base is an image from the generator, the profile included
+(portrait-safe prompt, unless `signal.profileBaseImage` is set). A failed probe does not pin
+the extension to vector: it is retried with backoff on each pass (health `imageGen:
+retrying`) and bases upgrade as soon as it answers, without a restart. A target whose image
+is not ready (cap reached, queued, failing) keeps the avatar it has; only a target with no
+avatar of ours gets a vector base, upgraded when its image exists. Without `imageGen`, vector
+art is the base generator (health `imageGen: unconfigured`).
+
+`regenerate` bumps the target's generation counter; the image seed is
+`sha256(provider:target:generation)`, so the same style gives a new picture. The old base is
+pruned once the new one is applied. A style change keeps the counter (same seed, new prompt).
+
+## Talking to the agent, and commands (ARCH §2c.1, §2c.2)
+
+Everything is reachable by asking the agent. The tool `model_badge` has the actions
+`status | style.list | style.preview | style.add | style.remove | style.reset | repaint |
+regenerate | audit | purge`; `model_badge_style` is an alias that also takes the old short
+style actions. `/badge` is the same set as a convenience:
+
+`/badge status [all|<target>] | repaint [this|<target>|profile] | regenerate [this|<target>|profile] |
+audit | purge confirm | style list | style preview <json> | style add <json> | style remove <id…> | style reset`
+
+Both go through one dispatcher, and authority is checked there on the authenticated sender
+id the gateway passes in, never on tool arguments. Operators (`operators`) may do
+everything. Group members (with `steering.allowGroupMembers`, on by default) may act on the
+group they are asking from: style rules with that group's `targetId`, repaint, regenerate,
+status and audit of that group. Global rules, other groups, the profile, `status all`,
+`style reset` and `purge` are operator-only. A refusal says why and who can.
 
 ## Rasteriser
 

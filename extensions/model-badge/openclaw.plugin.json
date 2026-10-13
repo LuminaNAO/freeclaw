@@ -18,12 +18,12 @@
     },
     "signal.profileBaseImage": {
       "label": "Profile Base Image",
-      "help": "Optional absolute path to a local picture used as the profile base instead of the generated one (a runtime input).",
+      "help": "Optional absolute path to a local picture used as the profile base. When empty, the profile base is a portrait-safe abstract from the image generator (or vector art without one).",
       "advanced": true
     },
     "operators": {
       "label": "Operators",
-      "help": "Authenticated sender ids allowed to run /badge and add global style rules."
+      "help": "Authenticated sender ids (as the gateway reports them) allowed everything: global style rules, any target, status all, audit, purge."
     },
     "badges": {
       "label": "Badge Rules",
@@ -35,40 +35,83 @@
       "advanced": true
     },
     "steering.allowGroupMembers": {
-      "label": "Members May Steer Their Group",
-      "help": "Let group members add style rules scoped to their own group. Global rules stay operator-only."
+      "label": "Members May Act On Their Group",
+      "help": "Default on. Group members may restyle, repaint, regenerate and check the status of the group they are in, by asking the agent or with /badge. Global rules and other groups stay operator-only. Turn off for operator-only."
     },
-    "steering.rules": { "label": "Default Style Rules", "advanced": true },
+    "steering.rules": {
+      "label": "Default Style Rules",
+      "advanced": true
+    },
     "imageGen": {
       "label": "Image Generation",
-      "help": "Optional. Generate target bases with an image system instead of vector art. Keys by SecretRef only.",
-      "advanced": true
+      "help": "Optional, image first: when set, every base is a real image from this generator (vector art only until a target's first image exists). OpenAI-compatible endpoint or a local command; keys by SecretRef only."
     },
     "paths.stateDir": {
       "label": "State Directory",
       "help": "Defaults to <gateway state dir>/plugins/model-badge. Must be readable by the channel daemon (Signal attaches avatars by path).",
       "advanced": true
     },
-    "timing": { "label": "Timing Overrides", "advanced": true },
-    "limits": { "label": "Failure Limits", "advanced": true }
+    "timing": {
+      "label": "Timing Overrides",
+      "advanced": true
+    },
+    "limits": {
+      "label": "Failure Limits",
+      "advanced": true
+    },
+    "imageGen.maxPerRun": {
+      "label": "Images Per Pass",
+      "help": "Most images generated in one pass (default 16). Lower it for metered backends.",
+      "advanced": true
+    },
+    "imageGen.maxPerDay": {
+      "label": "Images Per Day",
+      "help": "Daily image budget (default 200, UTC day). Lower it for metered backends.",
+      "advanced": true
+    },
+    "imageGen.maxAttempts": {
+      "label": "Image Attempts",
+      "help": "Attempts per target before giving up until its inputs change (default 10; backoff capped by timing.imageGenMaxBackoffMs, default 30 min).",
+      "advanced": true
+    }
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "providers": { "type": "array", "items": { "type": "string" } },
-      "agentId": { "type": "string" },
-      "operators": { "type": "array", "items": { "type": "string" } },
+      "providers": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "agentId": {
+        "type": "string"
+      },
+      "operators": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
       "badges": {
         "type": "array",
         "items": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "pattern": { "type": "string" },
-            "letter": { "type": "string" },
-            "color": { "type": "string" },
-            "textDark": { "type": "boolean" }
+            "pattern": {
+              "type": "string"
+            },
+            "letter": {
+              "type": "string"
+            },
+            "color": {
+              "type": "string"
+            },
+            "textDark": {
+              "type": "boolean"
+            }
           },
           "required": ["pattern", "letter", "color"]
         }
@@ -79,8 +122,12 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "motif": { "type": "string" },
-            "palette": { "type": "string" }
+            "motif": {
+              "type": "string"
+            },
+            "palette": {
+              "type": "string"
+            }
           }
         }
       },
@@ -88,35 +135,79 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "allowGroupMembers": { "type": "boolean" },
-          "rules": { "type": "array", "items": { "type": "object" } }
+          "allowGroupMembers": {
+            "type": "boolean",
+            "default": true
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
         }
       },
       "imageGen": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "kind": { "type": "string", "enum": ["openai-images", "command"] },
-          "baseUrl": { "type": "string" },
-          "model": { "type": "string" },
-          "size": { "type": "string" },
-          "seed": { "type": "boolean" },
+          "kind": {
+            "type": "string",
+            "enum": ["openai-images", "command"]
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "size": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "boolean"
+          },
           "apiKey": {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "source": { "type": "string", "enum": ["env", "file", "exec"] },
-              "provider": { "type": "string" },
-              "id": { "type": "string" }
+              "source": {
+                "type": "string",
+                "enum": ["env", "file", "exec"]
+              },
+              "provider": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
             },
             "required": ["source", "provider", "id"]
           },
-          "command": { "type": "string" },
-          "args": { "type": "array", "items": { "type": "string" } },
-          "timeoutMs": { "type": "number" },
-          "maxAttempts": { "type": "number" },
-          "maxPerDay": { "type": "number" },
-          "maxPerRun": { "type": "number" }
+          "command": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timeoutMs": {
+            "type": "number"
+          },
+          "maxAttempts": {
+            "type": "number",
+            "default": 10
+          },
+          "maxPerDay": {
+            "type": "number",
+            "default": 200
+          },
+          "maxPerRun": {
+            "type": "number",
+            "default": 16
+          }
         },
         "required": ["kind"]
       },
@@ -124,48 +215,99 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "accountId": { "type": "string" },
-          "profileSessionKey": { "type": "string" },
-          "profileBaseImage": { "type": "string" }
+          "accountId": {
+            "type": "string"
+          },
+          "profileSessionKey": {
+            "type": "string"
+          },
+          "profileBaseImage": {
+            "type": "string"
+          }
         }
       },
       "paths": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "stateDir": { "type": "string" }
+          "stateDir": {
+            "type": "string"
+          }
         }
       },
       "timing": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "watchMs": { "type": "number" },
-          "debounceMs": { "type": "number" },
-          "queueSpacingMs": { "type": "number" },
-          "reconcileIntervalMs": { "type": "number" },
-          "rpcTimeoutMs": { "type": "number" },
-          "renderTimeoutMs": { "type": "number" },
-          "renderConcurrency": { "type": "number" },
-          "pruneGraceMs": { "type": "number" },
-          "listTargetsMinRefreshMs": { "type": "number" },
-          "rateLimitBaseMs": { "type": "number" },
-          "rateLimitMaxBackoffMs": { "type": "number" },
-          "captchaMinPauseMs": { "type": "number" },
-          "captchaMaxPauseMs": { "type": "number" },
-          "errorBackoffBaseMs": { "type": "number" },
-          "imageGenBackoffMs": { "type": "number" },
-          "leaseHeartbeatMs": { "type": "number" },
-          "leaseTtlMs": { "type": "number" }
+          "watchMs": {
+            "type": "number"
+          },
+          "debounceMs": {
+            "type": "number"
+          },
+          "queueSpacingMs": {
+            "type": "number"
+          },
+          "reconcileIntervalMs": {
+            "type": "number"
+          },
+          "rpcTimeoutMs": {
+            "type": "number"
+          },
+          "renderTimeoutMs": {
+            "type": "number"
+          },
+          "renderConcurrency": {
+            "type": "number"
+          },
+          "pruneGraceMs": {
+            "type": "number"
+          },
+          "listTargetsMinRefreshMs": {
+            "type": "number"
+          },
+          "rateLimitBaseMs": {
+            "type": "number"
+          },
+          "rateLimitMaxBackoffMs": {
+            "type": "number"
+          },
+          "captchaMinPauseMs": {
+            "type": "number"
+          },
+          "captchaMaxPauseMs": {
+            "type": "number"
+          },
+          "errorBackoffBaseMs": {
+            "type": "number"
+          },
+          "imageGenBackoffMs": {
+            "type": "number"
+          },
+          "imageGenMaxBackoffMs": {
+            "type": "number"
+          },
+          "leaseHeartbeatMs": {
+            "type": "number"
+          },
+          "leaseTtlMs": {
+            "type": "number"
+          }
         }
       },
       "limits": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "maxAttempts": { "type": "number" },
-          "maxArtAttempts": { "type": "number" },
-          "ioErrorParkThreshold": { "type": "number" }
+          "maxAttempts": {
+            "type": "number"
+          },
+          "maxArtAttempts": {
+            "type": "number"
+          },
+          "ioErrorParkThreshold": {
+            "type": "number"
+          }
         }
       }
     }

@@ -9,10 +9,11 @@ import { createImageBases, type BaseArtGenerator, type ImageBases } from "./base
 import { createAssetCache, type AssetCache, type AssetJob } from "./cache.js";
 import type { Clock, Logger } from "./clock.js";
 import { normalizeConfig, type ModelBadgeConfig } from "./config.js";
-import { createView, type Desired, type View } from "./desired.js";
+import { createView, type Desired, type HeldBase, type View } from "./desired.js";
 import type { CoreFs } from "./fsio.js";
 import { sha256 } from "./hash.js";
 import { createLease, type Lease } from "./lease.js";
+import type { BaseParams } from "./motif.js";
 import { targetKey, type ApplyResult, type BadgeProvider, type TargetRef } from "./provider.js";
 import type { Renderer } from "./render.js";
 import { overrideSnapshot, type SessionEntryLike } from "./resolve.js";
@@ -57,7 +58,18 @@ export type EngineDeps = {
   validationErrors?: string[];
 };
 
-type AppliedRecord = { hash: string; appliedAt: number; model?: string; mark?: string };
+// `base` records what the target shows, so image-first selection (§2c.4) can keep it
+// while its image base is not ready. A record without `base` predates it.
+type AppliedBase =
+  | { kind: "vector"; params: BaseParams }
+  | { kind: "raster"; source: "image" | "file"; sha: string };
+type AppliedRecord = {
+  hash: string;
+  appliedAt: number;
+  model?: string;
+  mark?: string;
+  base?: AppliedBase;
+};
 type AppliedState = { version: 1; targets: Record<string, AppliedRecord> };
 type TargetInfo = {
   ref: TargetRef;
@@ -114,6 +126,7 @@ export function createEngine(deps: EngineDeps) {
       maxPerRun: deps.config.imageGen?.maxPerRun ?? 0,
       maxAttempts: deps.config.imageGen?.maxAttempts ?? 1,
       backoffMs: T.imageGenBackoffMs,
+      maxBackoffMs: T.imageGenMaxBackoffMs,
     },
   });
   const styleStore = createStyleStore({ fs, stateDir: P.rootDir });
@@ -140,7 +153,7 @@ export function createEngine(deps: EngineDeps) {
       string,
       { hash: string; reason: string; message: string; since: number; attempts: number }
     >,
-    inflight: {} as Record<string, { hash: string; since: number }>,
+    inflight: {} as Record<string, { hash: string; since: number; base?: AppliedBase }>,
     waiting: {} as Record<string, { reason: string; since: number }>,
     notices: {
       unavailableModels: {} as Record<string, { firstSeen: number; targets: string[] }>,
@@ -293,9 +306,12 @@ export function createEngine(deps: EngineDeps) {
     // A target still marked in-flight may show an asset other than the recorded one
     // (crash after send, before the applied write): it is repainted once, and the
     // in-flight hash stays protected from pruning until then.
+    // The record keeps what the target (probably) shows, so image-first selection keeps
+    // that avatar instead of painting a vector over it (§2c.4).
     for (const [k, i] of Object.entries(status.inflight)) {
-      if (applied.targets[k]?.hash !== i?.hash) {
-        delete applied.targets[k];
+      const rec = applied.targets[k];
+      if (rec?.hash !== i?.hash) {
+        applied.targets[k] = { hash: "", appliedAt: 0, base: i?.base ?? rec?.base };
       }
     }
     await images.load();
@@ -416,9 +432,41 @@ export function createEngine(deps: EngineDeps) {
         overrides: i.pluginConfig.targets,
         profileFile: i.profileFile,
         storedImage: (w) => images.current(w),
+        imageMode: images.state !== "unconfigured",
+        held: heldBase,
+        generation: (key) => images.generation(key),
       },
       { providerId: provider.id, size },
     );
+  }
+
+  // What a target shows now, as a base the view can composite a new mark on (§2c.4).
+  function heldBase(k: string): HeldBase | null {
+    const rec = applied.targets[k];
+    if (!rec) {
+      return status.inflight[k] ? { kind: "unknown" } : null;
+    }
+    const b = rec.base;
+    if (!b) {
+      return { kind: "unknown" };
+    }
+    if (b.kind === "vector") {
+      return { kind: "vector", params: b.params };
+    }
+    if (b.source === "file") {
+      const pf = inputs?.profileFile;
+      return pf && pf.sha === b.sha
+        ? { kind: "raster", source: "file", sha: pf.sha, file: pf.file }
+        : { kind: "unknown" };
+    }
+    const s = images.bySha(b.sha);
+    return s ? { kind: "raster", source: "image", sha: s.sha, file: s.file } : { kind: "unknown" };
+  }
+
+  function appliedBaseOf(d: OkDesired): AppliedBase {
+    return d.base.kind === "vector"
+      ? { kind: "vector", params: d.base.params }
+      : { kind: "raster", source: d.base.source, sha: d.base.sha };
   }
 
   function watchedPaths(): string[] {
@@ -483,7 +531,7 @@ export function createEngine(deps: EngineDeps) {
     if (t && view) {
       const want = view.imageWant(t.ref);
       removedBases.add(want.key);
-      await images.remove(want.key, want.target.seed);
+      await images.remove(want.key);
     }
     if (had) {
       log.info(`${tag} target removed: ${why}`);
@@ -587,6 +635,7 @@ export function createEngine(deps: EngineDeps) {
     }
 
     const pruned = await pruneUnused(required.keys());
+    await pruneBases(refs);
 
     if (Object.keys(failed).length === 0) {
       lastBuiltFingerprint = fp;
@@ -628,6 +677,25 @@ export function createEngine(deps: EngineDeps) {
     const { pruned } = await cache.prune({ keep, graceMs: T.pruneGraceMs, removedBases: removed });
     removedBases.clear();
     return pruned;
+  }
+
+  // §2c.3: stored image bases go once no live target wants them and none shows them, so
+  // a regenerated target's old picture is pruned after the new one is applied.
+  async function pruneBases(refs: TargetRef[]) {
+    if (!view) {
+      return 0;
+    }
+    const seeds = new Set(refs.map((r) => view!.imageWant(r).target.seed));
+    const shas = new Set<string>();
+    for (const b of [
+      ...Object.values(applied.targets).map((a) => a.base),
+      ...Object.values(status.inflight).map((i) => i.base),
+    ]) {
+      if (b?.kind === "raster") {
+        shas.add(b.sha);
+      }
+    }
+    return images.prune({ seeds, shas });
   }
 
   // ---------------- layer 2: reconcile ----------------
@@ -684,6 +752,13 @@ export function createEngine(deps: EngineDeps) {
     }
     const d = view.desired(t.ref, t.sessionKey);
     if (!d.ok) {
+      if (d.class === "waiting-for-image") {
+        status.waiting[k] = {
+          reason: "waiting-for-image",
+          since: status.waiting[k]?.since ?? clock.now(),
+        };
+        return { action: "skip", why: "waiting-for-image" };
+      }
       return { action: "skip", why: "config" };
     }
     noteNotices(d, k);
@@ -853,7 +928,7 @@ export function createEngine(deps: EngineDeps) {
     }
     // In-flight is recorded atomically before the send: it protects the asset from
     // pruning across a crash between the send and the applied write (standalone RC2).
-    status.inflight[k] = { hash: d.hash, since: clock.now() };
+    status.inflight[k] = { hash: d.hash, since: clock.now(), base: appliedBaseOf(d) };
     await persist();
 
     lastSendAt = clock.now();
@@ -864,8 +939,15 @@ export function createEngine(deps: EngineDeps) {
     } catch (err) {
       result = { kind: "error", message: String((err as Error)?.message ?? err) };
     }
+    const before = applied.targets[k]?.base;
     await handleResult(k, d, result);
     delete status.inflight[k];
+    // §2c.3: once a new image base is applied, the one it replaced goes (if nothing else
+    // shows it and no live target wants it).
+    const after = applied.targets[k]?.base;
+    if (before?.kind === "raster" && (after?.kind !== "raster" || after.sha !== before.sha)) {
+      await pruneBases([...targets.values()].map((x) => x.ref));
+    }
   }
 
   function recordApplied(k: string, d: OkDesired) {
@@ -874,6 +956,7 @@ export function createEngine(deps: EngineDeps) {
       appliedAt: clock.now(),
       model: d.model,
       mark: d.mark.label,
+      base: appliedBaseOf(d),
     };
     delete status.parked[k];
     errorAttempts.delete(k);
@@ -1086,6 +1169,12 @@ export function createEngine(deps: EngineDeps) {
   }
 
   async function fullPass(reason: string) {
+    // §2c.4: a probe that failed is retried with backoff on each pass; when it comes up,
+    // bases upgrade on this pass, without a restart.
+    if (await images.probeIfDue()) {
+      log.info(`${tag} image generator is up; upgrading bases`);
+    }
+    status.health.imageGen = images.state;
     const watchedStoreStat = stats.get(P.sessionsStore);
     const watchedSnaps = new Map(snapshots);
     await loadInputs();
@@ -1133,6 +1222,7 @@ export function createEngine(deps: EngineDeps) {
       if (pruned > 0) {
         status.cache.pruned = pruned;
       }
+      await pruneBases(refs);
     }
     await reconcileAll(reason);
   }
@@ -1336,7 +1426,14 @@ export function createEngine(deps: EngineDeps) {
           return { ok: false as const, message: "unknown target" };
         }
         delete status.parked[k];
-        delete applied.targets[k];
+        // Forget the recorded hash so the target is sent again, but keep what it shows:
+        // image first never trades a shown image for vector on a repaint (§2c.4).
+        const rec = applied.targets[k];
+        if (rec?.base) {
+          applied.targets[k] = { hash: "", appliedAt: 0, base: rec.base };
+        } else {
+          delete applied.targets[k];
+        }
         errorAttempts.delete(k);
         ioStreak.delete(k);
         if (pauseReason === "captcha") {
@@ -1371,19 +1468,23 @@ export function createEngine(deps: EngineDeps) {
       }
     },
 
-    // `/badge regenerate <target>` (§2b.4).
+    // `regenerate` (§2b.4, §2c.3): bumps the target's generation counter, so its image
+    // seed — and the picture — changes. The old base stays until the new one is applied.
     async regenerate(k: string) {
       return writerOnly(async () => {
         const t = targets.get(k);
         if (!t || !view) {
           return { ok: false as const, message: "unknown target" };
         }
-        if (images.state !== "ok") {
-          return { ok: false as const, message: `image generation is ${images.state}` };
+        if (images.state === "unconfigured") {
+          return { ok: false as const, message: "image generation is unconfigured" };
         }
-        images.regenerate(view.imageWant(t.ref).key);
+        if (t.ref.kind === "profile" && inputs?.profileFile) {
+          return { ok: false as const, message: "the profile uses profileBaseImage" };
+        }
+        const generation = await images.regenerate(view.imageWant(t.ref).key);
         await fullPass("regenerate");
-        return { ok: true as const };
+        return { ok: true as const, generation, imageGen: images.state };
       });
     },
 
@@ -1410,7 +1511,7 @@ export function createEngine(deps: EngineDeps) {
         desired: d.ok
           ? { mark: d.mark.label, model: d.model, base: d.base.kind, hash: d.hash.slice(0, 12) }
           : { error: d.message },
-        applied: applied.targets[k]
+        applied: applied.targets[k]?.hash
           ? {
               mark: applied.targets[k].mark,
               model: applied.targets[k].model,

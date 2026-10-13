@@ -184,7 +184,12 @@ describe.skipIf(!rasteriser)(`real render pipeline (${rasteriser ?? RENDERER_UNA
       });
       await bases.probe();
       const seed = seedFor("signal", "img");
-      const want = { key: seed, target: { seed, params: baseParamsForSeed(seed) }, style: {} };
+      const want = {
+        key: seed,
+        generation: 0,
+        target: { seed, params: baseParamsForSeed(seed) },
+        style: {},
+      };
       expect((await bases.ensure([want])).generated).toBe(1);
       const stored = bases.current(want)!;
       expect(verifyPng(await fsp.readFile(stored.file), SIZE)).toEqual(SIZE);
