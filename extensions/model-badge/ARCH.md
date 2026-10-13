@@ -142,6 +142,14 @@ fallback for hosts with no image model at all.
    rules; operator allowed everywhere; regenerate changes the seed and the image request; image-first: probe failure
    then recovery upgrades bases without a restart; capped target keeps its existing avatar; a target with no avatar
    gets vector then upgrades; unconfigured → vector.
+8. **A group's own artwork is kept.** When the extension first sees a target that already has an avatar not made by
+   us, it captures those bytes once (format-guarded, square-cropped) as the target's **adopted base**, stored in the
+   state dir with `source: adopted`. An adopted base is the background for that target; the mark is composited on
+   top. Image generation is not used for it. A style change from a group member does **not** replace an adopted base;
+   only an explicit `regenerate` (tool or slash, same authority as §2c.2) does, and the adopted bytes are kept on
+   disk so `restore` (new tool action, same authority) puts them back. Operator config `targets.<id>.base: adopt |
+   generate` overrides per target. Tests: first sight adopts; restyle keeps adopted; regenerate replaces and restore
+   brings it back; a target with no avatar or with our own mark gets a generated base.
 
 ## 3. Lifecycle (generated and removed as the world changes)
 
