@@ -13,6 +13,8 @@ import { createNodeFs } from "./fsio.js";
 import { sha256 } from "./hash.js";
 import { baseParamsForSeed, renderBaseSvg, seedFor } from "./motif.js";
 import {
+  ADOPTED_FRAME,
+  adoptedAssetSvg,
   createRenderer,
   detectRasteriser,
   isStamped,
@@ -258,6 +260,69 @@ describe.skipIf(!rasteriser)(`real render pipeline (${rasteriser ?? RENDERER_UNA
       }
     });
   });
+
+  it.skipIf(!hasMagick)(
+    "ARCH §2c.8: an adopted image is shown whole (contain) on a darkened blurred fill; its corners are visible and clear of the mark",
+    async () => {
+      await withDir(async (dir) => {
+        const r = renderer();
+        // A wide picture with text-like detail at its very edges: red left edge, blue
+        // right edge, green bottom strip ("logo text" at the bottom). Slice-cropping
+        // would drop the side edges; covering would hide the bottom strip.
+        const srcSvg = path.join(dir, "own.svg");
+        await fsp.writeFile(
+          srcSvg,
+          '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400">' +
+            '<rect width="800" height="400" fill="#F0F0F0"/>' +
+            '<rect width="40" height="400" fill="#FF0000"/>' +
+            '<rect x="760" width="40" height="400" fill="#0000FF"/>' +
+            '<rect y="360" width="800" height="40" fill="#00FF00"/></svg>',
+        );
+        const srcPng = path.join(dir, "own.png");
+        await r.svgToPng(srcSvg, srcPng, { width: 800, height: 400 });
+        const bytes = await fsp.readFile(srcPng);
+        const mark = { letter: "O", color: "#9B59D0", text: TEXT_LIGHT, scale: 1 };
+        const svg = path.join(dir, "a.svg");
+        await fsp.writeFile(svg, adoptedAssetSvg({ mime: "image/png", bytes }, mark, SIZE.width));
+        const out = path.join(dir, "a.png");
+        await r.svgToPng(svg, out, SIZE);
+        const S = SIZE.width;
+        const f = ADOPTED_FRAME;
+        // Contained: an 800×400 image in the s×s frame is s wide, s/2 tall, centred.
+        const x0 = f.x * S;
+        const x1 = (f.x + f.s) * S;
+        const top = (f.y + f.s / 4) * S;
+        const bottom = (f.y + (3 * f.s) / 4) * S;
+        const midY = (top + bottom) / 2;
+        expect(near(pixel(out, Math.round(x0 + 3), Math.round(midY)), hex("#FF0000"), 40)).toBe(
+          true,
+        );
+        expect(near(pixel(out, Math.round(x1 - 4), Math.round(midY)), hex("#0000FF"), 40)).toBe(
+          true,
+        );
+        expect(
+          near(pixel(out, Math.round((x0 + x1) / 2), Math.round(bottom - 3)), hex("#00FF00"), 40),
+        ).toBe(true);
+        // The image corners are inside the visible circle and outside the mark.
+        for (const [cx, cy] of [
+          [x0, top],
+          [x1, top],
+          [x0, bottom],
+          [x1, bottom],
+        ] as const) {
+          expect(Math.hypot(cx - S / 2, cy - S / 2)).toBeLessThan(S / 2);
+          expect(Math.hypot(cx - 0.79 * S, cy - 0.79 * S)).toBeGreaterThan(0.161 * S);
+        }
+        // Outside the frame is the darkened blurred copy, not the light original.
+        const fill = pixel(out, 6, Math.round(S / 2));
+        expect(fill.every((v) => v < 200)).toBe(true);
+        // The mark is still composited on top.
+        expect(
+          near(pixel(out, Math.round(0.79 * S), Math.round(0.79 * S - 0.12 * S)), hex("#9B59D0")),
+        ).toBe(true);
+      });
+    },
+  );
 
   it("a corrupt cached PNG fails verification and is re-rendered in place", async () => {
     await withDir(async (dir) => {

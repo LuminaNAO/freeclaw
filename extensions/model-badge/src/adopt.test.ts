@@ -41,10 +41,8 @@ const sentText = (w: World, avatar: string) => w.fs.files.get(avatar)!.data.toSt
 // the composited SVG; the fake rasteriser keeps that SVG in the PNG it writes.
 const adoptedB64 = (w: World, id: string): string | null => {
   const key = seedFor(w.backend.name, id.toLowerCase());
-  const f = w.fs.files.get(`${w.paths.stateDir}/adopted/${key}.png`);
-  // The tail: it encodes the captured picture itself (the head is the same PNG header
-  // and SVG preamble for every raster base).
-  return f ? f.data.toString("base64").slice(-120) : null;
+  const f = w.fs.files.get(`${w.paths.stateDir}/adopted/${key}.img`);
+  return f ? f.data.toString("base64").slice(-40) : null;
 };
 const showsOwn = (w: World, id: string) => {
   const last = w.targetSends(id).at(-1);
@@ -112,11 +110,14 @@ for (const backend of ["signal", "fakechat"] as const) {
       expect(showsGenerated(w, IDS.b)).toBe(true);
       expect(e.targetSummary(w.tk(IDS.a))!.desired).toMatchObject({ base: "raster" });
       expect(e.targetSummary(w.tk(IDS.b))!.desired).toMatchObject({ base: "vector" });
-      // Captured once, in the state dir, format-guarded (normalised PNG at the asset size).
+      // Captured once, in the state dir, format-guarded; the original bytes are kept whole
+      // (never cropped), and composited contained, not sliced.
       const key = seedFor(backend, IDS.a.toLowerCase());
-      const stored = w.fs.files.get(`${w.paths.stateDir}/adopted/${key}.png`)!.data;
-      expect(stored.subarray(1, 4).toString()).toBe("PNG");
-      expect(stored.readUInt32BE(16)).toBe(512);
+      const stored = w.fs.files.get(`${w.paths.stateDir}/adopted/${key}.img`)!.data;
+      expect(stored.equals(OWN)).toBe(true);
+      const svg = sentText(w, w.targetSends(IDS.a).at(-1)!.avatar);
+      expect(svg).toContain('data-adopted="contain"');
+      expect(svg).toMatch(/feGaussianBlur/);
       expect(e.status().adopted).toEqual({ seen: 3, adopted: 1, active: 1 });
       // The capture happens once: later passes and restarts never read it again, so our
       // own paint on the group is never mistaken for its artwork.
@@ -182,7 +183,7 @@ for (const backend of ["signal", "fakechat"] as const) {
       expect(sentText(w, w.targetSends(IDS.a).at(-1)!.avatar)).toContain("<image");
       // The adopted bytes are kept on disk.
       const key = seedFor(backend, IDS.a.toLowerCase());
-      expect(w.fs.exists(`${w.paths.stateDir}/adopted/${key}.png`)).toBe(true);
+      expect(w.fs.exists(`${w.paths.stateDir}/adopted/${key}.img`)).toBe(true);
       // A further regenerate now makes a new generated picture (§2c.3).
       expect((await act(MEMBER, IDS.a, "regenerate")).details).toMatchObject({ generation: 1 });
       await w.settle();
@@ -415,5 +416,48 @@ describe("§2c.8 config, provider and parity", () => {
     await w.settle();
     expect(showsOwn(w, IDS.a)).toBe(true);
     await e.stop();
+  });
+});
+
+describe("§2c.8 addendum: the adopted image is contained, never sliced", () => {
+  it("the frame's corners lie inside the visible circle and outside the mark (bar and disc)", async () => {
+    const { ADOPTED_FRAME, frameClear, frameCorners, MARK_GEOMETRY } =
+      await import("./core/render.js");
+    const f = ADOPTED_FRAME;
+    const { bar, disc } = MARK_GEOMETRY;
+    expect(frameClear(f)).toBe(true);
+    for (const [x, y] of frameCorners(f)) {
+      // Inside the circle Signal shows.
+      expect(Math.hypot(x - 0.5, y - 0.5)).toBeLessThan(0.5);
+      // Outside the mark disc (with its ring) …
+      expect(Math.hypot(x - disc.c, y - disc.c)).toBeGreaterThan(disc.r + disc.stroke / 2);
+      // … and outside the bottom bar.
+      expect(x >= bar.x && x <= bar.x + bar.w && y >= bar.y && y <= bar.y + bar.h).toBe(false);
+    }
+    // Horizontally centred and as large as fits.
+    expect(f.x + f.s / 2).toBeCloseTo(0.5, 6);
+    expect(f.s).toBeGreaterThan(0.5);
+    expect(frameClear({ x: 0.5 - (f.s + 0.01) / 2, y: f.y, s: f.s + 0.01 })).toBe(false);
+    // A centred 70% square would put a corner under the mark disc: it must not be used.
+    expect(frameClear({ x: 0.15, y: 0.15, s: 0.7 })).toBe(false);
+  });
+
+  it("adopted assets embed the image with meet (contain) only; generated bases keep the fill", async () => {
+    const { adoptedAssetSvg, rasterAssetSvg } = await import("./core/render.js");
+    const mark = { letter: "F", color: "#FFD700", text: "#111111", scale: 1 };
+    const img = { mime: "image/jpeg" as const, bytes: OWN };
+    const a = adoptedAssetSvg(img, mark, 512);
+    // The foreground image is contained; the only slice is the blurred background fill.
+    const images = [...a.matchAll(/<image[^>]*>/g)].map((m) => m[0]);
+    expect(images).toHaveLength(2);
+    expect(images.filter((t) => t.includes("slice"))).toHaveLength(1);
+    expect(images.find((t) => t.includes("slice"))).toContain("filter=");
+    expect(images.find((t) => t.includes('data-adopted="contain"'))).toContain("xMidYMid meet");
+    // Generated (image-model) bases are unchanged: one image, filling the square.
+    const g = rasterAssetSvg(img, mark, 512);
+    expect([...g.matchAll(/<image[^>]*>/g)].map((m) => m[0])).toEqual([
+      expect.stringContaining("xMidYMid slice"),
+    ]);
+    expect(g).not.toContain("feGaussianBlur");
   });
 });

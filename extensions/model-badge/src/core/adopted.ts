@@ -2,11 +2,13 @@ import path from "node:path";
 import type { Clock, Logger } from "./clock.js";
 import type { CoreFs } from "./fsio.js";
 import { sha256 } from "./hash.js";
-import { rasterBaseSvg, sniffImage, verifyPng, type Renderer, type RenderSize } from "./render.js";
+import { containBaseSvg, sniffImage, verifyPng, type Renderer, type RenderSize } from "./render.js";
 
 // ARCH §2c.8: a group's own artwork is kept. The first time the extension sees a target
 // that already shows an avatar not made by us, those bytes are captured once
-// (format-guarded, square-cropped to the asset size) as the target's adopted base. It is
+// (format-guarded) as the target's adopted base. The original image is stored whole and
+// never slice-cropped: the renderer fits all of it inside the visible circle, clear of
+// the mark (operator addendum to §2c.8). It is
 // the target's background until an explicit `regenerate`; the bytes stay on disk so
 // `restore` can put them back. Only a removed target or `purge` deletes them.
 
@@ -36,7 +38,8 @@ export function createAdoptedStore(opts: {
 }) {
   const { fs, dir, clock } = opts;
   const indexPath = path.join(dir, "index.json");
-  const fileFor = (key: string) => path.join(dir, `${key}.png`);
+  const fileFor = (key: string) => path.join(dir, `${key}.img`);
+  const MAX_BYTES = 8 << 20;
   let index: Index = { version: 1, targets: {} };
 
   async function save() {
@@ -44,24 +47,26 @@ export function createAdoptedStore(opts: {
     await fs.writeAtomic(indexPath, JSON.stringify(index, null, 1));
   }
 
-  // Format guard: PNG/JPEG signature, then decoded, square-cropped and resized by our
-  // rasteriser; the stored adopted base is the normalised PNG.
-  async function normalise(bytes: Buffer, key: string): Promise<Buffer> {
+  // Format guard: PNG/JPEG signature, size bound, and a full decode by our rasteriser
+  // (the whole image, contained). The original bytes are kept, uncropped.
+  async function verify(bytes: Buffer, key: string): Promise<Buffer> {
     const mime = sniffImage(bytes);
     if (!mime) {
       throw new Error("the avatar is not a PNG or JPEG");
+    }
+    if (bytes.length > MAX_BYTES) {
+      throw new Error("the avatar is too large");
     }
     if (!opts.renderer) {
       throw new Error("no rasteriser to verify the avatar");
     }
     const tmp = path.join(dir, `${key}.${clock.now()}`);
     await fs.mkdirp(dir);
-    await fs.writeFile(`${tmp}.svg.tmp`, rasterBaseSvg({ mime, bytes }, opts.size.width));
+    await fs.writeFile(`${tmp}.svg.tmp`, containBaseSvg({ mime, bytes }, opts.size.width));
     try {
       await opts.renderer.svgToPng(`${tmp}.svg.tmp`, `${tmp}.png.tmp`, opts.size);
-      const out = await fs.readFile(`${tmp}.png.tmp`);
-      verifyPng(out, opts.size);
-      return out;
+      verifyPng(await fs.readFile(`${tmp}.png.tmp`), opts.size);
+      return bytes;
     } finally {
       await fs.unlink(`${tmp}.svg.tmp`);
       await fs.unlink(`${tmp}.png.tmp`);
@@ -122,10 +127,10 @@ export function createAdoptedStore(opts: {
     async adopt(key: string, bytes: Buffer): Promise<AdoptedRecord> {
       let rec: AdoptedRecord;
       try {
-        const png = await normalise(bytes, key);
+        const kept = await verify(bytes, key);
         await fs.mkdirp(dir);
-        await fs.writeAtomic(fileFor(key), png);
-        rec = { seenAt: clock.now(), sha: sha256(png), active: true };
+        await fs.writeAtomic(fileFor(key), kept);
+        rec = { seenAt: clock.now(), sha: sha256(kept), active: true };
       } catch (err) {
         opts.log.warn(
           `[model-badge] a target's own avatar could not be adopted (${String((err as Error)?.message ?? err).slice(0, 120)}); it gets a generated base`,

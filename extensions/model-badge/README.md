@@ -92,8 +92,13 @@ pruned once the new one is applied. A style change keeps the counter (same seed,
 
 The first time a group target is seen, the avatar it already shows is read once (Signal:
 `getAvatar`). If it is not one of ours (every asset we render carries a PNG text stamp), it
-is captured — format-guarded and square-cropped — as the group's **adopted base**, and the
-model mark is composited on top of it. No image is generated for it. A target is never
+is captured — format-guarded, kept whole — as the group's **adopted base**, and the model
+mark is composited on top of it. An adopted image is never slice-cropped: Signal shows
+avatars as a circle and the mark covers the bottom-right, so the whole image is fitted
+(contain) into the largest centred square whose corners lie inside the circle and clear of
+the bar and disc (about 51% of the asset with the current mark; a centred 70% square would
+reach under the disc), on a darkened, blurred copy of the same image filling the square.
+Generated bases keep the full-square fill. No image is generated for it. A target is never
 painted before this check. Restyling (motif, palette, prompt) keeps an adopted base; only
 `regenerate` replaces it, and `restore` puts it back (the bytes stay in `adopted/`). Both
 follow the §2c.2 authority. `targets.<id>.base: generate` turns adoption off for a target;

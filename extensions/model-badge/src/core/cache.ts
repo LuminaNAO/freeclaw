@@ -5,6 +5,8 @@ import type { CoreFs } from "./fsio.js";
 import { canonicalJSON, sha256 } from "./hash.js";
 import type { BaseParams } from "./motif.js";
 import {
+  ADOPTED_LAYOUT,
+  adoptedAssetSvg,
   RENDERER_VERSION,
   rasterAssetSvg,
   sniffImage,
@@ -31,8 +33,13 @@ export type AssetBase =
     };
 
 export function baseIdentity(base: AssetBase): Record<string, unknown> {
-  return base.kind === "vector"
-    ? { kind: "vector", ...base.params }
+  if (base.kind === "vector") {
+    return { kind: "vector", ...base.params };
+  }
+  // §2c.8: an adopted base is laid out differently (contain on a blurred fill), so its
+  // layout is part of the identity.
+  return base.source === "adopted"
+    ? { kind: "raster", sha: base.sha, layout: ADOPTED_LAYOUT }
     : { kind: "raster", sha: base.sha };
 }
 
@@ -122,7 +129,10 @@ export function createAssetCache(opts: {
     if (!mime) {
       throw new Error("raster base is not a PNG or JPEG");
     }
-    return rasterAssetSvg({ mime, bytes }, job.mark, size.width);
+    // §2c.8: a group's own artwork is never slice-cropped.
+    return job.base.source === "adopted"
+      ? adoptedAssetSvg({ mime, bytes }, job.mark, size.width)
+      : rasterAssetSvg({ mime, bytes }, job.mark, size.width);
   }
 
   async function renderOne(job: AssetJob): Promise<{ hash: string; ok: boolean; error?: string }> {
