@@ -24,6 +24,7 @@ src/core/                     channel-agnostic core (never imports a provider)
   badges.ts color.ts          marks: rules, fallback letters, WCAG contrast guard
   style.ts steering.ts        style rules (style.json), validation, authority, preview/add/remove/reset
   catalog.ts                  model grouping: provider/family resolution and aliases
+  adopted.ts                  a group's own artwork, captured once on first sight (ARCH §2c.8)
   baseart.ts                  BaseArtGenerator: vector, openai-images, command; stored image bases
   cache.ts render.ts          asset cache keyed by generator inputs; rasteriser seam
   provider.ts                 BadgeProvider interface
@@ -45,7 +46,7 @@ src/providers/signal/         Signal provider on freeclaw's own Signal client (H
   },
   "operators": ["<sender id>"],
   "badges": [{ "pattern": "opus", "letter": "O", "color": "#9B59D0" }],
-  "targets": { "<target id>": { "motif": "waves", "palette": "ocean" } },
+  "targets": { "<target id>": { "motif": "waves", "palette": "ocean", "base": "adopt" } }, // base: adopt (default) | generate
   "steering": { "allowGroupMembers": true, "rules": [] }, // false: operator-only
   "imageGen": null, // or { "kind": "openai-images", "baseUrl", "model", "apiKey": <SecretRef> }
   // or { "kind": "command", "command": "/abs/path", "args": [] }
@@ -56,7 +57,7 @@ src/providers/signal/         Signal provider on freeclaw's own Signal client (H
 
 State lives in `<gateway state dir>/plugins/model-badge/`: `style.json` (shared) and one
 directory per provider with `applied.json`, `status.json`, `writer.lease`, `assets/` and
-`bases/` (stored image bases plus `generations.json`, the per-target regenerate counter). The Signal daemon opens avatars by path, so this directory must be readable by
+`adopted/` (groups' own artwork, §2c.8), `bases/` (stored image bases plus `generations.json`, the per-target regenerate counter). The Signal daemon opens avatars by path, so this directory must be readable by
 the daemon's user, and the daemon must be local (loopback HTTP or the unix socket).
 
 ## Triggers (ARCH §5.2)
@@ -87,21 +88,33 @@ art is the base generator (health `imageGen: unconfigured`).
 `sha256(provider:target:generation)`, so the same style gives a new picture. The old base is
 pruned once the new one is applied. A style change keeps the counter (same seed, new prompt).
 
+## A group's own artwork is kept (ARCH §2c.8)
+
+The first time a group target is seen, the avatar it already shows is read once (Signal:
+`getAvatar`). If it is not one of ours (every asset we render carries a PNG text stamp), it
+is captured — format-guarded and square-cropped — as the group's **adopted base**, and the
+model mark is composited on top of it. No image is generated for it. A target is never
+painted before this check. Restyling (motif, palette, prompt) keeps an adopted base; only
+`regenerate` replaces it, and `restore` puts it back (the bytes stay in `adopted/`). Both
+follow the §2c.2 authority. `targets.<id>.base: generate` turns adoption off for a target;
+`adopt` is the default. A target with no avatar, or one showing our own mark, gets a
+generated base.
+
 ## Talking to the agent, and commands (ARCH §2c.1, §2c.2)
 
 Everything is reachable by asking the agent. The tool `model_badge` has the actions
 `status | style.list | style.preview | style.add | style.remove | style.reset | repaint |
-regenerate | audit | purge`; `model_badge_style` is an alias that also takes the old short
+regenerate | restore | audit | purge`; `model_badge_style` is an alias that also takes the old short
 style actions. `/badge` is the same set as a convenience:
 
 `/badge status [all|<target>] | repaint [this|<target>|profile] | regenerate [this|<target>|profile] |
-audit | purge confirm | style list | style preview <json> | style add <json> | style remove <id…> | style reset`
+restore [this|<target>] | audit | purge confirm | style list | style preview <json> | style add <json> | style remove <id…> | style reset`
 
 Both go through one dispatcher, and authority is checked there on the authenticated sender
 id the gateway passes in, never on tool arguments. Operators (`operators`) may do
 everything. Group members (with `steering.allowGroupMembers`, on by default) may act on the
 group they are asking from: style rules with that group's `targetId`, repaint, regenerate,
-status and audit of that group. Global rules, other groups, the profile, `status all`,
+restore, status and audit of that group. Global rules, other groups, the profile, `status all`,
 `style reset` and `purge` are operator-only. A refusal says why and who can.
 
 ## Rasteriser

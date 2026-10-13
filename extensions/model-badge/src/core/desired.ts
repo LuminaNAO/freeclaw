@@ -30,13 +30,15 @@ export type ViewInputs = {
   held?: (targetKey: string) => HeldBase | null;
   // ARCH §2c.3: the target's generation counter, by base key.
   generation?: (baseKey: string) => number;
+  // ARCH §2c.8: the target's adopted base (its own artwork) when in use, by base key.
+  adopted?: (baseKey: string) => { sha: string; file: string } | null;
 };
 
 // What a target shows now: a vector base (with its exact parameters), a stored raster
 // base, or something of ours whose base can no longer be rebuilt (kept as it is).
 export type HeldBase =
   | { kind: "vector"; params: BaseParams }
-  | { kind: "raster"; source: "image" | "file"; sha: string; file: string }
+  | { kind: "raster"; source: "image" | "file" | "adopted"; sha: string; file: string }
   | { kind: "unknown" };
 
 export type Desired =
@@ -67,11 +69,30 @@ export function createView(inputs: ViewInputs, ctx: { providerId: string; size: 
     const ns = ref.kind === "profile" ? "profile" : undefined;
     const key = seedFor(ctx.providerId, id, ns);
     const generation = inputs.generation?.(key) ?? 0;
-    const style = { ...inputs.overrides[id], ...baseStyleFor(inputs.rules, id) };
+    const { motif, palette } = inputs.overrides[id] ?? {};
+    const style = {
+      ...(motif ? { motif } : {}),
+      ...(palette ? { palette } : {}),
+      ...baseStyleFor(inputs.rules, id),
+    };
     const portrait = ref.kind === "profile";
     const params = baseParamsForSeed(key, style, { portrait });
     const seed = imageSeedFor(ctx.providerId, id, generation, ns);
     return { key, generation, target: { seed, params, ...(portrait ? { portrait } : {}) }, style };
+  }
+
+  // ARCH §2c.8: a group's own artwork, unless the operator set targets.<id>.base generate.
+  function adoptedFor(ref: TargetRef): { sha: string; file: string } | null {
+    if (inputs.overrides[targetIdOf(ref)]?.base === "generate") {
+      return null;
+    }
+    return inputs.adopted?.(imageWant(ref).key) ?? null;
+  }
+
+  // The base is fixed by something other than style: an operator file or adopted artwork.
+  // Style rules never change it, and no image is generated for it.
+  function baseLocked(ref: TargetRef): boolean {
+    return Boolean((ref.kind === "profile" && inputs.profileFile) || adoptedFor(ref));
   }
 
   // ARCH §2c.4, image first: with imageGen configured a target shows its image base; if
@@ -81,6 +102,10 @@ export function createView(inputs: ViewInputs, ctx: { providerId: string; size: 
     const want = imageWant(ref);
     if (ref.kind === "profile" && inputs.profileFile) {
       return { kind: "raster", key: want.key, source: "file", ...inputs.profileFile };
+    }
+    const own = adoptedFor(ref);
+    if (own) {
+      return { kind: "raster", key: want.key, source: "adopted", sha: own.sha, file: own.file };
     }
     const stored = inputs.storedImage(want);
     if (stored) {
@@ -177,6 +202,8 @@ export function createView(inputs: ViewInputs, ctx: { providerId: string; size: 
     defaultModel,
     available,
     imageWant,
+    adoptedFor,
+    baseLocked,
     baseFor,
     markFor,
     requiredFor,

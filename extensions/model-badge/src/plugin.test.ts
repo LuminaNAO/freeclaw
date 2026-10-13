@@ -263,6 +263,9 @@ describe.skipIf(!rasteriser)(
         let out: unknown;
         if (m.method === "listGroups") {
           out = S.listGroups([...live].map((id) => S.group(id)));
+        } else if (m.method === "getAvatar") {
+          // ARCH §2c.8: no group has its own avatar here.
+          out = { jsonrpc: "2.0", error: { code: -1, message: "Could not find avatar" } };
         } else {
           sends.push(m.params);
           out = S.updateOk();

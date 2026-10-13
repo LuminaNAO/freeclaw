@@ -12,7 +12,9 @@ export type BadgeRule = {
   color: string;
   textDark?: boolean;
 };
-export type TargetOverride = { motif?: string; palette?: string };
+// ARCH §2c.8: `base` overrides per target whether its own artwork is adopted (default
+// adopt) or a base is always generated.
+export type TargetOverride = { motif?: string; palette?: string; base?: "adopt" | "generate" };
 
 export type SecretRefLike = { source: string; provider: string; id: string };
 
@@ -220,9 +222,13 @@ export function normalizeConfig(raw: unknown, ctx: { gatewayStateDir: string }):
     ) {
       errors.push(`targets.${k}.palette must be one of ${PALETTE_NAMES.join(", ")}`);
     }
+    if (o.base !== undefined && o.base !== "adopt" && o.base !== "generate") {
+      errors.push(`targets.${k}.base must be "adopt" or "generate"`);
+    }
     targets[k.toLowerCase()] = {
       motif: isMotif(o.motif) ? o.motif : undefined,
       palette: typeof o.palette === "string" ? o.palette.toLowerCase() : undefined,
+      base: o.base === "adopt" || o.base === "generate" ? o.base : undefined,
     };
   }
 

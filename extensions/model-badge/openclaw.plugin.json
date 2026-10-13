@@ -31,7 +31,7 @@
     },
     "targets": {
       "label": "Target Overrides",
-      "help": "Per target id: { motif: rings|waves|facets|dots, palette: ocean|forest|dusk|ember|slate|plum|sand|mint }.",
+      "help": "Per target id: { motif: rings|waves|facets|dots, palette: ocean|forest|dusk|ember|slate|plum|sand|mint, base: adopt|generate }. base adopt (default) keeps a group's own avatar as its background; generate always uses a generated base.",
       "advanced": true
     },
     "steering.allowGroupMembers": {
@@ -127,6 +127,11 @@
             },
             "palette": {
               "type": "string"
+            },
+            "base": {
+              "type": "string",
+              "enum": ["adopt", "generate"],
+              "default": "adopt"
             }
           }
         }

@@ -41,6 +41,8 @@ export type Outcome =
 export type Send = { target: string; kind: "group" | "profile"; avatar: string; at: number };
 
 export type TargetOpts = {
+  // ARCH §2c.8: the group's own avatar bytes when first seen (none by default).
+  avatar?: Buffer;
   member?: boolean;
   admin?: boolean;
   edit?: "EVERY_MEMBER" | "ONLY_ADMINS";
@@ -58,11 +60,20 @@ interface Backend {
   always(fn: (send: Send) => Outcome | null): void;
   sends(): Send[];
   provider(profile: boolean): BadgeProvider;
+  // The bytes the target shows now (§2c.8), as the channel would return them.
+  avatar(id: string): Buffer | null;
+  setAvatar(id: string, bytes: Buffer | null): void;
+  avatarReads(): number;
   rpcLog(): Array<{ method: string; params: Record<string, unknown> }>;
 }
 
-function signalBackend(clock: { now(): number }): Backend {
+function signalBackend(
+  clock: { now(): number },
+  readFile: (p: string) => Buffer | undefined,
+): Backend {
   const groups = new Map<string, ReturnType<typeof S.group>>();
+  const avatars = new Map<string, Buffer>();
+  let avatarReads = 0;
   const calls: Array<{ method: string; params: Record<string, unknown>; at: number }> = [];
   const script: Array<Outcome | null> = [];
   let alwaysFn: ((s: Send) => Outcome | null) | null = null;
@@ -114,23 +125,48 @@ function signalBackend(clock: { now(): number }): Backend {
     if (method === "listGroups") {
       return S.ok(S.listGroups([...groups.values()]));
     }
+    if (method === "getAvatar") {
+      avatarReads++;
+      const bytes = avatars.get(String(params.groupId));
+      return bytes
+        ? S.ok({ jsonrpc: "2.0", id: 1, result: { data: bytes.toString("base64") } })
+        : S.ok({ jsonrpc: "2.0", id: 1, error: { code: -1, message: "Could not find avatar" } });
+    }
     const send = sendOf(call);
     const o = alwaysFn ? alwaysFn(send) : script.shift();
-    return toWire(o ?? "ok", send.avatar);
+    const outcome = o ?? "ok";
+    if (
+      send.kind === "group" &&
+      (outcome === "ok" || outcome === "ok-empty" || outcome === "rate-limited")
+    ) {
+      const b = readFile(send.avatar);
+      if (b) {
+        avatars.set(send.target, b);
+      }
+    }
+    return toWire(outcome, send.avatar);
   };
   return {
     name: "signal",
     sessionKey: (id) => `agent:main:signal:group:${id.toLowerCase()}`,
     profileSessionKey: "agent:main:signal:direct:+10000000001",
-    addTarget: (id, o) => void groups.set(id, S.group(id, o)),
+    addTarget: (id, o) => {
+      groups.set(id, S.group(id, o));
+      if (o?.avatar) {
+        avatars.set(id, o.avatar);
+      }
+    },
     dropTarget: (id) => void groups.delete(id),
+    avatar: (id) => avatars.get(id) ?? null,
+    setAvatar: (id, b) => void (b ? avatars.set(id, b) : avatars.delete(id)),
+    avatarReads: () => avatarReads,
     has: (id) => groups.has(id),
     setDown: (v) => void (down = v),
     push: (...o) => void script.push(...o),
     always: (fn) => void (alwaysFn = fn),
     sends: () =>
       calls.filter((c) => c.method === "updateGroup" || c.method === "updateProfile").map(sendOf),
-    rpcLog: () => calls,
+    rpcLog: () => calls.filter((c) => c.method !== "getAvatar"),
     provider: (profile) =>
       createSignalProvider({
         config: {
@@ -147,8 +183,12 @@ function signalBackend(clock: { now(): number }): Backend {
   };
 }
 
-function fakeBackend(clock: { now(): number }): Backend {
+function fakeBackend(
+  clock: { now(): number },
+  readFile: (p: string) => Buffer | undefined,
+): Backend {
   const server = createFakeChatServer();
+  server.readPicture = readFile;
   let alwaysFn: ((s: Send) => Outcome | null) | null = null;
   const script: Array<Outcome | null> = [];
   const toResult = (o: Outcome, picture: string): ApplyResult => {
@@ -218,15 +258,26 @@ function fakeBackend(clock: { now(): number }): Backend {
         id,
         member: o.member ?? true,
         canEdit: o.edit === "ONLY_ADMINS" ? (o.admin ?? false) : true,
+        picture: o.avatar ?? null,
       }),
     dropTarget: (id) => void server.rooms.delete(id),
+    avatar: (id) => server.rooms.get(id)?.picture ?? null,
+    setAvatar: (id, b) => {
+      const r = server.rooms.get(id);
+      if (r) {
+        r.picture = b;
+      }
+    },
+    avatarReads: () => server.calls.filter((c) => c.op === "getPicture").length,
     has: (id) => server.rooms.has(id),
     setDown: (v) => void (server.down = v),
     push: (...o) => void script.push(...o),
     always: (fn) => void (alwaysFn = fn),
-    sends: () => server.calls.filter((c) => c.op !== "list").map(sendOf),
+    sends: () => server.calls.filter((c) => c.op !== "list" && c.op !== "getPicture").map(sendOf),
     rpcLog: () =>
-      server.calls.map((c) => ({ method: c.op, params: { room: c.room, picture: c.picture } })),
+      server.calls
+        .filter((c) => c.op !== "getPicture")
+        .map((c) => ({ method: c.op, params: { room: c.room, picture: c.picture } })),
     provider: (profile) =>
       createFakeChatProvider({
         server,
@@ -276,7 +327,9 @@ export async function createWorld(opts: WorldOpts = {}) {
   const clock = createFakeClock();
   const fs = createMemFs(clock);
   const log = createLog();
-  const backend = opts.backend === "fakechat" ? fakeBackend(clock) : signalBackend(clock);
+  const readFile = (p: string) => fs.files.get(p)?.data;
+  const backend =
+    opts.backend === "fakechat" ? fakeBackend(clock, readFile) : signalBackend(clock, readFile);
   const paths = {
     rootDir: `${ROOT}/state/plugins/model-badge`,
     stateDir: `${ROOT}/state/plugins/model-badge/${backend.name}`,

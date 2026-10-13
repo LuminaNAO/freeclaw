@@ -236,6 +236,37 @@ export function createSignalProvider(opts: {
       return classify(out, { kind, avatarPath: assetPath });
     },
 
+    // ARCH §2c.8: reads a group's current avatar (signal-cli `getAvatar`, base64). Read
+    // only; never sent anywhere. The profile is never adopted.
+    async currentAvatar(target) {
+      if (target.ref.kind !== "group") {
+        return { kind: "none" };
+      }
+      const out = await rpc("getAvatar", { account, groupId: target.realId });
+      if (out.transport !== "ok") {
+        return { kind: "retry", message: `daemon ${out.transport}` };
+      }
+      const err = out.body?.error;
+      if (err) {
+        const msg = String(err.message ?? "");
+        // signal-cli: FileNotFoundException → "Could not find avatar".
+        if (/could not find avatar/i.test(msg)) {
+          return { kind: "none" };
+        }
+        // JSON-RPC "method not found": a daemon without getAvatar.
+        if (err.code === -32601 || String(err.code) === "-32601") {
+          return { kind: "unsupported" };
+        }
+        return { kind: "retry", message: msg.slice(0, 120) };
+      }
+      const r = out.body?.result as { data?: unknown } | string | undefined;
+      const b64 = typeof r === "string" ? r : r?.data;
+      if (typeof b64 !== "string" || !b64) {
+        return { kind: "none" };
+      }
+      return { kind: "image", bytes: Buffer.from(b64, "base64") };
+    },
+
     knownIds() {
       const out: Record<string, string> = {};
       for (const [lower, set] of ids) {

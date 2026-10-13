@@ -10,18 +10,26 @@ import type {
 // (ARCH §6.5): it has its own session-key shape, its own id rules, its own write call
 // and answers with ApplyResults directly. It shares nothing with the Signal provider.
 
-export type FakeRoom = { id: string; member: boolean; canEdit: boolean | "unknown" };
+export type FakeRoom = {
+  id: string;
+  member: boolean;
+  canEdit: boolean | "unknown";
+  // The room's current picture bytes (ARCH §2c.8), if any.
+  picture?: Buffer | null;
+};
 
 export type FakeChatServer = {
   rooms: Map<string, FakeRoom>;
   calls: Array<{
-    op: "list" | "setPicture" | "setProfilePicture";
+    op: "list" | "setPicture" | "setProfilePicture" | "getPicture";
     room?: string;
     picture?: string;
     at: number;
   }>;
   script: Array<ApplyResult | ((picture: string) => ApplyResult) | null>;
   down: boolean;
+  // Reads a written picture's bytes, so a successful write updates the room's picture.
+  readPicture?: (path: string) => Buffer | undefined;
 };
 
 export function createFakeChatServer(): FakeChatServer {
@@ -108,7 +116,22 @@ export function createFakeChatProvider(opts: {
       if (server.down) {
         return { kind: "pause", reason: "daemon-down" };
       }
-      return next(picture);
+      const r = next(picture);
+      if (r.kind === "ok" && target.ref.kind === "group") {
+        const room = server.rooms.get(target.realId);
+        if (room) {
+          room.picture = server.readPicture?.(picture) ?? room.picture;
+        }
+      }
+      return r;
+    },
+    async currentAvatar(target) {
+      server.calls.push({ op: "getPicture", room: target.realId, at: opts.now() });
+      if (server.down) {
+        return { kind: "retry", message: "server down" };
+      }
+      const room = server.rooms.get(target.realId);
+      return room?.picture ? { kind: "image", bytes: room.picture } : { kind: "none" };
     },
   };
 }

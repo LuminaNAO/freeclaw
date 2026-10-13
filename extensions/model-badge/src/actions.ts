@@ -7,7 +7,8 @@ import type { Requester, StyleRule, StyleRuleInput } from "./core/style.js";
 // this one dispatcher, so both have the same effect and result. Authority is decided
 // here, on the authenticated sender id the gateway passes in (never on anything the
 // model writes): operators may do everything; group members may act on the group they
-// are in (style rules with that group's targetId, repaint, regenerate, status, audit);
+// are in (style rules with that group's targetId, repaint, regenerate, restore, status,
+// audit);
 // global rules, other groups, the profile and purge are operator-only.
 
 export const ACTIONS = [
@@ -19,6 +20,8 @@ export const ACTIONS = [
   "style.reset",
   "repaint",
   "regenerate",
+  // ARCH §2c.8: put a group's adopted artwork back as its base.
+  "restore",
   "audit",
   "purge",
 ] as const;
@@ -248,8 +251,8 @@ export function createActions(deps: ActionDeps) {
     return { ok: true, text: lines.join("\n"), details: { ok: true, providers } };
   }
 
-  async function repaintOrRegenerate(
-    kind: "repaint" | "regenerate",
+  async function targetAction(
+    kind: "repaint" | "regenerate" | "restore",
     ctx: ActionContext,
     args: ActionArgs,
     role: Role,
@@ -270,15 +273,26 @@ export function createActions(deps: ActionDeps) {
     if (denied) {
       return denied;
     }
-    const r = kind === "repaint" ? await e.repaint(key) : await e.regenerate(key);
+    const r =
+      kind === "repaint"
+        ? await e.repaint(key)
+        : kind === "regenerate"
+          ? await e.regenerate(key)
+          : await e.restore(key);
     if (!r.ok) {
       return fail(`Not queued: ${r.message}.`, { target: key });
     }
-    return {
-      ok: true,
-      text: `${kind === "repaint" ? "Repaint" : "Regeneration"} queued.`,
-      details: { ...r, ok: true, target: key },
-    };
+    const text =
+      kind === "repaint"
+        ? "Repaint queued."
+        : kind === "regenerate"
+          ? "replaced" in r && r.replaced === "adopted"
+            ? "Regeneration queued; the group's own artwork is kept and can be restored."
+            : "Regeneration queued."
+          : "already" in r && r.already
+            ? "The group's own artwork is already in use."
+            : "Restore queued: the group's own artwork is back.";
+    return { ok: true, text, details: { ...r, ok: true, target: key } };
   }
 
   async function audit(ctx: ActionContext, role: Role): Promise<ActionResult> {
@@ -423,7 +437,8 @@ export function createActions(deps: ActionDeps) {
         return status(ctx, args, role);
       case "repaint":
       case "regenerate":
-        return repaintOrRegenerate(action, ctx, args, role);
+      case "restore":
+        return targetAction(action, ctx, args, role);
       case "audit":
         return audit(ctx, role);
       case "purge": {

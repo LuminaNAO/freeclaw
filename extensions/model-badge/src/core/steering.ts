@@ -189,9 +189,15 @@ export function createSteering(deps: SteeringDeps) {
             newMarks.set(markKey(b), { mark: b, ref: targetKey(ref) });
           }
         }
+        // A target on its own adopted artwork (or an operator file) keeps that base
+        // whatever the style says (§2c.8): only a want that is actually used counts.
         const baseChanged =
-          canonicalJSON(before.imageWant(ref).target.params) !==
-          canonicalJSON(after.imageWant(ref).target.params);
+          !after.baseLocked(ref) &&
+          canonicalJSON({
+            p: before.imageWant(ref).target.params,
+            s: before.imageWant(ref).style,
+          }) !==
+            canonicalJSON({ p: after.imageWant(ref).target.params, s: after.imageWant(ref).style });
         if (models.length || baseChanged) {
           changes.push({
             provider: engine.provider.id,

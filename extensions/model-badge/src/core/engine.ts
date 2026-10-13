@@ -5,17 +5,24 @@
 // rate-limit/captcha/outage pauses, parking, status/health.
 import os from "node:os";
 import path from "node:path";
+import { createAdoptedStore, type AdoptedStore } from "./adopted.js";
 import { createImageBases, type BaseArtGenerator, type ImageBases } from "./baseart.js";
 import { createAssetCache, type AssetCache, type AssetJob } from "./cache.js";
 import type { Clock, Logger } from "./clock.js";
 import { normalizeConfig, type ModelBadgeConfig } from "./config.js";
-import { createView, type Desired, type HeldBase, type View } from "./desired.js";
+import {
+  createView,
+  targetIdOf as targetIdOfRef,
+  type Desired,
+  type HeldBase,
+  type View,
+} from "./desired.js";
 import type { CoreFs } from "./fsio.js";
 import { sha256 } from "./hash.js";
 import { createLease, type Lease } from "./lease.js";
 import type { BaseParams } from "./motif.js";
 import { targetKey, type ApplyResult, type BadgeProvider, type TargetRef } from "./provider.js";
-import type { Renderer } from "./render.js";
+import { isStamped, type Renderer } from "./render.js";
 import { overrideSnapshot, type SessionEntryLike } from "./resolve.js";
 import { createStyleStore, seededRules, type StyleRule } from "./style.js";
 
@@ -62,7 +69,7 @@ export type EngineDeps = {
 // while its image base is not ready. A record without `base` predates it.
 type AppliedBase =
   | { kind: "vector"; params: BaseParams }
-  | { kind: "raster"; source: "image" | "file"; sha: string };
+  | { kind: "raster"; source: "image" | "file" | "adopted"; sha: string };
 type AppliedRecord = {
   hash: string;
   appliedAt: number;
@@ -129,6 +136,16 @@ export function createEngine(deps: EngineDeps) {
       maxBackoffMs: T.imageGenMaxBackoffMs,
     },
   });
+  // ARCH §2c.8: a group's own artwork, captured once on first sight.
+  const adopted: AdoptedStore = createAdoptedStore({
+    fs,
+    dir: path.join(P.stateDir, "adopted"),
+    renderer: deps.renderer,
+    size,
+    clock,
+    log,
+  });
+  const adoptAttempts = new Map<string, number>();
   const styleStore = createStyleStore({ fs, stateDir: P.rootDir });
   const lease =
     deps.lease ??
@@ -239,6 +256,7 @@ export function createEngine(deps: EngineDeps) {
       provider: provider.id,
       ...status,
       imageGen: images.status(),
+      adopted: adopted.status(),
       ids: provider.knownIds?.() ?? status.ids,
       role,
       holder: holder
@@ -315,6 +333,8 @@ export function createEngine(deps: EngineDeps) {
       }
     }
     await images.load();
+    await adopted.load();
+    adoptAttempts.clear();
   }
 
   // ---------------- inputs ----------------
@@ -435,6 +455,7 @@ export function createEngine(deps: EngineDeps) {
         imageMode: images.state !== "unconfigured",
         held: heldBase,
         generation: (key) => images.generation(key),
+        adopted: (key) => adopted.active(key),
       },
       { providerId: provider.id, size },
     );
@@ -452,6 +473,10 @@ export function createEngine(deps: EngineDeps) {
     }
     if (b.kind === "vector") {
       return { kind: "vector", params: b.params };
+    }
+    if (b.source === "adopted") {
+      const a = adopted.bySha(b.sha);
+      return a ? { kind: "raster", source: "adopted", ...a } : { kind: "unknown" };
     }
     if (b.source === "file") {
       const pf = inputs?.profileFile;
@@ -532,6 +557,7 @@ export function createEngine(deps: EngineDeps) {
       const want = view.imageWant(t.ref);
       removedBases.add(want.key);
       await images.remove(want.key);
+      await adopted.remove(want.key);
     }
     if (had) {
       log.info(`${tag} target removed: ${why}`);
@@ -595,9 +621,7 @@ export function createEngine(deps: EngineDeps) {
     }
     const t0 = clock.now();
     const refs = [...targets.values()].map((t) => t.ref);
-    const wants = refs
-      .filter((r) => !(r.kind === "profile" && inputs?.profileFile))
-      .map((r) => view!.imageWant(r));
+    const wants = refs.filter((r) => !view!.baseLocked(r)).map((r) => view!.imageWant(r));
     const img = await images.ensure(wants);
     if (img.generated > 0) {
       view = makeView(inputs);
@@ -698,6 +722,76 @@ export function createEngine(deps: EngineDeps) {
     return images.prune({ seeds, shas });
   }
 
+  // ---------------- adoption (§2c.8) ----------------
+
+  // A group target whose current avatar has not been looked at yet. Until it has, it is
+  // never painted: painting first would destroy the artwork we are meant to keep.
+  function awaitingAdoption(t: TargetInfo): boolean {
+    return t.ref.kind === "group" && Boolean(view) && !adopted.seen(view!.imageWant(t.ref).key);
+  }
+
+  // First sight: capture the avatar each new group target shows, once. A target we have
+  // already painted, one with no avatar, or one showing our own mark gets nothing adopted
+  // (and a generated base). Transient read failures are retried on later passes.
+  async function adoptNew() {
+    if (role !== "writer" || !view) {
+      return;
+    }
+    let changed = false;
+    for (const [k, t] of targets) {
+      if (!awaitingAdoption(t)) {
+        continue;
+      }
+      const key = view.imageWant(t.ref).key;
+      if (applied.targets[k] || status.inflight[k]) {
+        await adopted.markSeen(key, "painted");
+        continue;
+      }
+      if (!provider.currentAvatar) {
+        await adopted.markSeen(key, "unsupported");
+        continue;
+      }
+      const r = await provider.resolve(t.ref, { minRefreshMs: T.listTargetsMinRefreshMs });
+      let res: Awaited<ReturnType<NonNullable<BadgeProvider["currentAvatar"]>>>;
+      if (!r.ok) {
+        res = { kind: "retry", message: "target not resolvable yet" };
+      } else {
+        try {
+          res = await provider.currentAvatar({ ref: t.ref, realId: r.realId });
+        } catch (err) {
+          res = { kind: "retry", message: String((err as Error)?.message ?? err) };
+        }
+      }
+      if (res.kind === "retry") {
+        const n = (adoptAttempts.get(key) ?? 0) + 1;
+        adoptAttempts.set(key, n);
+        if (n >= L.maxAttempts) {
+          log.warn(
+            `${tag} a target's avatar could not be read ${n} times; it gets a generated base`,
+          );
+          await adopted.markSeen(key, "unsupported");
+          changed = true;
+        }
+        continue;
+      }
+      adoptAttempts.delete(key);
+      if (res.kind === "none" || res.kind === "unsupported") {
+        await adopted.markSeen(key, res.kind === "none" ? "no-avatar" : "unsupported");
+      } else if (isStamped(res.bytes)) {
+        await adopted.markSeen(key, "ours");
+      } else {
+        const rec = await adopted.adopt(key, res.bytes);
+        if (rec.sha) {
+          log.info(`${tag} adopted a group's own avatar as its base`);
+        }
+      }
+      changed = true;
+    }
+    if (changed && inputs) {
+      view = makeView(inputs);
+    }
+  }
+
   // ---------------- layer 2: reconcile ----------------
 
   function noteNotices(d: OkDesired, k: string) {
@@ -749,6 +843,13 @@ export function createEngine(deps: EngineDeps) {
     }
     if (inputsBroken.length) {
       return { action: "skip", why: "inputs-broken" };
+    }
+    if (awaitingAdoption(t)) {
+      status.waiting[k] = {
+        reason: "waiting-for-adoption",
+        since: status.waiting[k]?.since ?? clock.now(),
+      };
+      return { action: "skip", why: "waiting-for-adoption" };
     }
     const d = view.desired(t.ref, t.sessionKey);
     if (!d.ok) {
@@ -1130,6 +1231,9 @@ export function createEngine(deps: EngineDeps) {
     const prevKeys = new Set(targets.keys());
     targets = targetsFromStore();
     await recordStats();
+    if ([...targets.keys()].some((k) => !prevKeys.has(k))) {
+      await adoptNew();
+    }
 
     const refs = [...targets.values()].map((t) => t.ref);
     const fp = view!.fingerprint(refs);
@@ -1210,7 +1314,9 @@ export function createEngine(deps: EngineDeps) {
     }
     await recordStats();
     const refs = [...targets.values()].map((t) => t.ref);
-    const imagesPending = images.pending(refs.map((r) => view!.imageWant(r))) > 0;
+    await adoptNew();
+    const imagesPending =
+      images.pending(refs.filter((r) => !view!.baseLocked(r)).map((r) => view!.imageWant(r))) > 0;
     if (reason === "startup" || imagesPending || view!.fingerprint(refs) !== lastBuiltFingerprint) {
       await rebuild(reason);
     } else {
@@ -1468,23 +1574,62 @@ export function createEngine(deps: EngineDeps) {
       }
     },
 
-    // `regenerate` (§2b.4, §2c.3): bumps the target's generation counter, so its image
-    // seed — and the picture — changes. The old base stays until the new one is applied.
+    // `regenerate` (§2b.4, §2c.3, §2c.8). A target on its adopted artwork leaves it for a
+    // generated base (the adopted bytes stay on disk for `restore`); otherwise the
+    // generation counter is bumped, so the image seed — and the picture — changes. The
+    // old base stays until the new one is applied.
     async regenerate(k: string) {
       return writerOnly(async () => {
         const t = targets.get(k);
         if (!t || !view) {
           return { ok: false as const, message: "unknown target" };
         }
-        if (images.state === "unconfigured") {
-          return { ok: false as const, message: "image generation is unconfigured" };
-        }
         if (t.ref.kind === "profile" && inputs?.profileFile) {
           return { ok: false as const, message: "the profile uses profileBaseImage" };
         }
-        const generation = await images.regenerate(view.imageWant(t.ref).key);
+        const key = view.imageWant(t.ref).key;
+        if (view.adoptedFor(t.ref)) {
+          await adopted.setActive(key, false);
+          await fullPass("regenerate");
+          return {
+            ok: true as const,
+            replaced: "adopted" as const,
+            generation: images.generation(key),
+            imageGen: images.state,
+          };
+        }
+        if (images.state === "unconfigured") {
+          return { ok: false as const, message: "image generation is unconfigured" };
+        }
+        const generation = await images.regenerate(key);
         await fullPass("regenerate");
         return { ok: true as const, generation, imageGen: images.state };
+      });
+    },
+
+    // `restore` (§2c.8): puts a group's adopted artwork back as its base.
+    async restore(k: string) {
+      return writerOnly(async () => {
+        const t = targets.get(k);
+        if (!t || !view) {
+          return { ok: false as const, message: "unknown target" };
+        }
+        const key = view.imageWant(t.ref).key;
+        if (!adopted.record(key)?.sha) {
+          return { ok: false as const, message: "this target has no adopted artwork to restore" };
+        }
+        if (inputs?.pluginConfig.targets[targetIdOfRef(t.ref)]?.base === "generate") {
+          return {
+            ok: false as const,
+            message: "the operator set this target to generated bases (targets.<id>.base)",
+          };
+        }
+        if (adopted.active(key)) {
+          return { ok: true as const, already: true };
+        }
+        await adopted.setActive(key, true);
+        await fullPass("restore");
+        return { ok: true as const };
       });
     },
 

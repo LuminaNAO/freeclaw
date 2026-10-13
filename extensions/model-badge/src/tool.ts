@@ -28,7 +28,10 @@ export const TOOL_DESCRIPTION =
   "restyle, repaint and regenerate a group's avatar when a member of that group asks, and " +
   "check its status. Actions: status (this chat; operators may pass all), style.list, " +
   "style.preview, style.add, style.remove, style.reset, repaint, regenerate (a new picture " +
-  "from the image model), audit, purge (operator-only, needs confirm). Always call " +
+  "from the image model; replaces a group's own adopted artwork), restore (puts the " +
+  "group's own artwork back), audit, purge (operator-only, needs confirm). A group's own " +
+  "artwork is kept as its background: restyling does not replace it, only regenerate " +
+  "does, so say so before regenerating. Always call " +
   "style.preview first (no side effects; shows which models/targets change, with sample " +
   "images) and call style.add only after the user confirms. Rule: { match: { provider?, " +
   'family?, modelGlob?, targetId? ("this" = this chat) }, set: { tone?: "light"|"dark", ' +
@@ -90,7 +93,7 @@ export function createBadgeTool(
       target: Type.Optional(
         Type.String({
           description:
-            'status/repaint/regenerate: "this" (default: this chat), a target id, or "profile".',
+            'status/repaint/regenerate/restore: "this" (default: this chat), a target id, or "profile".',
         }),
       ),
       all: Type.Optional(Type.Boolean({ description: "status: every target (operators)." })),

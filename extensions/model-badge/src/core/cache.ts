@@ -8,6 +8,7 @@ import {
   RENDERER_VERSION,
   rasterAssetSvg,
   sniffImage,
+  stampPng,
   vectorAssetSvg,
   verifyPng,
   type Renderer,
@@ -21,7 +22,13 @@ import {
 
 export type AssetBase =
   | { kind: "vector"; key: string; params: BaseParams }
-  | { kind: "raster"; key: string; source: "image" | "file"; sha: string; file: string };
+  | {
+      kind: "raster";
+      key: string;
+      source: "image" | "file" | "adopted";
+      sha: string;
+      file: string;
+    };
 
 export function baseIdentity(base: AssetBase): Record<string, unknown> {
   return base.kind === "vector"
@@ -126,9 +133,12 @@ export function createAssetCache(opts: {
     try {
       await fs.writeFile(tmpSvg, await svgFor(job));
       await renderer.svgToPng(tmpSvg, tmpPng, size);
-      const buf = await fs.readFile(tmpPng);
+      // Every asset carries our stamp, so reading it back off a channel is never mistaken
+      // for a group's own artwork (ARCH §2c.8).
+      const buf = stampPng(await fs.readFile(tmpPng));
       const dims = verifyPng(buf, size);
-      await fs.rename(tmpPng, pngPath(h));
+      await fs.writeAtomic(pngPath(h), buf);
+      await fs.unlink(tmpPng);
       rasteriser ??= await renderer.version();
       const manifest: AssetManifest = {
         hash: h,

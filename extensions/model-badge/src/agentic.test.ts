@@ -130,6 +130,7 @@ describe("one agent tool covers every /badge subcommand (ARCH §2c.1)", () => {
         "status",
         "repaint",
         "regenerate",
+        "restore",
         "audit",
         "purge",
         "style list",

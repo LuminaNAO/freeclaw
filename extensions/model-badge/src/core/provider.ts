@@ -34,6 +34,13 @@ export type ApplyResult =
   // Defensive fallback: a rate limit that did not commit. Pause, not applied.
   | { kind: "rate-limit-uncommitted"; retryAfterMs?: number };
 
+export type AvatarResult =
+  | { kind: "image"; bytes: Buffer }
+  | { kind: "none" }
+  // The channel cannot read avatars (e.g. an older daemon): nothing is ever adopted.
+  | { kind: "unsupported" }
+  | { kind: "retry"; message: string };
+
 export type ResolveResult = { ok: true; realId: string } | { ok: false; result: ApplyResult };
 
 export type ListResult =
@@ -65,6 +72,11 @@ export interface BadgeProvider {
 
   // The only side-effecting call. Returns a classified result and never throws.
   apply(target: { ref: TargetRef; realId: string }, assetPath: string): Promise<ApplyResult>;
+
+  // ARCH §2c.8: the avatar a target shows now, read once on first sight so a group's own
+  // artwork can be adopted. `none`: the target has no avatar. `retry`: transient (daemon
+  // down, I/O); asked again on a later pass. Optional: a provider without it never adopts.
+  currentAvatar?(target: { ref: TargetRef; realId: string }): Promise<AvatarResult>;
 
   // lower → real id map for status, and seeding after a restart.
   knownIds?(): Record<string, string>;

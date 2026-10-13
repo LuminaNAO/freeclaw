@@ -12,7 +12,14 @@ import { contrastRatio, TEXT_DARK, TEXT_LIGHT } from "./color.js";
 import { createNodeFs } from "./fsio.js";
 import { sha256 } from "./hash.js";
 import { baseParamsForSeed, renderBaseSvg, seedFor } from "./motif.js";
-import { createRenderer, detectRasteriser, verifyPng, type RasteriserId } from "./render.js";
+import {
+  createRenderer,
+  detectRasteriser,
+  isStamped,
+  rasterBaseSvg,
+  verifyPng,
+  type RasteriserId,
+} from "./render.js";
 
 const SIZE = { width: 512, height: 512 };
 const clock = { now: () => Date.now(), setTimeout: () => 0, clearTimeout: () => {} };
@@ -221,6 +228,33 @@ describe.skipIf(!rasteriser)(`real render pipeline (${rasteriser ?? RENDERER_UNA
             hex("#9B59D0"),
           ),
         ).toBe(true);
+      }
+    });
+  });
+
+  it("ARCH §2c.8: rendered assets carry our stamp and still decode as a valid image", async () => {
+    await withDir(async (dir) => {
+      const fs = createNodeFs();
+      const mark = { letter: "S", color: "#2E86C1", text: TEXT_LIGHT, scale: 1 };
+      const base = vectorBase("stamp");
+      const h = assetHash(mark, base, SIZE);
+      await createAssetCache({
+        fs,
+        renderer: renderer(),
+        cacheDir: dir,
+        size: SIZE,
+        clock,
+        log,
+      }).ensure(new Map([[h, { hash: h, mark, base }]]));
+      const png = await fsp.readFile(path.join(dir, `${h}.png`));
+      expect(isStamped(png)).toBe(true);
+      // The stamped PNG round-trips through the rasteriser (CRC and chunk layout are valid).
+      const svg = path.join(dir, "rt.svg");
+      await fsp.writeFile(svg, rasterBaseSvg({ mime: "image/png", bytes: png }, SIZE.width));
+      await renderer().svgToPng(svg, path.join(dir, "rt.png"), SIZE);
+      expect(verifyPng(await fsp.readFile(path.join(dir, "rt.png")), SIZE)).toEqual(SIZE);
+      if (hasMagick) {
+        execFileSync("magick", [path.join(dir, `${h}.png`), "-format", "%w", "info:"]);
       }
     });
   });

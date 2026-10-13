@@ -52,6 +52,7 @@ export const SLASH_SUBCOMMANDS: Record<
   status: { action: "status", parse: (r) => ok(r[0] === "all" ? { all: true } : { target: r[0] }) },
   repaint: { action: "repaint", parse: (r) => ok({ target: r[0] }) },
   regenerate: { action: "regenerate", parse: (r) => ok({ target: r[0] }) },
+  restore: { action: "restore", parse: (r) => ok({ target: r[0] }) },
   audit: { action: "audit", parse: () => ok() },
   purge: { action: "purge", parse: (r) => ok({ confirm: r[0] === "confirm" }) },
   "style list": { action: "style.list", parse: () => ok() },
@@ -75,7 +76,7 @@ export const SLASH_SUBCOMMANDS: Record<
 
 const USAGE =
   "Usage: /badge status [all|<target>] | repaint [this|<target>|profile] | audit | " +
-  "regenerate [this|<target>|profile] | purge confirm | style list | style preview <json> | " +
+  "regenerate [this|<target>|profile] | restore [this|<target>] | purge confirm | style list | style preview <json> | " +
   "style add <json> | style remove <id…> | style reset";
 
 // The engine for the channel the command came from, else the only engine.

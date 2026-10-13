@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { crc32 } from "node:zlib";
 import type { Mark } from "./badges.js";
 import { baseSvgBody, type BaseParams } from "./motif.js";
 
@@ -85,6 +86,30 @@ export function sniffImage(bytes: Buffer): RasterBase["mime"] | null {
 const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 // Signature, IHDR and dimensions. Throws on anything else.
+// ARCH §2c.8: every asset we render carries this tEXt chunk, so an avatar read back from
+// a channel can be told apart from a group's own artwork. Ancillary chunks are ignored
+// by decoders, so the picture is unchanged.
+const STAMP_KEYWORD = "Software";
+const STAMP_TEXT = "openclaw-model-badge";
+const STAMP = Buffer.from(`tEXt${STAMP_KEYWORD}\0${STAMP_TEXT}`, "latin1");
+
+export function stampPng(buf: Buffer): Buffer {
+  if (isStamped(buf) || buf.length < 33 || !buf.subarray(0, 8).equals(PNG_SIG)) {
+    return buf;
+  }
+  // Right after IHDR (signature 8 + IHDR length/type/data/crc 25).
+  const data = STAMP.subarray(4);
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  STAMP.copy(chunk, 4);
+  chunk.writeUInt32BE(crc32(STAMP) >>> 0, 8 + data.length);
+  return Buffer.concat([buf.subarray(0, 33), chunk, buf.subarray(33)]);
+}
+
+export function isStamped(buf: Buffer): boolean {
+  return Buffer.isBuffer(buf) && buf.includes(STAMP);
+}
+
 export function verifyPng(buf: Buffer, expect?: RenderSize): RenderSize {
   if (!Buffer.isBuffer(buf) || buf.length < 33) {
     throw new Error("png too small");
