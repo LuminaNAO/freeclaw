@@ -1,4 +1,4 @@
-# model-badge extension — ARCH v1 (fold-in)
+# model-badge extension — ARCH v2 (fold-in; §2c agentic + image first)
 
 Status: operator-owned. Engineers never edit it; commits name the section.
 
@@ -105,6 +105,43 @@ bytes }`: `vector` (the built-in parametric SVG generator of §2.1, always avail
    composited mark present; generator fails for one target → that target vector, others image; cache hit → no
    second generation; style change → regenerate only that target; daily cap respected; no secret in argv
    (command backend gets the prompt on stdin).
+
+## 2c. Agentic first, image first (v2 — supersedes conflicting lines in §2a–§2b and §5.3)
+
+The extension is driven by talking to the agent. Slash commands stay as a convenience; **no outcome may require
+one**. Pictures are **always** real images from the image model when one is configured; the vector generator is a
+fallback for hosts with no image model at all.
+
+1. **One agent tool covers everything.** `model_badge` (the §2a.3 `model_badge_style` stays as an alias) with actions
+   `status | style.list | style.preview | style.add | style.remove | style.reset | repaint | regenerate | audit`.
+   Every `/badge` subcommand has a tool action with the same effect and result; a test enumerates the slash
+   subcommands and fails if any has no tool action. `purge` stays operator-only by slash command and tool alike
+   (destructive).
+2. **Authority** is checked inside the action on the authenticated sender id the gateway passes to the tool, never
+   on anything the model writes. Operators: everything. **Group members: everything scoped to the group they are in
+   — style rules with that group's `targetId`, `repaint`/`regenerate` of that group, `status` of that group.**
+   Global rules (provider/family/model) and other groups: operators only. `steering.allowGroupMembers` now
+   **defaults to true**; setting it false restores operator-only.
+3. **Regenerate gives a new picture.** Each target has a generation counter in the state dir (starts 0);
+   `regenerate` increments it. The image seed is `sha256(providerId + ":" + targetId + ":" + generation)`, so the
+   same style regenerated yields a different image; the stored base for the old generation is pruned after the
+   new one is applied. A style change does not bump the counter (same seed, new prompt).
+4. **Image first.** When `imageGen` is configured, every base is an image base:
+   - The probe is retried with backoff (startup, then each periodic pass) — a probe that fails at startup does not
+     pin the extension to vector; health shows `imageGen: retrying` until it succeeds.
+   - A target whose image is not ready yet (cap reached, generation queued or failing) **keeps the avatar it has**;
+     it is painted with a vector base only if it has no avatar of ours at all, and is upgraded to the image base as
+     soon as one exists. A target never goes from an image base back to vector because of a transient failure.
+   - Defaults sized for a local generator: `maxPerRun` 16, `maxPerDay` 200, `maxAttempts` 10 with backoff capped
+     at 30 min. Operators may lower them for metered backends.
+   - Only when `imageGen` is not configured is `vector` the base generator (health `imageGen: unconfigured`).
+5. **Profile target** uses the image generator too (portrait-safe abstract prompt) unless `profileBaseImage` is set.
+6. **Agent awareness.** The tool description tells the agent it can restyle, repaint and regenerate on a member's
+   request, and to preview before adding rules. A refusal names the reason and who can do it.
+7. Tests: slash/tool parity enumeration; member allowed for own group and refused for another group and for global
+   rules; operator allowed everywhere; regenerate changes the seed and the image request; image-first: probe failure
+   then recovery upgrades bases without a restart; capped target keeps its existing avatar; a target with no avatar
+   gets vector then upgrades; unconfigured → vector.
 
 ## 3. Lifecycle (generated and removed as the world changes)
 
