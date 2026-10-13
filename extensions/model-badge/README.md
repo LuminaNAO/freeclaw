@@ -43,6 +43,7 @@ src/providers/signal/         Signal provider on freeclaw's own Signal client (H
     "accountId": "default", // freeclaw Signal account; the daemon is resolved from it
     "profileSessionKey": null, // optional: the account's own profile avatar follows this session
     "profileBaseImage": null, // optional absolute path to your own profile picture
+    "groups": { "mode": "all", "ids": [] }, // all | include | exclude: which groups this agent paints
   },
   "operators": ["<sender id>"],
   "badges": [{ "pattern": "opus", "letter": "O", "color": "#9B59D0" }],
@@ -104,6 +105,17 @@ painted before this check. Restyling (motif, palette, prompt) keeps an adopted b
 follow the §2c.2 authority. `targets.<id>.base: generate` turns adoption off for a target;
 `adopt` is the default. A target with no avatar, or one showing our own mark, gets a
 generated base.
+
+## Which groups (operator addendum, §2c target selection)
+
+Every member of a Signal group shares the group avatar, so two agents running model-badge in
+the same group overwrite each other. `signal.groups` picks the groups this agent drives:
+`{ "mode": "all" }` (default), `{ "mode": "include", "ids": [...] }` or
+`{ "mode": "exclude", "ids": [...] }` (group ids as `listGroups` reports them, any case).
+A group that is not driven is skipped entirely: its avatar is never read or captured
+(§2c.8), no base is generated for it and it is never painted; repaint/regenerate/restore on
+it say so. The setting is read live, so excluding a group stops writes to it without a
+restart; its stored state is kept in case it is included again.
 
 ## Talking to the agent, and commands (ARCH §2c.1, §2c.2)
 

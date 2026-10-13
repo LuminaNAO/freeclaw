@@ -11,6 +11,18 @@
       "label": "Signal Account",
       "help": "freeclaw Signal account id (channels.signal.accounts.<id>). The daemon is resolved from this account; empty uses the default account."
     },
+    "signal.groups": {
+      "label": "Signal Groups",
+      "help": "Which groups this agent paints: { mode: all|include|exclude, ids: [group ids] }. Default all. Every member of a Signal group shares its avatar, so when another agent runs model-badge in a group, exclude it here (or include only yours). An excluded group is skipped entirely: never captured, never painted."
+    },
+    "signal.groups.mode": {
+      "label": "Group Mode",
+      "help": "all (default): every group the account is in. include: only the listed ids. exclude: every group except the listed ids."
+    },
+    "signal.groups.ids": {
+      "label": "Group Ids",
+      "help": "Signal group ids (base64, as listGroups reports them) for include/exclude. Case-insensitive."
+    },
     "signal.profileSessionKey": {
       "label": "Profile Session",
       "help": "Session whose model the account's own profile avatar shows. Empty leaves the profile alone.",
@@ -228,6 +240,23 @@
           },
           "profileBaseImage": {
             "type": "string"
+          },
+          "groups": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["all", "include", "exclude"],
+                "default": "all"
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       },

@@ -74,9 +74,53 @@ export type Limits = typeof DEFAULT_LIMITS;
 
 export type ProviderBlock = Record<string, unknown>;
 
+// Operator addendum (§2c target selection): which of a provider's groups this instance
+// drives. Every member of a Signal group shares the group avatar, so two agents running
+// model-badge in one group would overwrite each other; each picks its own groups.
+export type GroupSelection = { mode: "all" | "include" | "exclude"; ids: string[] };
+export const ALL_GROUPS: GroupSelection = { mode: "all", ids: [] };
+
+export function normalizeGroups(raw: unknown, where: string, errors: string[]): GroupSelection {
+  if (raw === undefined || raw === null) {
+    return ALL_GROUPS;
+  }
+  const g = obj(raw);
+  const mode = g.mode ?? "all";
+  if (mode !== "all" && mode !== "include" && mode !== "exclude") {
+    errors.push(`${where}.mode must be "all", "include" or "exclude"`);
+    return ALL_GROUPS;
+  }
+  if (g.ids !== undefined && !(Array.isArray(g.ids) && g.ids.every((x) => typeof x === "string"))) {
+    errors.push(`${where}.ids must be an array of group ids`);
+    return ALL_GROUPS;
+  }
+  const ids = [
+    ...new Set(
+      ((g.ids as string[] | undefined) ?? []).map((x) =>
+        x
+          .trim()
+          .replace(/^group:/i, "")
+          .toLowerCase(),
+      ),
+    ),
+  ].filter(Boolean);
+  return { mode, ids };
+}
+
+// Whether a group target id (lowercased) is driven by this instance.
+export function groupSelected(sel: GroupSelection, idLower: string): boolean {
+  if (sel.mode === "all") {
+    return true;
+  }
+  const listed = sel.ids.includes(idLower);
+  return sel.mode === "include" ? listed : !listed;
+}
+
 export type ModelBadgeConfig = {
   providers: string[];
   providerBlocks: Record<string, ProviderBlock>;
+  // Per provider id: the groups it drives (`<provider>.groups`, default all).
+  groups: Record<string, GroupSelection>;
   agentId: string;
   operators: string[];
   badges: BadgeRule[];
@@ -177,11 +221,13 @@ export function normalizeConfig(raw: unknown, ctx: { gatewayStateDir: string }):
       ? [...new Set(c.providers.map(String))]
       : ["signal"];
   const providerBlocks: Record<string, ProviderBlock> = {};
+  const groups: Record<string, GroupSelection> = {};
   for (const id of providers) {
     if (!/^[a-z][a-z0-9-]*$/.test(id)) {
       errors.push(`providers: invalid provider id "${id}"`);
     }
     providerBlocks[id] = obj(c[id]);
+    groups[id] = normalizeGroups(providerBlocks[id].groups, `${id}.groups`, errors);
   }
 
   const badges: BadgeRule[] = [];
@@ -266,6 +312,7 @@ export function normalizeConfig(raw: unknown, ctx: { gatewayStateDir: string }):
   const config: ModelBadgeConfig = {
     providers,
     providerBlocks,
+    groups,
     agentId: typeof c.agentId === "string" && c.agentId ? c.agentId : "main",
     operators: Array.isArray(c.operators) ? c.operators.map(String).filter(Boolean) : [],
     badges,

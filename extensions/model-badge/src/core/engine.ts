@@ -9,7 +9,7 @@ import { createAdoptedStore, type AdoptedStore } from "./adopted.js";
 import { createImageBases, type BaseArtGenerator, type ImageBases } from "./baseart.js";
 import { createAssetCache, type AssetCache, type AssetJob } from "./cache.js";
 import type { Clock, Logger } from "./clock.js";
-import { normalizeConfig, type ModelBadgeConfig } from "./config.js";
+import { ALL_GROUPS, groupSelected, normalizeConfig, type ModelBadgeConfig } from "./config.js";
 import {
   createView,
   targetIdOf as targetIdOfRef,
@@ -21,7 +21,13 @@ import type { CoreFs } from "./fsio.js";
 import { sha256 } from "./hash.js";
 import { createLease, type Lease } from "./lease.js";
 import type { BaseParams } from "./motif.js";
-import { targetKey, type ApplyResult, type BadgeProvider, type TargetRef } from "./provider.js";
+import {
+  parseTargetKey,
+  targetKey,
+  type ApplyResult,
+  type BadgeProvider,
+  type TargetRef,
+} from "./provider.js";
 import { isStamped, type Renderer } from "./render.js";
 import { overrideSnapshot, type SessionEntryLike } from "./resolve.js";
 import { createStyleStore, seededRules, type StyleRule } from "./style.js";
@@ -511,11 +517,34 @@ export function createEngine(deps: EngineDeps) {
 
   // ---------------- targets ----------------
 
+  // Operator addendum (§2c target selection): `<provider>.groups`. A group this
+  // instance does not drive is skipped entirely — never tracked, so never captured
+  // (§2c.8), generated for, queued or painted. Read from the live plugin config.
+  function driven(ref: TargetRef): boolean {
+    if (ref.kind !== "group") {
+      return true;
+    }
+    const sel = (inputs?.pluginConfig ?? deps.config).groups?.[provider.id] ?? ALL_GROUPS;
+    return groupSelected(sel, ref.idLower);
+  }
+
+  // A group that stops being driven drops out of `targets` on the next input read (the
+  // queue skips it too); its stored state (adopted artwork, image bases, applied record)
+  // is kept, so including it again later carries on where it left off rather than
+  // re-capturing another agent's paint.
+
+  function notDrivenOr(k: string): string {
+    const ref = parseTargetKey(k);
+    return ref && !driven(ref)
+      ? `this group is not driven by this agent (${provider.id}.groups)`
+      : "unknown target";
+  }
+
   function targetsFromStore(): Map<string, TargetInfo> {
     const out = new Map<string, TargetInfo>();
     for (const sessionKey of Object.keys(inputs?.store ?? {})) {
       const ref = provider.targetForSessionKey(sessionKey);
-      if (!ref || ref.kind === "profile") {
+      if (!ref || ref.kind === "profile" || !driven(ref)) {
         continue;
       }
       const k = targetKey(ref);
@@ -531,7 +560,7 @@ export function createEngine(deps: EngineDeps) {
     }
     // Provider-listed targets with no session yet use the default model.
     for (const [k, t] of targets) {
-      if (!out.has(k) && t.listed) {
+      if (!out.has(k) && t.listed && driven(t.ref)) {
         out.set(k, t);
       }
     }
@@ -573,7 +602,7 @@ export function createEngine(deps: EngineDeps) {
     setHealth("daemon", null);
     const live = new Map(r.targets.map((t) => [targetKey(t.ref), t] as const));
     for (const [k, t] of live) {
-      if (!t.member) {
+      if (!t.member || !driven(t.ref)) {
         continue;
       }
       gone.delete(k);
@@ -739,7 +768,7 @@ export function createEngine(deps: EngineDeps) {
     }
     let changed = false;
     for (const [k, t] of targets) {
-      if (!awaitingAdoption(t)) {
+      if (!driven(t.ref) || !awaitingAdoption(t)) {
         continue;
       }
       const key = view.imageWant(t.ref).key;
@@ -843,6 +872,9 @@ export function createEngine(deps: EngineDeps) {
     }
     if (inputsBroken.length) {
       return { action: "skip", why: "inputs-broken" };
+    }
+    if (!driven(t.ref)) {
+      return { action: "skip", why: "not-driven" };
     }
     if (awaitingAdoption(t)) {
       status.waiting[k] = {
@@ -1529,7 +1561,7 @@ export function createEngine(deps: EngineDeps) {
     async repaint(k: string) {
       return writerOnly(async () => {
         if (!targets.has(k)) {
-          return { ok: false as const, message: "unknown target" };
+          return { ok: false as const, message: notDrivenOr(k) };
         }
         delete status.parked[k];
         // Forget the recorded hash so the target is sent again, but keep what it shows:
@@ -1582,7 +1614,7 @@ export function createEngine(deps: EngineDeps) {
       return writerOnly(async () => {
         const t = targets.get(k);
         if (!t || !view) {
-          return { ok: false as const, message: "unknown target" };
+          return { ok: false as const, message: notDrivenOr(k) };
         }
         if (t.ref.kind === "profile" && inputs?.profileFile) {
           return { ok: false as const, message: "the profile uses profileBaseImage" };
@@ -1612,7 +1644,7 @@ export function createEngine(deps: EngineDeps) {
       return writerOnly(async () => {
         const t = targets.get(k);
         if (!t || !view) {
-          return { ok: false as const, message: "unknown target" };
+          return { ok: false as const, message: notDrivenOr(k) };
         }
         const key = view.imageWant(t.ref).key;
         if (!adopted.record(key)?.sha) {
