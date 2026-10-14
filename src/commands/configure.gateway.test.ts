@@ -50,6 +50,8 @@ vi.mock("./onboard-helpers.js", async (importActual) => {
 
 import { promptGatewayConfig } from "./configure.gateway.js";
 
+const CONTROL_UI_ON: OpenClawConfig = { gateway: { controlUi: { enabled: true } } };
+
 function makeRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -168,6 +170,7 @@ describe("promptGatewayConfig", () => {
   it("adds Tailscale origin to controlUi.allowedOrigins when tailscale serve is enabled", async () => {
     mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
     const { result } = await runGatewayPrompt({
+      baseConfig: CONTROL_UI_ON,
       // bind=loopback, auth=token, tailscale=serve
       selectQueue: ["loopback", "token", "serve", "plaintext"],
       textQueue: ["18789", "my-token"],
@@ -182,6 +185,7 @@ describe("promptGatewayConfig", () => {
   it("adds Tailscale origin to controlUi.allowedOrigins when tailscale funnel is enabled", async () => {
     mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
     const { result } = await runGatewayPrompt({
+      baseConfig: CONTROL_UI_ON,
       // bind=loopback, auth=password (funnel requires password), tailscale=funnel
       selectQueue: ["loopback", "password", "funnel"],
       textQueue: ["18789", "my-password"],
@@ -191,6 +195,18 @@ describe("promptGatewayConfig", () => {
     expect(result.config.gateway?.controlUi?.allowedOrigins).toContain(
       "https://my-host.tail1234.ts.net",
     );
+  });
+
+  it("does not add Tailscale origin when Control UI is unset (off by default)", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
+    const { result } = await runGatewayPrompt({
+      selectQueue: ["loopback", "token", "serve", "plaintext"],
+      textQueue: ["18789", "my-token"],
+      confirmResult: true,
+      authConfigFactory: ({ mode, token }) => ({ mode, token }),
+    });
+    expect(result.config.gateway?.controlUi).toBeUndefined();
+    expect(mocks.getTailnetHostname).not.toHaveBeenCalled();
   });
 
   it("does not add Tailscale origin when getTailnetHostname fails", async () => {
@@ -210,6 +226,7 @@ describe("promptGatewayConfig", () => {
       baseConfig: {
         gateway: {
           controlUi: {
+            enabled: true,
             allowedOrigins: ["HTTPS://MY-HOST.TAIL1234.TS.NET"],
           },
         },
@@ -229,6 +246,7 @@ describe("promptGatewayConfig", () => {
   it("formats IPv6 Tailscale fallback addresses as valid HTTPS origins", async () => {
     mocks.getTailnetHostname.mockResolvedValue("fd7a:115c:a1e0::12");
     const { result } = await runGatewayPrompt({
+      baseConfig: CONTROL_UI_ON,
       selectQueue: ["loopback", "token", "serve", "plaintext"],
       textQueue: ["18789", "my-token"],
       confirmResult: true,

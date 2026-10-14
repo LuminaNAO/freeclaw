@@ -131,16 +131,38 @@ describe("configureGatewayForOnboarding", () => {
     expect(authConfig?.password).not.toBe("undefined");
   });
 
-  it("seeds control UI allowed origins for non-loopback binds", async () => {
+  it("seeds control UI allowed origins for non-loopback binds when the UI is enabled", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
     const result = await runGatewayConfig({
       bindChoice: "lan",
+      nextConfig: { gateway: { controlUi: { enabled: true } } },
     });
 
     expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toEqual([
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
+  });
+
+  it("writes nothing for the Control UI on fresh non-loopback setup (default off)", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+    const result = await runGatewayConfig({
+      bindChoice: "lan",
+    });
+
+    expect(result.nextConfig.gateway?.controlUi).toBeUndefined();
+  });
+
+  it("writes nothing for the Control UI on fresh loopback + tailscale serve setup", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+    mocks.getTailnetHostname.mockClear();
+    mocks.getTailnetHostname.mockResolvedValue("my-host.tail1234.ts.net");
+    const result = await runGatewayConfig({
+      tailscaleChoice: "serve",
+    });
+
+    expect(result.nextConfig.gateway?.controlUi).toBeUndefined();
+    expect(mocks.getTailnetHostname).not.toHaveBeenCalled();
   });
 
   it("honors secretInputMode=ref for gateway password prompts", async () => {

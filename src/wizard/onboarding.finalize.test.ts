@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const runTui = vi.hoisted(() => vi.fn(async () => {}));
@@ -84,8 +85,9 @@ vi.mock("../daemon/systemd.js", async (importOriginal) => {
   };
 });
 
+const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock("../infra/control-ui-assets.js", () => ({
-  ensureControlUiAssetsBuilt: vi.fn(async () => ({ ok: true })),
+  ensureControlUiAssetsBuilt,
 }));
 
 vi.mock("../terminal/restore.js", () => ({
@@ -259,6 +261,139 @@ describe("finalizeOnboardingWizard", () => {
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
     expectFirstOnboardingInstallPlanCallOmitsToken();
     expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
+  });
+
+  describe("Control UI default off", () => {
+    async function runFinalize(params: {
+      controlUi?: { enabled?: boolean };
+      hatch?: "tui" | "web" | "later";
+    }) {
+      const hatchOptions: Array<{ value: unknown; label: string }> = [];
+      const select = vi.fn(
+        async (p: { message: string; options: Array<{ value: unknown; label: string }> }) => {
+          if (p.message === "How do you want to hatch your bot?") {
+            hatchOptions.push(...p.options);
+            return params.hatch ?? "later";
+          }
+          return "later";
+        },
+      );
+      const note = vi.fn(async (_message: string, _title?: string) => {});
+      const outro = vi.fn(async (_message?: string) => {});
+      const prompter = buildWizardPrompter({
+        select: select as never,
+        note,
+        outro,
+        confirm: vi.fn(async () => false),
+      });
+      const nextConfig = params.controlUi
+        ? { gateway: { auth: { mode: "token" as const }, controlUi: params.controlUi } }
+        : { gateway: { auth: { mode: "token" as const } } };
+      await finalizeOnboardingWizard({
+        flow: "quickstart",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: false,
+        },
+        baseConfig: {},
+        nextConfig,
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          gatewayToken: "session-token",
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime: createRuntime(),
+      });
+      const notes = note.mock.calls.map(([message, title]) => ({
+        message,
+        title: title ?? "",
+      }));
+      const allText = [
+        ...notes.map((n) => `${n.title}\n${n.message}`),
+        ...outro.mock.calls.map(([message]) => message ?? ""),
+      ].join("\n");
+      return { notes, outro, hatchOptions, allText };
+    }
+
+    it("unset: prints no dashboard URL, says Control UI is off, prints how to enable it", async () => {
+      ensureControlUiAssetsBuilt.mockClear();
+      const { notes, outro, hatchOptions, allText } = await runFinalize({});
+
+      expect(allText).not.toContain("Web UI:");
+      expect(allText).not.toContain("Dashboard link");
+      expect(allText).not.toContain("http://127.0.0.1:18789");
+      expect(allText).not.toMatch(/\bdashboard --no-open/);
+      expect(allText).toContain("Control UI: off");
+      expect(allText).toContain("config set gateway.controlUi.enabled true");
+      expect(notes.some((n) => n.title === "Control UI")).toBe(false);
+      expect(hatchOptions.map((o) => o.value)).toEqual(["tui", "later"]);
+      expect(String(outro.mock.calls.at(-1)?.[0])).toContain(
+        "config set gateway.controlUi.enabled true",
+      );
+      expect(ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+    });
+
+    it("unset: the gateway WebSocket URL is still shown", async () => {
+      const { allText } = await runFinalize({});
+      expect(allText).toContain("Gateway WS: ws://127.0.0.1:18789");
+    });
+
+    it("enabled: true: prints the dashboard URL and offers the Web UI as before", async () => {
+      ensureControlUiAssetsBuilt.mockClear();
+      const { notes, hatchOptions, allText } = await runFinalize({ controlUi: { enabled: true } });
+
+      expect(allText).toContain("Web UI: http://127.0.0.1:18789");
+      expect(allText).not.toContain("Control UI: off");
+      expect(notes.some((n) => n.title === "Control UI")).toBe(true);
+      expect(hatchOptions.map((o) => o.value)).toEqual(["tui", "web", "later"]);
+      expect(ensureControlUiAssetsBuilt).toHaveBeenCalledTimes(1);
+    });
+
+    it("enabled: true and choosing the Web UI shows the dashboard link", async () => {
+      const { allText } = await runFinalize({ controlUi: { enabled: true }, hatch: "web" });
+      expect(allText).toContain("Dashboard link (with token): http://127.0.0.1:18789");
+    });
+
+    it("writes nothing for the UI into the config", async () => {
+      const nextConfig: OpenClawConfig = { gateway: { auth: { mode: "token" } } };
+      const before = structuredClone(nextConfig);
+      await finalizeOnboardingWizard({
+        flow: "quickstart",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: false,
+        },
+        baseConfig: {},
+        nextConfig,
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          gatewayToken: "session-token",
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter: buildWizardPrompter({
+          select: vi.fn(async () => "later") as never,
+          confirm: vi.fn(async () => false),
+        }),
+        runtime: createRuntime(),
+      });
+      expect(nextConfig).toEqual(before);
+      expect(nextConfig.gateway?.controlUi).toBeUndefined();
+    });
   });
 
   it("stops after a scheduled restart instead of reinstalling the service", async () => {

@@ -88,7 +88,7 @@ vi.mock("./onboard-remote.js", () => ({
 }));
 
 vi.mock("./onboard-skills.js", () => ({
-  setupSkills: vi.fn(),
+  setupSkills: vi.fn(async (cfg: OpenClawConfig) => cfg),
 }));
 
 vi.mock("./onboard-channels.js", () => ({
@@ -166,6 +166,60 @@ describe("runConfigureWizard", () => {
   it("configure over an existing config never adds exec defaults", async () => {
     const written = await runLocalOnly({ exists: true, config: { gateway: { mode: "remote" } } });
     expect(written?.tools?.exec).toBeUndefined();
+  });
+
+  describe("Control UI default off", () => {
+    const runSkillsOnly = async (config: Record<string, unknown>) => {
+      mocks.note.mockClear();
+      mocks.ensureControlUiAssetsBuilt.mockClear();
+      mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        exists: true,
+        valid: true,
+        config,
+        issues: [],
+      });
+      mocks.resolveGatewayPort.mockReturnValue(18789);
+      mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+      mocks.resolveControlUiLinks.mockReturnValue({
+        httpUrl: "http://127.0.0.1:18789/",
+        wsUrl: "ws://127.0.0.1:18789",
+      });
+      mocks.summarizeExistingConfig.mockReturnValue("");
+      mocks.createClackPrompter.mockReturnValue({});
+      mocks.clackIntro.mockResolvedValue(undefined);
+      mocks.clackOutro.mockResolvedValue(undefined);
+      mocks.clackSelect.mockImplementation(async () => "local");
+      await runConfigureWizard(
+        { command: "configure", sections: ["skills"] },
+        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      );
+      return mocks.note.mock.calls.map(([message, title]) => ({
+        message: String(message),
+        title: String(title ?? ""),
+      }));
+    };
+
+    it("unset: prints Control UI: off with the enable command and no Web UI URL", async () => {
+      const notes = await runSkillsOnly({ gateway: { mode: "local" } });
+      const final = notes.at(-1);
+      expect(final?.message).toContain("Control UI: off");
+      expect(final?.message).toContain("config set gateway.controlUi.enabled true");
+      expect(final?.message).not.toContain("Web UI:");
+      expect(final?.message).toContain("Gateway WS: ws://127.0.0.1:18789");
+      expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+    });
+
+    it("enabled: true prints the Web UI URL as before", async () => {
+      const notes = await runSkillsOnly({
+        gateway: { mode: "local", controlUi: { enabled: true } },
+      });
+      const final = notes.at(-1);
+      expect(final?.title).toBe("Control UI");
+      expect(final?.message).toContain("Web UI: http://127.0.0.1:18789/");
+      expect(final?.message).not.toContain("Control UI: off");
+      expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("exits with code 1 when configure wizard is cancelled", async () => {
