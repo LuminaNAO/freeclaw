@@ -1456,11 +1456,24 @@ description: test skill
       gateway: {
         bind: "lan",
         auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+        controlUi: { enabled: true },
       },
     };
 
     const res = await audit(cfg);
     expectFinding(res, "gateway.control_ui.allowed_origins_required", "critical");
+  });
+
+  it("does not flag missing allowed origins when Control UI is unset (off by default)", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectNoFinding(res, "gateway.control_ui.allowed_origins_required");
   });
 
   it("flags wildcard Control UI origins by exposure level", async () => {
