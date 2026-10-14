@@ -1,5 +1,6 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { withTempConfig } from "../gateway/test-temp-config.js";
 import { captureEnv } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -446,7 +447,7 @@ describe("statusCommand", () => {
       "Security audit",
       "Summary:",
       "CRITICAL",
-      "Dashboard",
+      "Control UI",
       "macos 14.0 (arm64)",
       "Memory",
       "Channels",
@@ -470,6 +471,29 @@ describe("statusCommand", () => {
           line.includes("openclaw --profile isolated status --all"),
       ),
     ).toBe(true);
+  });
+
+  it("shows Control UI: off (not an error) when gateway.controlUi.enabled is unset", async () => {
+    const logs = await runStatusAndGetLogs();
+    const line = logs.find((l) => l.includes("Control UI"));
+    expect(line).toBeDefined();
+    expect(line).toMatch(/Control UI.*off/);
+    expect(logs.some((l) => /Dashboard.*http/.test(l))).toBe(false);
+    expect(logs.some((l) => l.includes("disabled") && l.includes("Dashboard"))).toBe(false);
+  });
+
+  it("shows the dashboard URL when gateway.controlUi.enabled is true", async () => {
+    const cfg = { session: {}, gateway: { controlUi: { enabled: true } } };
+    mocks.loadConfig.mockReturnValue(cfg);
+    await withTempConfig({
+      cfg,
+      prefix: "status-control-ui-on-",
+      run: async () => {
+        const logs = await runStatusAndGetLogs();
+        expect(logs.some((l) => /Dashboard.*http:\/\//.test(l))).toBe(true);
+        expect(logs.some((l) => /Control UI.*off/.test(l))).toBe(false);
+      },
+    });
   });
 
   it("shows gateway auth when reachable", async () => {
