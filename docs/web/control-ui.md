@@ -15,6 +15,9 @@ The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+The Control UI is **off by default**. Enable it with
+`openclaw config set gateway.controlUi.enabled true` and restart the Gateway.
+
 ## Quick open (local)
 
 If the Gateway is running on the same computer, open:

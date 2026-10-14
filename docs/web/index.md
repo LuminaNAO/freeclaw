@@ -21,10 +21,17 @@ This page focuses on bind modes, security, and web-facing surfaces.
 When `hooks.enabled=true`, the Gateway also exposes a small webhook endpoint on the same HTTP server.
 See [Gateway configuration](/gateway/configuration) → `hooks` for auth + payloads.
 
-## Config (default-on)
+## Config (opt-in)
 
-The Control UI is **enabled by default** when assets are present (`dist/control-ui`).
-You can control it via config:
+The Control UI is **off by default**. When `gateway.controlUi.enabled` is unset the Gateway serves
+no Control UI assets or routes; WebSocket clients (CLI, TUI, nodes, apps) are unaffected.
+Enable it with:
+
+```bash
+openclaw config set gateway.controlUi.enabled true
+```
+
+or in config:
 
 ```json5
 {
