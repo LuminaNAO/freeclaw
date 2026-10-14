@@ -12,8 +12,9 @@ are already in the `toolCall.arguments` stored in the session transcript.
 
 ## Finding
 
-**The fault is not in this repo.** It is in the provider proxy (cloudburst), inside the
-`@openclaw/ai` library it bundles (version 2026.7.1-2), in `dist/json-parse-*.mjs`:
+**The fault is not in this repo.** The root cause was the repair-first parse in the
+`@openclaw/ai` library bundled in the provider proxy (cloudburst), version 2026.7.1-2, in
+`dist/json-parse-*.mjs`:
 
 - `parseStreamingJson(partialJson)` calls `parseJsonWithRepair` **first**, even when the buffer
   is complete, valid JSON.
@@ -56,7 +57,8 @@ sees the `openai-completions` API from cloudburst; the corruption happens on clo
    raw or JSON-encoded.
 3. **The upstream function reproduces the bug directly.** Calling cloudburst's bundled
    `parseStreamingJson` on `JSON.stringify({command: "for x in c:\n    t = ...\n"})`, which is
-   valid JSON, returns `"for x in c:\\n    t = ...\\n"`. `"while True:\n    if not b:\n        break\n..."` keeps the first real newline (`True:` is
+   valid JSON, returns `"for x in c:\\n    t = ...\\n"`.
+   `"while True:\n    if not b:\n        break\n..."` keeps the first real newline (`True:` is
    not a drive) and mangles everything after `b:`. That is exactly the reported shape.
 4. **Transcripts match.** Across the operator's local transcripts there are 147 tool-call
    string arguments with the `:` + literal `\n` + indentation shape. All are
@@ -71,21 +73,23 @@ in transcript arguments (`"***"` in sed/python redaction one-liners the model wr
 `prefix…suffix` hash abbreviations in prose) are the model's own text. No freeclaw or
 cloudburst code path produced them.
 
-## Fix
+## Resolution
 
-The fix belongs in cloudburst, not here. Freeclaw must not add a "repair backslash-n"
-heuristic in exec/write/edit, because that would corrupt legitimate escapes (`"a\nb"`, raw
-strings, Windows paths).
+Fixed in the producer, by a dependency upgrade. Cloudburst moved its bundled `@openclaw/ai`
+from 2026.7.1-2 to 2026.10.3 with no custom patch. In 2026.10.3, the final tool-call parse
+parses valid JSON first and only repairs when parsing fails. The operator verified this end to
+end: a live tool call containing `for x in c:` now comes through with 0 literal backslash-n.
 
-Options for cloudburst (operator's repo):
+The in-stream preview parse in 2026.10.3 still runs the repair first. That preview never leaves
+cloudburst, because cloudburst only sends tool-call arguments at `toolcall_end`, as one
+`tool_calls` chunk built from the final parse.
 
-- Extend its existing `patches/@openclaw__ai@2026.7.1-2.patch` so that `parseJsonWithRepair`
-  (or `parseStreamingJson`) returns `JSON.parse(json)` when the input is already valid JSON, and
-  only repairs on failure.
-- Or move to a newer `@openclaw/ai`. 2026.10.x adds `parseTerminalToolCallArguments`, which
-  admits completed tool arguments through a plain JSON parse first and only repairs on failure
-  with `preserveValidControlEscapes: true`. This was checked by reading the code, not by
-  running it.
+There is no freeclaw code change. Freeclaw must not add a "repair backslash-n" heuristic in
+exec/write/edit, because that would corrupt legitimate escapes (`"a\nb"`, raw strings, Windows
+paths). The tests in this branch guard freeclaw's own byte-exact path.
+
+_Superseded:_ an earlier draft of this note listed two open options, patching the 2026.7.1-2
+dependency or upgrading it. Those are no longer open; the upgrade above is the resolution.
 
 ## Tests (this repo)
 
@@ -99,6 +103,7 @@ Options for cloudburst (operator's repo):
   `result()`, and after `sanitizeToolCallInputs`.
 - A signature test with a faithful reduction of the upstream `repairJson` drive-letter branch.
   It shows that branch rewrites valid `c:` + newline JSON, while freeclaw's path does not.
+  It stays as a record of the old failure (fixed in cloudburst by the upgrade above).
 - Redaction: source code with no secrets is never changed. A real `sk-…` / Bearer shape is still
   masked in log/display text. Tool arguments that contain a secret reach the tool, and the
   transcript, unchanged.
