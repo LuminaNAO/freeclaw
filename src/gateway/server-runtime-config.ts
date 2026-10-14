@@ -4,6 +4,7 @@ import type {
   GatewayTailscaleConfig,
   loadConfig,
 } from "../config/config.js";
+import { isControlUiEnabled } from "../config/control-ui-enabled.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
@@ -72,8 +73,7 @@ export async function resolveGatewayRuntimeConfig(params: {
       );
     }
   }
-  const controlUiEnabled =
-    params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
+  const controlUiEnabled = params.controlUiEnabled ?? isControlUiEnabled(params.cfg);
   const openAiChatCompletionsConfig = params.cfg.gateway?.http?.endpoints?.chatCompletions;
   const openAiChatCompletionsEnabled =
     params.openAiChatCompletionsEnabled ?? openAiChatCompletionsConfig?.enabled ?? false;

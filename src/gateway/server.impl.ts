@@ -231,7 +231,7 @@ export type GatewayServerOptions = {
   host?: string;
   /**
    * If false, do not serve the browser Control UI.
-   * Default: config `gateway.controlUi.enabled` (or true when absent).
+   * Default: config `gateway.controlUi.enabled` (off when absent).
    */
   controlUiEnabled?: boolean;
   /**
