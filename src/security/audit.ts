@@ -7,6 +7,7 @@ import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
+import { isControlUiEnabled } from "../config/control-ui-enabled.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
@@ -345,7 +346,7 @@ function collectGatewayConfigFindings(
   const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
-  const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
+  const controlUiEnabled = isControlUiEnabled(cfg);
   const controlUiAllowedOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
     .map((value) => value.trim())
     .filter(Boolean);
