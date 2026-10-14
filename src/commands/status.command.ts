@@ -1,6 +1,7 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { resolveGatewayPort } from "../config/config.js";
+import { isControlUiEnabled } from "../config/control-ui-enabled.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
@@ -239,10 +240,10 @@ export async function statusCommand(
     runtime.log("");
   }
 
+  const controlUiEnabled = isControlUiEnabled(cfg);
   const dashboard = (() => {
-    const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
     if (!controlUiEnabled) {
-      return "disabled";
+      return null;
     }
     const links = resolveControlUiLinks({
       port: resolveGatewayPort(cfg),
@@ -408,7 +409,7 @@ export async function statusCommand(
   const gitLabel = formatGitInstallLabel(update);
 
   const overviewRows = [
-    { Item: "Dashboard", Value: dashboard },
+    dashboard ? { Item: "Dashboard", Value: dashboard } : { Item: "Control UI", Value: "off" },
     { Item: "OS", Value: `${osSummary.label} · node ${process.versions.node}` },
     {
       Item: "Tailscale",

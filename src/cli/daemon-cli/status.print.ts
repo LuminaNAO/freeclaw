@@ -1,4 +1,5 @@
 import { resolveControlUiLinks } from "../../commands/onboard-helpers.js";
+import { isControlUiEnabled } from "../../config/control-ui-enabled.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -147,9 +148,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       `${label("Gateway:")} bind=${infoText(status.gateway.bindMode)} (${infoText(bindHost)}), port=${infoText(String(status.gateway.port))} (${infoText(status.gateway.portSource)})`,
     );
     defaultRuntime.log(`${label("Probe target:")} ${infoText(status.gateway.probeUrl)}`);
-    const controlUiEnabled = status.config?.daemon?.controlUi?.enabled ?? true;
+    const controlUiEnabled = isControlUiEnabled({
+      gateway: { controlUi: status.config?.daemon?.controlUi },
+    });
     if (!controlUiEnabled) {
-      defaultRuntime.log(`${label("Dashboard:")} ${warnText("disabled")}`);
+      defaultRuntime.log(`${label("Control UI:")} ${infoText("off")}`);
     } else {
       const links = resolveControlUiLinks({
         port: status.gateway.port,
@@ -185,9 +188,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       if (rpc.url) {
         defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
       }
-      const lines = String(rpc.error ?? "unknown")
-        .split(/\r?\n/)
-        .filter(Boolean);
+      const lines = (rpc.error ?? "unknown").split(/\r?\n/).filter(Boolean);
       for (const line of lines.slice(0, 12)) {
         defaultRuntime.error(`  ${errorText(line)}`);
       }

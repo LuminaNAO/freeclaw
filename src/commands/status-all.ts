@@ -8,6 +8,7 @@ import {
   readConfigFileSnapshot,
   resolveGatewayPort,
 } from "../config/config.js";
+import { isControlUiEnabled } from "../config/control-ui-enabled.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveNodeService } from "../daemon/node-service.js";
 import type { GatewayService } from "../daemon/service.js";
@@ -238,7 +239,7 @@ export async function statusAllCommand(
           })()
         : null;
 
-    const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
+    const controlUiEnabled = isControlUiEnabled(cfg);
     const dashboard = controlUiEnabled
       ? resolveControlUiLinks({
           port,
@@ -283,9 +284,7 @@ export async function statusAllCommand(
         Item: "Config",
         Value: snap?.path?.trim() ? snap.path.trim() : "(unknown config path)",
       },
-      dashboard
-        ? { Item: "Dashboard", Value: dashboard }
-        : { Item: "Dashboard", Value: "disabled" },
+      dashboard ? { Item: "Dashboard", Value: dashboard } : { Item: "Control UI", Value: "off" },
       {
         Item: "Tailscale",
         Value:
