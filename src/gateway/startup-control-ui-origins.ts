@@ -9,7 +9,10 @@ export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   writeConfig: (config: OpenClawConfig) => Promise<void>;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<OpenClawConfig> {
-  const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(params.config);
+  // Only an enabled Control UI needs browser origins; a disabled UI writes nothing.
+  const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(params.config, {
+    requireControlUiEnabled: true,
+  });
   if (!seeded.seededOrigins || !seeded.bind) {
     return params.config;
   }

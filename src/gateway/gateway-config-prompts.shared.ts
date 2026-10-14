@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { isControlUiEnabled } from "../config/control-ui-enabled.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { isIpv6Address, parseCanonicalIpAddress } from "../shared/net/ip.js";
 
@@ -69,6 +70,10 @@ export async function maybeAddTailnetOriginToControlUiAllowedOrigins(params: {
   tailscaleBin?: string | null;
 }): Promise<OpenClawConfig> {
   if (params.tailscaleMode !== "serve" && params.tailscaleMode !== "funnel") {
+    return params.config;
+  }
+  // Browser origins only matter for the Control UI; write nothing while it is off.
+  if (!isControlUiEnabled(params.config)) {
     return params.config;
   }
   const tsOrigin = await getTailnetHostname(undefined, params.tailscaleBin ?? undefined)

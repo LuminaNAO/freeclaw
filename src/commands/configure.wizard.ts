@@ -3,6 +3,7 @@ import nodePath from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
+import { CONTROL_UI_ENABLE_COMMAND, isControlUiEnabled } from "../config/control-ui-enabled.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -633,9 +634,12 @@ export async function runConfigureWizard(
       }
     }
 
-    const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);
-    if (!controlUiAssets.ok && controlUiAssets.message) {
-      runtime.error(controlUiAssets.message);
+    const controlUiEnabled = isControlUiEnabled(nextConfig);
+    if (controlUiEnabled) {
+      const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);
+      if (!controlUiAssets.ok && controlUiAssets.message) {
+        runtime.error(controlUiAssets.message);
+      }
     }
 
     const bind = nextConfig.gateway?.bind ?? "loopback";
@@ -689,13 +693,21 @@ export async function runConfigureWizard(
       : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
 
     note(
-      [
-        `Web UI: ${links.httpUrl}`,
-        `Gateway WS: ${links.wsUrl}`,
-        gatewayStatusLine,
-        "Docs: https://docs.openclaw.ai/web/control-ui",
-      ].join("\n"),
-      "Control UI",
+      (controlUiEnabled
+        ? [
+            `Web UI: ${links.httpUrl}`,
+            `Gateway WS: ${links.wsUrl}`,
+            gatewayStatusLine,
+            "Docs: https://docs.openclaw.ai/web/control-ui",
+          ]
+        : [
+            "Control UI: off",
+            `Enable it: ${formatCliCommand(CONTROL_UI_ENABLE_COMMAND)}`,
+            `Gateway WS: ${links.wsUrl}`,
+            gatewayStatusLine,
+          ]
+      ).join("\n"),
+      controlUiEnabled ? "Control UI" : "Gateway",
     );
 
     outro("Configure complete.");

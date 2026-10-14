@@ -23,6 +23,7 @@ import {
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { CONTROL_UI_ENABLE_COMMAND, isControlUiEnabled } from "../config/control-ui-enabled.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
@@ -251,8 +252,15 @@ export async function finalizeOnboardingWizard(
     }
   }
 
-  const controlUiEnabled =
-    nextConfig.gateway?.controlUi?.enabled ?? baseConfig.gateway?.controlUi?.enabled ?? true;
+  // The Control UI is opt-in. Onboarding writes nothing for it; an explicit
+  // setting in the new config wins, otherwise the existing config decides.
+  const controlUiEnabled = isControlUiEnabled({
+    gateway: {
+      controlUi: {
+        enabled: nextConfig.gateway?.controlUi?.enabled ?? baseConfig.gateway?.controlUi?.enabled,
+      },
+    },
+  });
   if (!opts.skipUi && controlUiEnabled) {
     const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);
     if (!controlUiAssets.ok && controlUiAssets.message) {
@@ -321,18 +329,26 @@ export async function finalizeOnboardingWizard(
     .catch(() => false);
 
   await prompter.note(
-    [
-      `Web UI: ${links.httpUrl}`,
-      settings.authMode === "token" && settings.gatewayToken
-        ? `Web UI (with token): ${authedUrl}`
-        : undefined,
-      `Gateway WS: ${links.wsUrl}`,
-      gatewayStatusLine,
-      "Docs: https://docs.openclaw.ai/web/control-ui",
-    ]
+    (controlUiEnabled
+      ? [
+          `Web UI: ${links.httpUrl}`,
+          settings.authMode === "token" && settings.gatewayToken
+            ? `Web UI (with token): ${authedUrl}`
+            : undefined,
+          `Gateway WS: ${links.wsUrl}`,
+          gatewayStatusLine,
+          "Docs: https://docs.openclaw.ai/web/control-ui",
+        ]
+      : [
+          "Control UI: off",
+          `Enable it: ${formatCliCommand(CONTROL_UI_ENABLE_COMMAND)}`,
+          `Gateway WS: ${links.wsUrl}`,
+          gatewayStatusLine,
+        ]
+    )
       .filter(Boolean)
       .join("\n"),
-    "Control UI",
+    controlUiEnabled ? "Control UI" : "Gateway",
   );
 
   let controlUiOpened = false;
@@ -355,15 +371,23 @@ export async function finalizeOnboardingWizard(
     }
 
     await prompter.note(
-      [
-        "Gateway token: shared auth for the Gateway + Control UI.",
-        "Stored in: ~/.openclaw/openclaw.json (gateway.auth.token) or OPENCLAW_GATEWAY_TOKEN.",
-        `View token: ${formatCliCommand("openclaw config get gateway.auth.token")}`,
-        `Generate token: ${formatCliCommand("openclaw doctor --generate-gateway-token")}`,
-        "Web UI keeps dashboard URL tokens in memory for the current tab and strips them from the URL after load.",
-        `Open the dashboard anytime: ${formatCliCommand("openclaw dashboard --no-open")}`,
-        "If prompted: paste the token into Control UI settings (or use the tokenized dashboard URL).",
-      ].join("\n"),
+      (controlUiEnabled
+        ? [
+            "Gateway token: shared auth for the Gateway + Control UI.",
+            "Stored in: ~/.openclaw/openclaw.json (gateway.auth.token) or OPENCLAW_GATEWAY_TOKEN.",
+            `View token: ${formatCliCommand("openclaw config get gateway.auth.token")}`,
+            `Generate token: ${formatCliCommand("openclaw doctor --generate-gateway-token")}`,
+            "Web UI keeps dashboard URL tokens in memory for the current tab and strips them from the URL after load.",
+            `Open the dashboard anytime: ${formatCliCommand("openclaw dashboard --no-open")}`,
+            "If prompted: paste the token into Control UI settings (or use the tokenized dashboard URL).",
+          ]
+        : [
+            "Gateway token: shared auth for Gateway clients (CLI, TUI, nodes, apps).",
+            "Stored in: ~/.openclaw/openclaw.json (gateway.auth.token) or OPENCLAW_GATEWAY_TOKEN.",
+            `View token: ${formatCliCommand("openclaw config get gateway.auth.token")}`,
+            `Generate token: ${formatCliCommand("openclaw doctor --generate-gateway-token")}`,
+          ]
+      ).join("\n"),
       "Token",
     );
 
@@ -371,7 +395,7 @@ export async function finalizeOnboardingWizard(
       message: "How do you want to hatch your bot?",
       options: [
         { value: "tui", label: "Hatch in TUI (recommended)" },
-        { value: "web", label: "Open the Web UI" },
+        ...(controlUiEnabled ? [{ value: "web" as const, label: "Open the Web UI" }] : []),
         { value: "later", label: "Do this later" },
       ],
       initialValue: "tui",
@@ -388,7 +412,7 @@ export async function finalizeOnboardingWizard(
         message: hasBootstrap ? "Wake up, my friend!" : undefined,
       });
       launchedTui = true;
-    } else if (hatchChoice === "web") {
+    } else if (hatchChoice === "web" && controlUiEnabled) {
       const browserSupport = await detectBrowserOpenSupport();
       if (browserSupport.ok) {
         controlUiOpened = await openUrl(authedUrl);
@@ -420,7 +444,9 @@ export async function finalizeOnboardingWizard(
       );
     } else {
       await prompter.note(
-        `When you're ready: ${formatCliCommand("openclaw dashboard --no-open")}`,
+        `When you're ready: ${formatCliCommand(
+          controlUiEnabled ? "openclaw dashboard --no-open" : "openclaw tui",
+        )}`,
         "Later",
       );
     }
@@ -444,6 +470,7 @@ export async function finalizeOnboardingWizard(
   await setupOnboardingShellCompletion({ flow, prompter });
 
   const shouldOpenControlUi =
+    controlUiEnabled &&
     !opts.skipUi &&
     settings.authMode === "token" &&
     Boolean(settings.gatewayToken) &&
@@ -568,11 +595,13 @@ export async function finalizeOnboardingWizard(
   );
 
   await prompter.outro(
-    controlUiOpened
-      ? "Onboarding complete. Dashboard opened; keep that tab to control OpenClaw."
-      : seededInBackground
-        ? "Onboarding complete. Web UI seeded in the background; open it anytime with the dashboard link above."
-        : "Onboarding complete. Use the dashboard link above to control OpenClaw.",
+    !controlUiEnabled
+      ? `Onboarding complete. Control UI is off; enable it with: ${formatCliCommand(CONTROL_UI_ENABLE_COMMAND)}`
+      : controlUiOpened
+        ? "Onboarding complete. Dashboard opened; keep that tab to control OpenClaw."
+        : seededInBackground
+          ? "Onboarding complete. Web UI seeded in the background; open it anytime with the dashboard link above."
+          : "Onboarding complete. Use the dashboard link above to control OpenClaw.",
   );
 
   return { launchedTui };

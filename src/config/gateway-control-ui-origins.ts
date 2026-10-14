@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "./config.js";
+import { isControlUiEnabled } from "./control-ui-enabled.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 
 export type GatewayNonLoopbackBindMode = "lan" | "tailnet" | "custom";
@@ -55,7 +56,7 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   if (!isGatewayNonLoopbackBindMode(bind)) {
     return { config, seededOrigins: null, bind: null };
   }
-  if (opts?.requireControlUiEnabled && config.gateway?.controlUi?.enabled === false) {
+  if (opts?.requireControlUiEnabled && !isControlUiEnabled(config)) {
     return { config, seededOrigins: null, bind };
   }
   if (
