@@ -208,9 +208,20 @@ describe("resolveGatewayRuntimeConfig", () => {
           gateway: {
             bind: "lan" as const,
             auth: TOKEN_AUTH,
+            controlUi: { enabled: true },
           },
         },
         expectedError: "non-loopback Control UI requires gateway.controlUi.allowedOrigins",
+      },
+      {
+        name: "allows non-loopback bind without allowed origins when control UI is unset (off)",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: TOKEN_AUTH,
+          },
+        },
+        expectedBindHost: "0.0.0.0",
       },
       {
         name: "allows non-loopback control UI without allowed origins when dangerous fallback is enabled",
@@ -247,6 +258,42 @@ describe("resolveGatewayRuntimeConfig", () => {
       }
       const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
       expect(result.bindHost).toBe(expectedBindHost);
+    });
+  });
+
+  describe("control UI enablement (default off)", () => {
+    it.each([
+      { name: "unset config", cfg: {}, expected: false },
+      {
+        name: "controlUi block without enabled",
+        cfg: { gateway: { controlUi: {} } },
+        expected: false,
+      },
+      {
+        name: "explicitly disabled",
+        cfg: { gateway: { controlUi: { enabled: false } } },
+        expected: false,
+      },
+      {
+        name: "explicitly enabled",
+        cfg: { gateway: { controlUi: { enabled: true } } },
+        expected: true,
+      },
+    ])("$name -> controlUiEnabled=$expected", async ({ cfg, expected }) => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: { ...cfg, gateway: { ...cfg.gateway, bind: "loopback", auth: { mode: "none" } } },
+        port: 18789,
+      });
+      expect(result.controlUiEnabled).toBe(expected);
+    });
+
+    it("lets the explicit option override config", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: { gateway: { bind: "loopback", auth: { mode: "none" } } },
+        port: 18789,
+        controlUiEnabled: true,
+      });
+      expect(result.controlUiEnabled).toBe(true);
     });
   });
 
