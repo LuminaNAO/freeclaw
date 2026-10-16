@@ -91,6 +91,7 @@ These run inside the agent loop or gateway pipeline:
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.
 - **`gateway_start` / `gateway_stop`**: gateway lifecycle events.
+- **`group_memory_created`**: a group's memory folder was first created (`reason: "created"`) or its name changed (`reason: "renamed"`); carries `{ agentId, channel, groupId, name, dir, firstSeen, reason }`, never chat content or member ids. Fire-and-forget.
 
 See [Plugins](/tools/plugin#plugin-hooks) for the hook API and registration details.
 

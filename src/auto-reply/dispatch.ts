@@ -3,6 +3,7 @@ import { updateGroupMemoryMetaOnInbound } from "../agents/group-memory.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGroupSessionKey } from "../config/sessions/group.js";
 import { logVerbose } from "../globals.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
@@ -51,7 +52,7 @@ function recordGroupMemoryMetaOnInbound(ctx: FinalizedMsgContext, cfg: OpenClawC
       return;
     }
     const agentId = resolveSessionAgentId({ sessionKey: ctx.SessionKey, config: cfg });
-    updateGroupMemoryMetaOnInbound({
+    const result = updateGroupMemoryMetaOnInbound({
       workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
       channel: group.channel,
       groupId: group.id,
@@ -63,8 +64,49 @@ function recordGroupMemoryMetaOnInbound(ctx: FinalizedMsgContext, cfg: OpenClawC
       cfg,
       agentId,
     });
+    if (result.event) {
+      emitGroupMemoryCreated(agentId, result.event);
+    }
   } catch (err) {
     logVerbose(`group memory meta update failed: ${String(err)}`);
+  }
+}
+
+/**
+ * group-memory ARCH §8.1: the `group_memory_created` plugin hook, on first creation and
+ * on rename. Fire-and-forget: a slow, failing or throwing handler never delays or fails
+ * the inbound message. The event carries the name and the folder path only (§8.3).
+ */
+function emitGroupMemoryCreated(
+  agentId: string,
+  event: NonNullable<ReturnType<typeof updateGroupMemoryMetaOnInbound>["event"]>,
+): void {
+  try {
+    const hookRunner = getGlobalHookRunner();
+    if (!hookRunner?.hasHooks("group_memory_created")) {
+      return;
+    }
+    const payload = {
+      agentId,
+      channel: event.channel,
+      groupId: event.groupId,
+      name: event.name,
+      dir: event.dir,
+      firstSeen: event.firstSeen,
+      reason: event.reason,
+    };
+    // Detached from this message: the handlers start on a later tick.
+    setImmediate(() => {
+      void Promise.resolve()
+        .then(() =>
+          hookRunner.runGroupMemoryCreated(payload, { agentId, channelId: event.channel }),
+        )
+        .catch((err: unknown) => {
+          logVerbose(`group_memory_created plugin hook failed: ${String(err)}`);
+        });
+    });
+  } catch (err) {
+    logVerbose(`group_memory_created plugin hook failed: ${String(err)}`);
   }
 }
 

@@ -185,6 +185,48 @@ export function resetGroupMemoryMetaThrottleForTests(): void {
   pendingRenamesByDir.clear();
 }
 
+/**
+ * group-memory ARCH §8.1: what a meta.json write means for the `group_memory_created`
+ * hook. "created" on first creation, "renamed" when an existing group's name changes;
+ * ordinary updates carry no event. Name and path only, never chat content or members.
+ */
+export type GroupMemoryEvent = {
+  reason: "created" | "renamed";
+  channel: string;
+  groupId: string;
+  name: string;
+  dir: string;
+  firstSeen: string;
+};
+
+/** §8.2: the starter CONTEXT.md, written on creation when none exists. */
+export const GROUP_MEMORY_STARTER_PURPOSE =
+  "Purpose: (not yet known — learn it from the conversation)";
+
+export function starterGroupContext(name: string): string {
+  const title = name.replace(/[\r\n]+/g, " ").trim();
+  return `# ${title}\n\n${GROUP_MEMORY_STARTER_PURPOSE}\n`;
+}
+
+/**
+ * §8.2: seed CONTEXT.md only when absent. The exclusive create flag means an existing
+ * file (the agent's, or an operator's from the §6 convention) is never overwritten.
+ */
+function seedGroupContextFile(dir: string, name: string): boolean {
+  const file = path.join(dir, GROUP_MEMORY_CONTEXT_FILENAME);
+  try {
+    fs.writeFileSync(file, starterGroupContext(name), { mode: 0o600, flag: "wx" });
+  } catch {
+    return false;
+  }
+  try {
+    fs.chmodSync(file, 0o600);
+  } catch {
+    // best effort
+  }
+  return true;
+}
+
 /** Replace legacy member ids with their current id, keeping order and dropping duplicates. */
 function applyMemberRenames(members: Set<string>, renames: Map<string, string>): Set<string> {
   if (renames.size === 0) {
@@ -219,7 +261,13 @@ export function updateGroupMemoryMetaOnInbound(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
   now?: number;
-}): { dir: string; written: boolean; reason?: "disabled" | "throttled" } {
+}): {
+  dir: string;
+  written: boolean;
+  reason?: "disabled" | "throttled";
+  /** §8.1: set when this write created the group or changed its name. */
+  event?: GroupMemoryEvent;
+} {
   const now = params.now ?? Date.now();
   const enabled = isGroupMemoryEnabled({ cfg: params.cfg, agentId: params.agentId });
   const dir = resolveGroupMemoryDir({
@@ -267,7 +315,20 @@ export function updateGroupMemoryMetaOnInbound(params: {
     ensureDir0700(dir);
     writeFile0600(metaPath, `${JSON.stringify(meta, null, 2)}\n`);
     lastMetaWriteAtByDir.set(dir, now);
-    return { dir, written: true };
+    // §8.2: every later reader has one place to look, even in the group's first minute.
+    seedGroupContextFile(dir, meta.name);
+    return {
+      dir,
+      written: true,
+      event: {
+        reason: "created",
+        channel: meta.channel,
+        groupId: meta.groupId,
+        name: meta.name,
+        dir,
+        firstSeen: meta.firstSeen,
+      },
+    };
   }
 
   const nothingToWrite =
@@ -326,6 +387,22 @@ export function updateGroupMemoryMetaOnInbound(params: {
   lastMetaWriteAtByDir.set(dir, now);
   pendingMembersByDir.delete(dir);
   pendingRenamesByDir.delete(dir);
+  // §8.1: a changed name is a "renamed" event; ordinary updates carry none.
+  const previousName = typeof existing.name === "string" ? existing.name : undefined;
+  if (previousName !== undefined && next.name !== previousName) {
+    return {
+      dir,
+      written: true,
+      event: {
+        reason: "renamed",
+        channel: next.channel,
+        groupId: next.groupId,
+        name: next.name,
+        dir,
+        firstSeen: next.firstSeen,
+      },
+    };
+  }
   return { dir, written: true };
 }
 

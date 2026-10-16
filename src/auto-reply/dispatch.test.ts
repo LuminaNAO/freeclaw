@@ -8,6 +8,11 @@ import {
   resolveGroupMemoryDir,
 } from "../agents/group-memory.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import { dispatchInboundMessage, withReplyDispatcher } from "./dispatch.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
@@ -219,5 +224,146 @@ describe("dispatchInboundMessage group memory meta (group-memory ARCH §3)", () 
       replyResolver: async () => ({ text: "ok" }),
     });
     expect(fs.existsSync(path.join(ws, "group-memory"))).toBe(false);
+  });
+});
+
+describe("dispatchInboundMessage group_memory_created hook (group-memory ARCH §8)", () => {
+  const roots: string[] = [];
+  function tmpWorkspace(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dispatch-groupmem-hook-"));
+    roots.push(dir);
+    return dir;
+  }
+  afterEach(() => {
+    resetGroupMemoryMetaThrottleForTests();
+    resetGlobalHookRunner();
+    vi.useRealTimers();
+    while (roots.length) {
+      fs.rmSync(roots.pop() as string, { recursive: true, force: true });
+    }
+  });
+
+  const dispatcher = (): ReplyDispatcher => ({
+    sendToolResult: () => true,
+    sendBlockReply: () => true,
+    sendFinalReply: () => true,
+    getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+    markComplete: () => {},
+    waitForIdle: async () => {},
+  });
+
+  const groupCtx = (o: Record<string, unknown> = {}) =>
+    buildTestCtx({
+      From: "signal:group:dgvzda==",
+      To: "signal:+15550001234",
+      ChatType: "group",
+      Provider: "signal",
+      Surface: "signal",
+      GroupSubject: "Ops Room",
+      SenderId: "+10000000001",
+      Body: "secret chat words",
+      ...o,
+    });
+
+  const flush = () => new Promise((r) => setImmediate(r)).then(() => new Promise(setImmediate));
+
+  it("fires once on creation with name and path, never content or member ids", async () => {
+    const ws = tmpWorkspace();
+    const cfg = { agents: { defaults: { workspace: ws } } } as OpenClawConfig;
+    const handler = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "group_memory_created", handler }]),
+    );
+    await dispatchInboundMessage({
+      ctx: groupCtx(),
+      cfg,
+      dispatcher: dispatcher(),
+      replyResolver: async () => ({ text: "ok" }),
+    });
+    await flush();
+    expect(handler).toHaveBeenCalledTimes(1);
+    const [event, ctx] = handler.mock.calls[0];
+    const dir = resolveGroupMemoryDir({ workspaceDir: ws, channel: "signal", groupId: "dgvzda==" });
+    expect(event).toEqual({
+      agentId: "main",
+      channel: "signal",
+      groupId: "dgvzda==",
+      name: "Ops Room",
+      dir,
+      firstSeen: readGroupMemoryMeta(dir)?.firstSeen,
+      reason: "created",
+    });
+    expect(ctx).toEqual({ agentId: "main", channelId: "signal" });
+    expect(JSON.stringify(event)).not.toContain("+10000000001");
+    expect(JSON.stringify(event)).not.toContain("secret chat words");
+    // A second message is an ordinary update: no event.
+    await dispatchInboundMessage({
+      ctx: groupCtx({ SenderId: "+10000000002" }),
+      cfg,
+      dispatcher: dispatcher(),
+      replyResolver: async () => ({ text: "ok" }),
+    });
+    await flush();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires again on rename with reason renamed", async () => {
+    const ws = tmpWorkspace();
+    const cfg = { agents: { defaults: { workspace: ws } } } as OpenClawConfig;
+    const handler = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "group_memory_created", handler }]),
+    );
+    await dispatchInboundMessage({
+      ctx: groupCtx(),
+      cfg,
+      dispatcher: dispatcher(),
+      replyResolver: async () => ({ text: "ok" }),
+    });
+    // Past the one-write-per-minute throttle.
+    resetGroupMemoryMetaThrottleForTests();
+    await dispatchInboundMessage({
+      ctx: groupCtx({ GroupSubject: "Ops Room 2" }),
+      cfg,
+      dispatcher: dispatcher(),
+      replyResolver: async () => ({ text: "ok" }),
+    });
+    await flush();
+    expect(handler.mock.calls.map((c) => [c[0].reason, c[0].name])).toEqual([
+      ["created", "Ops Room"],
+      ["renamed", "Ops Room 2"],
+    ]);
+  });
+
+  it("a throwing or hanging handler never affects message handling", async () => {
+    const ws = tmpWorkspace();
+    const cfg = { agents: { defaults: { workspace: ws } } } as OpenClawConfig;
+    const thrower = vi.fn(() => {
+      throw new Error("handler exploded");
+    });
+    const hanger = vi.fn(() => new Promise<void>(() => {}));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "group_memory_created", handler: thrower },
+        { hookName: "group_memory_created", handler: hanger },
+      ]),
+    );
+    const finals: string[] = [];
+    const d = { ...dispatcher(), sendFinalReply: (p: { text?: string }) => !!finals.push(p.text!) };
+    await expect(
+      dispatchInboundMessage({
+        ctx: groupCtx(),
+        cfg,
+        dispatcher: d as ReplyDispatcher,
+        replyResolver: async () => ({ text: "still replied" }),
+      }),
+    ).resolves.toBeDefined();
+    expect(finals).toEqual(["still replied"]);
+    // Handlers run after the message, detached from it.
+    await flush();
+    expect(thrower).toHaveBeenCalledTimes(1);
+    expect(hanger).toHaveBeenCalledTimes(1);
+    const dir = resolveGroupMemoryDir({ workspaceDir: ws, channel: "signal", groupId: "dgvzda==" });
+    expect(fs.readFileSync(path.join(dir, "CONTEXT.md"), "utf8")).toContain("# Ops Room");
   });
 });

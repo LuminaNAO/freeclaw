@@ -445,7 +445,8 @@ export type PluginHookName =
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
-  | "gateway_stop";
+  | "gateway_stop"
+  | "group_memory_created";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -472,6 +473,7 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_ended",
   "gateway_start",
   "gateway_stop",
+  "group_memory_created",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -886,6 +888,24 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// group_memory_created hook (group-memory ARCH §8): a group's meta.json was first created
+// (reason "created") or its name changed (reason "renamed"). Carries the name and the
+// folder path only: never chat content or member ids (§8.3).
+export type PluginHookGroupMemoryCreatedEvent = {
+  agentId: string;
+  channel: string;
+  groupId: string;
+  name: string;
+  dir: string;
+  firstSeen: string;
+  reason: "created" | "renamed";
+};
+
+export type PluginHookGroupMemoryContext = {
+  agentId: string;
+  channelId: string;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -983,6 +1003,10 @@ export type PluginHookHandlerMap = {
   gateway_stop: (
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
+  ) => Promise<void> | void;
+  group_memory_created: (
+    event: PluginHookGroupMemoryCreatedEvent,
+    ctx: PluginHookGroupMemoryContext,
   ) => Promise<void> | void;
 };
 

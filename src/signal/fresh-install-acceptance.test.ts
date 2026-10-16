@@ -196,7 +196,10 @@ describe("§3.4 group memory on a fresh install", () => {
       channel: "signal",
       groupId: "group-a",
     });
-    expect(first).toContain("No group memory yet");
+    // group-memory ARCH §8.2: creation seeds a starter CONTEXT.md, so the first turn
+    // already has one place to look.
+    expect(first).toContain("# group-a");
+    expect(first).toContain("Purpose: (not yet known — learn it from the conversation)");
     // Agent writes CONTEXT.md between turns; the next turn's block picks it up.
     const dir = path.join(ws, "group-memory", "signal", encodeURIComponent("group-a"));
     fs.writeFileSync(path.join(dir, "CONTEXT.md"), "Purpose: decide lunch venues.");
@@ -206,6 +209,7 @@ describe("§3.4 group memory on a fresh install", () => {
       groupId: "group-a",
     });
     expect(second).toContain("Purpose: decide lunch venues.");
+    expect(second).not.toContain("not yet known");
     expect(second).not.toContain("No group memory yet");
   });
 });

@@ -27,6 +27,8 @@ import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookGroupMemoryContext,
+  PluginHookGroupMemoryCreatedEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -705,6 +707,21 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Group memory hooks
+  // =========================================================================
+
+  /**
+   * Run group_memory_created hook (group-memory ARCH §8).
+   * Runs in parallel (fire-and-forget at the call site).
+   */
+  async function runGroupMemoryCreated(
+    event: PluginHookGroupMemoryCreatedEvent,
+    ctx: PluginHookGroupMemoryContext,
+  ): Promise<void> {
+    return runVoidHook("group_memory_created", event, ctx);
+  }
+
+  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -753,6 +770,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Group memory hooks
+    runGroupMemoryCreated,
     // Utility
     hasHooks,
     getHookCount,
