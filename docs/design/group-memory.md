@@ -70,3 +70,19 @@ honoured as the context file instead of `CONTEXT.md`.
 - Truncation at maxContextBytes; disabled flag stops both loading and writes.
 - `context_file` override honoured.
 - Template lines present.
+
+## 8. New-group event (operator, 2026-10-16)
+
+The moment `meta.json` is first created for a group (§3, first sight) is the one reliable "a new group exists" signal.
+Other features hang off it instead of each inventing their own detection.
+
+1. **Event.** When §3 creates `meta.json` (not on later updates), the gateway emits a plugin hook
+   `group_memory_created` with `{ agentId, channel, groupId, name, dir, firstSeen }`. Fire-and-forget: a slow or
+   failing handler never delays or fails the inbound message. Also emitted when an existing group's `name` changes
+   (`reason: "renamed"`), so features can refresh; first creation has `reason: "created"`.
+2. **Seed `CONTEXT.md`.** On creation the gateway also writes a starter `CONTEXT.md` when none exists:
+   `# <name>` and one line `Purpose: (not yet known — learn it from the conversation)`. The agent replaces it as
+   normal (§4). This gives every later reader one place to look, even in a group's first minute.
+3. **No content leaves the folder.** The event carries the name and the path, never chat content or member ids.
+4. Tests: event fires once on creation and once per rename, never on ordinary updates; a throwing handler does not
+   affect message handling; starter `CONTEXT.md` written only when absent and never overwrites.

@@ -184,31 +184,31 @@ fallback for hosts with no image model at all.
     likewise; steering prompt wrapped; tag bump regenerates generated bases once and leaves adopted ones alone.
 
 11. **New groups get an image prompt written from what the group is (operator, 2026-10-16).** A fixed motif
-    table gives every group the same few scenes. Instead, when a target needs a generated base, the extension asks
-    the agent to write the scene. This supersedes §2b.5's "prompts never include the group name" for the prompt
+    table gives every group the same few scenes. Instead, the badge listens for group memory's new-group event and
+    asks the agent to write the scene. This supersedes §2b.5's "prompts never include the group name" for the prompt
     *writer*'s input only; the rules below keep the boundary.
-    - **Trigger:** a target that needs a generated base (first sight with no adopted art, an explicit `regenerate`, or
-      a group rename). Not on restyle of an adopted base (§2c.8 unchanged).
+    - **Trigger:** the `group_memory_created` hook (group-memory ARCH §8) with `reason: "created"` or `"renamed"`,
+      and an explicit `regenerate`. Not on restyle of an adopted base (§2c.8 unchanged). A group that already has
+      its own art is adopted as today and the writer is not called.
     - **Writer:** one short agent run via the plugin runtime (`runtime.subagent.run`, its own throwaway session,
-      deleted after). Input: the group name, the agent's own memory search for that name (top few snippets), and the
-      group's own `CONTEXT.md` purpose line when the group has group memory. Never chat messages, member names or
-      numbers. The writer's instruction: return ONE concrete visual scene, at most 40 words, that evokes what the
-      group is about; no text, letters, words, logos, brand names, real people or faces; never quote the group name.
-    - **Validation:** the returned scene is trimmed, single-line, ≤ 40 words; rejected if it contains quotes, a
-      §2c.10 banned word, digits that look like ids, or any word of the group name longer than 3 letters that is a
-      proper noun in the name (keeps names from being painted). Rejected or failed or timed out (default 60 s) →
-      §2c.10 motif scene. The accepted scene is wrapped in the §2c.10 full-bleed template.
-    - **Boundary:** the writer runs inside the same agent, so it only ever sees that agent's own memory (a client
-      agent never sees another agent's). If `imageGen` is not on loopback or a private address, the writer is
-      skipped and the motif scene is used, so names and memory never leave the box in a prompt.
-    - **Cache:** the scene is stored per target in the state dir with a hash of its inputs (name, generation); the
-      same inputs never call the writer twice. Prompts and scenes are never logged; `/badge status` shows the scene.
-    - **Config:** `imageGen.promptWriter: { enabled (default true), model? (default: the agent default), timeoutMs?,
+      deleted after). Input: the group name and the agent's own memory search for that name (top few snippets). The
+      writer instruction: return ONE concrete visual scene, at most 40 words, that evokes what the group is likely
+      about; no text, letters, words, logos, brand names, real people or faces; never quote the group name. No chat
+      messages, member names or numbers are ever inputs (there are none yet at creation anyway).
+    - **Validation:** trimmed, single line, ≤ 40 words; rejected if it contains quotes, a §2c.10 banned word,
+      id-like digit runs, or a proper noun taken from the group name. Rejected, failed or timed out (default 60 s)
+      → §2c.10 motif scene. The accepted scene is wrapped in the §2c.10 full-bleed template.
+    - **Boundary:** the writer runs inside the same agent, so it only sees that agent's own memory. If `imageGen` is
+      not loopback or a private address, the writer is skipped and the motif scene used, so names and memory never
+      leave the box in a prompt.
+    - **Cache:** the scene is stored per target in the state dir keyed by (name, generation); the same inputs never
+      call the writer twice. Prompts and scenes are never logged; `/badge status` shows the scene.
+    - **Config:** `imageGen.promptWriter: { enabled (default true), model? (default: agent default), timeoutMs?,
       memory? (default true) }`. Member steering `prompt` (§2c) still overrides the written scene for that group.
-    Tests: writer called once per new target and not again for the same inputs; rename calls it again; output over
-    40 words, with quotes, banned words or a group-name proper noun is rejected and the motif scene used; writer
-    timeout/failure falls back; non-private imageGen skips the writer; memory off sends no memory snippets; the
-    writer input never contains chat content or member ids (fixture asserts); throwaway session deleted.
+    Tests: hook → writer called once per new group, again on rename, not for adopted-art groups; same inputs never
+    call twice; over-40-words / quotes / banned words / name proper noun rejected → motif scene; timeout and failure
+    fall back; non-private imageGen skips the writer; memory off sends no snippets; writer input never contains chat
+    content or member ids (fixture asserts); throwaway session deleted.
 
 ## 3. Lifecycle (generated and removed as the world changes)
 
