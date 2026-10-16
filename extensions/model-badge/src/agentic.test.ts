@@ -577,7 +577,7 @@ describe("image first (ARCH §2c.4)", () => {
 });
 
 describe("profile via the image generator (ARCH §2c.5)", () => {
-  it("the profile base is an image from a portrait-safe abstract prompt", async () => {
+  it("the profile base is an image from a portrait-safe full-bleed scene prompt", async () => {
     const gen = fakeImageGen();
     const { w, e } = await world({ image: IMAGE_CFG, gen, profile: true, targets: [IDS.a] });
     const prof = gen.calls.find((c) => c.portrait);

@@ -6,7 +6,7 @@ import type { Clock, Logger } from "./clock.js";
 import type { ImageGenConfig } from "./config.js";
 import type { CoreFs } from "./fsio.js";
 import { canonicalJSON, sha256 } from "./hash.js";
-import { renderBaseSvg, type BaseParams } from "./motif.js";
+import { isMotif, renderBaseSvg, type BaseParams, type MotifName } from "./motif.js";
 import { rasterBaseSvg, sniffImage, verifyPng, type Renderer, type RenderSize } from "./render.js";
 
 // ARCH §2b: two base-art backends behind one interface. `vector` is the built-in
@@ -30,27 +30,81 @@ export const vectorGenerator: BaseArtGenerator = {
   generate: async (target) => Buffer.from(renderBaseSvg(target.params)),
 };
 
-// ---------------- prompt (§2b.5) ----------------
+// ---------------- prompt (§2b.5, §2c.10) ----------------
 
-const HOUSE_TEMPLATE =
-  "Abstract square avatar background. {style}. Soft shapes, balanced composition, " +
-  "no text, no letters, no numbers, no people, no faces, no logos.";
+// ARCH §2c.10: a generated base is a concrete scene that fills the whole frame. The image
+// model draws what the prompt names, so the prompt never names a shape to put in the
+// frame: the banned words below never appear in it, except "panel" inside the required
+// full-bleed clause, which forbids one.
+export const FULL_BLEED =
+  "full-bleed artwork filling the entire frame edge to edge, no border, no frame, no inner panel";
 
-// ARCH §2c.5: the profile picture is shown cropped to a circle, so its prompt asks for a
-// portrait-safe abstract: centred, nothing important near the corners.
+export const BANNED_PROMPT_WORDS = [
+  "square",
+  "avatar",
+  "background",
+  "tile",
+  "card",
+  "panel",
+  "abstract",
+] as const;
+
+// Bump whenever the prompt templates change: it is part of a generated base's inputs, so
+// every generated base is made again once; adopted bases are never generated, so they
+// are untouched.
+export const BASE_PROMPT_TAG = "scene-v1";
+
+// Motifs map to scenes, not shapes.
+export const MOTIF_SCENES: Readonly<Record<MotifName, string>> = {
+  waves: "calm ocean waves under a soft evening sky",
+  rings: "ripples spreading across a still lake at dusk",
+  facets: "sunlit crystal cliffs above a quiet valley",
+  dots: "a field of fireflies over tall grass at night",
+};
+
+const NO_MARKS = "no text, no letters, no numbers, no people, no faces, no logos";
+
+const HOUSE_TEMPLATE = `A scene of {scene}. A ${FULL_BLEED}. Soft light, rich detail, ${NO_MARKS}.`;
+
+// ARCH §2c.5: the profile picture is shown cropped to a circle, so its prompt keeps the
+// scene centred with nothing important near the corners, and is still full-bleed.
 const PROFILE_TEMPLATE =
-  "Abstract square profile picture background, portrait-safe: a centred radial " +
-  "composition that still reads when cropped to a circle. {style}. Soft shapes, " +
-  "no text, no letters, no numbers, no people, no faces, no logos.";
+  "A scene of {scene}. A portrait-safe composition centred in the frame that still reads when " +
+  `cropped to a circle, nothing important near the corners. A ${FULL_BLEED}. ` +
+  `Soft light, rich detail, ${NO_MARKS}.`;
+
+const BANNED_RE = new RegExp(`\\b(?:${BANNED_PROMPT_WORDS.join("|")})s?\\b`, "gi");
+
+// A member's steering words are kept, minus the banned words, and wrapped in the same
+// full-bleed template (§2c.10).
+function steeringWords(prompt: string): string {
+  return (
+    prompt
+      .replace(/[\r\n]+/g, " ")
+      .replace(BANNED_RE, " ")
+      .replace(/\s+([,.;:!?])/g, "$1")
+      .replace(/\s{2,}/g, " ")
+      .replace(/^[\s,.;:!?-]+|[\s,;:-]+$/g, "")
+      // A removed word can leave a dangling "on a" behind.
+      .replace(/(?:\s+\b(?:a|an|the|on|in|of|with|as|for|and)\b)+$/i, "")
+      .trim()
+  );
+}
 
 // Built only from style words and the generated base's own parameters. Group names,
 // member names and chat content are never inputs, so they can never leak into a prompt.
 export function buildPrompt(target: BaseTarget, style: BaseStyle): string {
-  const words = style.prompt
-    ? style.prompt
-    : `${style.palette ?? target.params.palette} colour palette, ${style.motif ?? target.params.motif} motif`;
+  const steered = style.prompt ? steeringWords(style.prompt) : "";
+  let scene: string;
+  if (steered) {
+    scene = steered;
+  } else {
+    const motif = isMotif(style.motif) ? style.motif : target.params.motif;
+    const palette = style.palette ?? target.params.palette;
+    scene = `${MOTIF_SCENES[motif]}, in ${palette} colours`;
+  }
   const template = target.portrait ? PROFILE_TEMPLATE : HOUSE_TEMPLATE;
-  return template.replace("{style}", words.replace(/[\r\n]+/g, " ").trim());
+  return template.replace("{scene}", scene);
 }
 
 export function seedNumber(seed: string): number {
@@ -265,6 +319,7 @@ export function createImageBases(opts: {
     return sha256(
       canonicalJSON({
         prompt: buildPrompt(w.target, w.style),
+        tag: BASE_PROMPT_TAG,
         seed: w.target.seed,
         generator: generator?.id ?? null,
       }),
@@ -477,6 +532,7 @@ export function createImageBases(opts: {
               inputsKey,
               generation: w.generation,
               generator: generator.id,
+              prompt: BASE_PROMPT_TAG,
               generatedAt: clock.now(),
             }),
           );
