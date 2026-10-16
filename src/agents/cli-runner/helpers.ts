@@ -16,7 +16,7 @@ import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
-import { buildAgentSystemPrompt } from "../system-prompt.js";
+import { buildAgentSystemPrompt, resolveDefaultPromptBlockStreaming } from "../system-prompt.js";
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
@@ -95,6 +95,8 @@ export function buildSystemPrompt(params: {
     bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
+    // No channel context here: the agent default decides the narration lines.
+    blockStreaming: resolveDefaultPromptBlockStreaming(params.config),
   });
 }
 

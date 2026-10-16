@@ -8,7 +8,10 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
-import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
+import {
+  buildAgentSystemPrompt,
+  resolveDefaultPromptBlockStreaming,
+} from "../../agents/system-prompt.js";
 import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
@@ -130,6 +133,8 @@ export async function resolveCommandsSystemPromptBundle(
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,
+    // No channel context here: the agent default decides the narration lines.
+    blockStreaming: resolveDefaultPromptBlockStreaming(params.cfg),
   });
 
   return { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime };
