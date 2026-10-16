@@ -166,6 +166,23 @@ fallback for hosts with no image model at all.
    filter in the SVG; mark appears exactly once; already-marked source is refused as a base; layout tag bump repaints
    once and is then idempotent.
 
+10. **Generated bases are full-bleed scenes, never a tile (operator, 2026-10-16 live finding).** The house
+    prompt began "Abstract square avatar background", and the image model drew exactly that: a square panel floating
+    inside the frame, which reads as a square on a circle once Signal crops it. Verified by A/B on the same model and
+    seed: the old template gives an inset panel; a full-bleed scene prompt gives edge-to-edge art. Rules:
+    - The house template describes a **concrete scene that fills the whole frame** and says so: "full-bleed artwork
+      filling the entire frame edge to edge, no border, no frame, no inner panel". The words "square", "avatar",
+      "background", "tile", "card", "panel" and "abstract" never appear in a generated-base prompt (source-scan test).
+    - Motifs map to **scenes**, not shapes: a fixed table in code (e.g. waves → "calm ocean waves under a soft evening
+      sky", rings → "ripples spreading across a still lake at dusk", facets → "sunlit crystal cliffs above a quiet
+      valley", dots → "a field of fireflies over tall grass at night"), plus the palette. Still built only from style
+      words and generated params, never group names, member names or chat content (§2b.5 unchanged).
+    - Steering `prompt` text from a member is wrapped in the same full-bleed template.
+    - Profile template keeps its circle-safe wording but also gets the full-bleed clause.
+    - Generator tag bumps (`scene-v1`) so existing generated bases regenerate once; adopted bases are untouched.
+    Tests: prompt text for every motif contains the full-bleed clause and none of the banned words; profile prompt
+    likewise; steering prompt wrapped; tag bump regenerates generated bases once and leaves adopted ones alone.
+
 ## 3. Lifecycle (generated and removed as the world changes)
 
 1. **Turn on** (`plugins.entries.model-badge.enabled` + provider config): first reconcile generates the required
