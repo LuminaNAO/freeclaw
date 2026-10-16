@@ -498,6 +498,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...senderContext,
           ...runBaseParams,
           ...runDeadlineParams(runDeadline),
+          blockStreaming: params.followupRun.run.blockStreaming,
           trigger: "memory",
           memoryFlushWritePath,
           prompt: resolveMemoryFlushPromptForRun({

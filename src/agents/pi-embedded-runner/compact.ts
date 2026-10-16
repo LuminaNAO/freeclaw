@@ -73,6 +73,7 @@ import {
   resolveSkillsPromptForRun,
   type SkillSnapshot,
 } from "../skills.js";
+import { resolveDefaultPromptBlockStreaming } from "../system-prompt.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
   compactWithSafetyTimeout,
@@ -145,6 +146,8 @@ export type CompactEmbeddedPiSessionParams = {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  /** Resolved block-streaming state of the run being compacted; defaults to the agent default. */
+  blockStreaming?: "on" | "off";
 };
 
 type CompactionMessageMetrics = {
@@ -684,6 +687,7 @@ export async function compactEmbeddedPiSessionDirect(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      blockStreaming: params.blockStreaming ?? resolveDefaultPromptBlockStreaming(params.config),
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 

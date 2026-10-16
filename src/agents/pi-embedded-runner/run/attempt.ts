@@ -101,6 +101,7 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { resolveDefaultPromptBlockStreaming } from "../../system-prompt.js";
 import {
   isAgentTimeoutCapped,
   isLocalInferenceProvider,
@@ -1749,6 +1750,7 @@ export async function runEmbeddedAttempt(
         channel: params.messageChannel ?? params.messageProvider,
         chatType: params.groupId ? "group" : "direct",
       }),
+      blockStreaming: params.blockStreaming ?? resolveDefaultPromptBlockStreaming(params.config),
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",

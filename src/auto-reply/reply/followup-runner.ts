@@ -214,6 +214,7 @@ export function createFollowupRunner(params: {
               runId,
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               blockReplyBreak: queued.run.blockReplyBreak,
+              blockStreaming: queued.run.blockStreaming,
               bootstrapPromptWarningSignaturesSeen,
               bootstrapPromptWarningSignature:
                 bootstrapPromptWarningSignaturesSeen[

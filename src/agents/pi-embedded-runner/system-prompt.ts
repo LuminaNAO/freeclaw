@@ -4,7 +4,11 @@ import type { SilentReplyPromptMode } from "../../config/silent-reply.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
-import { buildAgentSystemPrompt, type PromptMode } from "../system-prompt.js";
+import {
+  buildAgentSystemPrompt,
+  type PromptBlockStreaming,
+  type PromptMode,
+} from "../system-prompt.js";
 import { buildToolSummaryMap } from "../tool-summaries.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
 import type { ReasoningLevel, ThinkLevel } from "./utils.js";
@@ -55,6 +59,8 @@ export function buildEmbeddedSystemPrompt(params: {
   bootstrapTruncationWarningLines?: string[];
   memoryCitationsMode?: MemoryCitationsMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
+  /** Resolved block-streaming state of the turn; selects the "Tool Call Style" narration lines. */
+  blockStreaming?: PromptBlockStreaming;
 }): string {
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -86,6 +92,7 @@ export function buildEmbeddedSystemPrompt(params: {
     bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     memoryCitationsMode: params.memoryCitationsMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
+    blockStreaming: params.blockStreaming,
   });
 }
 

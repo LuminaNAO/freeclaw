@@ -119,6 +119,11 @@ export type RunEmbeddedPiAgentParams = {
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
+  /**
+   * Resolved block-streaming state of the turn (after any channel override); selects the system prompt's
+   * narration lines. Defaults to the agent default (`agents.defaults.blockStreamingDefault`).
+   */
+  blockStreaming?: "on" | "off";
   onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;

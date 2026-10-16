@@ -79,6 +79,11 @@ export type FollowupRun = {
     };
     timeoutMs: number;
     blockReplyBreak: "text_end" | "message_end";
+    /**
+     * Resolved block-streaming state of the turn (agent default after any channel override). Selects the
+     * narration lines of the system prompt's "Tool Call Style".
+     */
+    blockStreaming?: "on" | "off";
     ownerNumbers?: string[];
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;

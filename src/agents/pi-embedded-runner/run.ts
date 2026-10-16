@@ -990,6 +990,7 @@ export async function runEmbeddedPiAgent(
                 onBlockReplyFlush: params.onBlockReplyFlush,
                 blockReplyBreak: params.blockReplyBreak,
                 blockReplyChunking: params.blockReplyChunking,
+                blockStreaming: params.blockStreaming,
                 onReasoningStream: params.onReasoningStream,
                 onReasoningEnd: params.onReasoningEnd,
                 onToolResult: params.onToolResult,
@@ -1178,6 +1179,7 @@ export async function runEmbeddedPiAgent(
                       bashElevated: params.bashElevated,
                       extraSystemPrompt: params.extraSystemPrompt,
                       ownerNumbers: params.ownerNumbers,
+                      blockStreaming: params.blockStreaming,
                       trigger: "overflow",
                       ...(observedOverflowTokens !== undefined
                         ? { currentTokenCount: observedOverflowTokens }
@@ -1679,6 +1681,7 @@ export async function runEmbeddedPiAgent(
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
                     ownerNumbers: params.ownerNumbers,
+                    blockStreaming: params.blockStreaming,
                     trigger: "prune-exhausted",
                     diagId: pruneDiagId,
                     attempt: pruneExhaustedCompactionAttempts,

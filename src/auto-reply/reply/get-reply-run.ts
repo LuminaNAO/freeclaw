@@ -528,6 +528,7 @@ export async function runPreparedReply(
       },
       timeoutMs,
       blockReplyBreak: resolvedBlockStreamingBreak,
+      blockStreaming: blockStreamingEnabled ? ("on" as const) : ("off" as const),
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
