@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
-import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
+import {
+  buildAgentSystemPrompt,
+  buildRuntimeLine,
+  resolveDefaultPromptBlockStreaming,
+} from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -805,5 +809,87 @@ describe("buildSubagentSystemPrompt", () => {
         expect(prompt, testCase.name).toContain("spawned by the main agent");
       }
     }
+  });
+});
+
+describe("buildAgentSystemPrompt Tool Call Style narration (narration follows delivery §2)", () => {
+  const ON_LINES = [
+    "Default: do not narrate routine, low-risk tool calls (just call the tool).",
+    "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
+    "Keep narration brief and value-dense; avoid repeating obvious steps.",
+    "Use plain human language for narration unless in a technical context.",
+  ];
+  const OFF_LINES = [
+    "Replies here are delivered only when your turn ends, and every text you write during the turn arrives as a separate message at that moment. Do not write progress or narration between tool calls. Work silently, then write one final reply.",
+    "If a task will take long, say so in one short line before the first tool call, then stay silent until the final reply.",
+  ];
+  const REST_OF_SECTION = [
+    "## Tool Call Style",
+    "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+    "When exec returns approval-pending, include the concrete /approve command from tool output (with allow-once|allow-always|deny) and do not ask for a different or rotated code.",
+    "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
+    "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
+  ];
+
+  function toolCallStyleSection(prompt: string): string[] {
+    const lines = prompt.split("\n");
+    const start = lines.indexOf("## Tool Call Style");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = lines.findIndex((line, idx) => idx > start && line.startsWith("## "));
+    return lines.slice(start, end);
+  }
+
+  it("keeps the original narration lines when block streaming is on", () => {
+    for (const blockStreaming of ["on", undefined] as const) {
+      const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", blockStreaming });
+      for (const line of ON_LINES) {
+        expect(prompt).toContain(line);
+      }
+      for (const line of OFF_LINES) {
+        expect(prompt).not.toContain(line);
+      }
+    }
+  });
+
+  it("replaces the narration lines when block streaming is off", () => {
+    const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", blockStreaming: "off" });
+    for (const line of OFF_LINES) {
+      expect(prompt).toContain(line);
+    }
+    for (const line of ON_LINES) {
+      expect(prompt).not.toContain(line);
+    }
+  });
+
+  it("places the narration lines right after the heading and leaves the rest of the section unchanged", () => {
+    const on = toolCallStyleSection(
+      buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", blockStreaming: "on" }),
+    );
+    const off = toolCallStyleSection(
+      buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", blockStreaming: "off" }),
+    );
+    expect(on).toEqual([REST_OF_SECTION[0], ...ON_LINES, ...REST_OF_SECTION.slice(1)]);
+    expect(off).toEqual([REST_OF_SECTION[0], ...OFF_LINES, ...REST_OF_SECTION.slice(1)]);
+  });
+
+  it("changes nothing outside Tool Call Style", () => {
+    const on = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", blockStreaming: "on" });
+    const off = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", blockStreaming: "off" });
+    expect(off.replace(OFF_LINES.join("\n"), ON_LINES.join("\n"))).toBe(on);
+  });
+});
+
+describe("resolveDefaultPromptBlockStreaming", () => {
+  it("follows agents.defaults.blockStreamingDefault and defaults to on", () => {
+    expect(resolveDefaultPromptBlockStreaming(undefined)).toBe("on");
+    expect(resolveDefaultPromptBlockStreaming({})).toBe("on");
+    expect(
+      resolveDefaultPromptBlockStreaming({ agents: { defaults: { blockStreamingDefault: "on" } } }),
+    ).toBe("on");
+    expect(
+      resolveDefaultPromptBlockStreaming({
+        agents: { defaults: { blockStreamingDefault: "off" } },
+      }),
+    ).toBe("off");
   });
 });

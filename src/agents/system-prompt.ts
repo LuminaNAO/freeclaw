@@ -1,6 +1,7 @@
 import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SilentReplyPromptMode } from "../config/silent-reply.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -17,6 +18,40 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
  */
 export type PromptMode = "full" | "minimal" | "none";
 type OwnerIdDisplay = "raw" | "hash";
+
+/** Resolved block-streaming state of the turn the prompt is built for. */
+export type PromptBlockStreaming = "on" | "off";
+
+/**
+ * Agent default block-streaming state, for callers without a channel context (CLI runner,
+ * `/system-prompt`-style commands, runs started outside the reply pipeline). Mirrors the default the
+ * reply pipeline applies before any channel override: on unless `agents.defaults.blockStreamingDefault` is "off".
+ */
+export function resolveDefaultPromptBlockStreaming(
+  cfg: OpenClawConfig | undefined,
+): PromptBlockStreaming {
+  return cfg?.agents?.defaults?.blockStreamingDefault === "off" ? "off" : "on";
+}
+
+/**
+ * Narration lines of "Tool Call Style". With block streaming on, text written mid-turn reaches the user as it is
+ * written, so brief narration helps. With it off, every text is held and delivered as its own message when the turn
+ * ends, so narration turns into a burst of stale progress messages.
+ */
+function buildToolCallNarrationLines(blockStreaming: PromptBlockStreaming): string[] {
+  if (blockStreaming === "off") {
+    return [
+      "Replies here are delivered only when your turn ends, and every text you write during the turn arrives as a separate message at that moment. Do not write progress or narration between tool calls. Work silently, then write one final reply.",
+      "If a task will take long, say so in one short line before the first tool call, then stay silent until the final reply.",
+    ];
+  }
+  return [
+    "Default: do not narrate routine, low-risk tool calls (just call the tool).",
+    "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
+    "Keep narration brief and value-dense; avoid repeating obvious steps.",
+    "Use plain human language for narration unless in a technical context.",
+  ];
+}
 
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
   const trimmed = params.skillsPrompt?.trim();
@@ -242,6 +277,11 @@ export function buildAgentSystemPrompt(params: {
   memoryCitationsMode?: MemoryCitationsMode;
   /** "none" omits all NO_REPLY guidance (the surface disallows silent replies). */
   silentReplyPromptMode?: SilentReplyPromptMode;
+  /**
+   * The turn's resolved block-streaming state (after any channel override). Selects the narration lines of
+   * "Tool Call Style". Defaults to "on".
+   */
+  blockStreaming?: PromptBlockStreaming;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -471,10 +511,7 @@ export function buildAgentSystemPrompt(params: {
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
     "",
     "## Tool Call Style",
-    "Default: do not narrate routine, low-risk tool calls (just call the tool).",
-    "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
-    "Keep narration brief and value-dense; avoid repeating obvious steps.",
-    "Use plain human language for narration unless in a technical context.",
+    ...buildToolCallNarrationLines(params.blockStreaming === "off" ? "off" : "on"),
     "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
     "When exec returns approval-pending, include the concrete /approve command from tool output (with allow-once|allow-always|deny) and do not ask for a different or rotated code.",
     "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
