@@ -54,12 +54,14 @@ src/providers/signal/         Signal provider on freeclaw's own Signal client (H
   // or { "kind": "command", "command": "/abs/path", "args": [] }
   // limits: "maxPerRun": 16, "maxPerDay": 200, "maxAttempts": 10 (defaults, sized for a
   // local generator; lower them for metered backends)
+  // "promptWriter": { "enabled": true, "model": null, "timeoutMs": 60000, "memory": true }
+  // (inside imageGen; ARCH §2c.11, see "Scenes for new groups")
 }
 ```
 
 State lives in `<gateway state dir>/plugins/model-badge/`: `style.json` (shared) and one
 directory per provider with `applied.json`, `status.json`, `writer.lease`, `assets/` and
-`adopted/` (groups' own artwork, §2c.8), `bases/` (stored image bases plus `generations.json`, the per-target regenerate counter). The Signal daemon opens avatars by path, so this directory must be readable by
+`adopted/` (groups' own artwork, §2c.8), `bases/` (stored image bases plus `generations.json`, the per-target regenerate counter), `scenes/scenes.json` (per-target written scenes, §2c.11). The Signal daemon opens avatars by path, so this directory must be readable by
 the daemon's user, and the daemon must be local (loopback HTTP or the unix socket).
 
 ## Triggers (ARCH §5.2)
@@ -73,6 +75,7 @@ The set is closed. Which ones come from plugin events and which from the watcher
 | session model change    | **store watcher** — freeclaw emits no plugin event for `/model`, `sessions.patch` or override resets, so the sessions store is `stat`ed every `timing.watchMs` and the per-session override pair compared |
 | models-available change | **store watcher** — no plugin event exists; the agent's `models.json` is watched the same way                                                                                                             |
 | target created          | plugin event `session_start` (early nudge) confirmed by the watcher; groups that never get a session are found by the provider listing at startup/periodic                                                |
+| group named / renamed   | plugin event `group_memory_created` (group-memory ARCH §8): records the group's name and asks the agent for its scene (§2c.11)                                                                            |
 | target removed          | provider listing at startup/periodic, or a `not-found` answer to a write                                                                                                                                  |
 | input change            | **watcher** — gateway config (default model, this plugin's config) and `style.json`                                                                                                                       |
 
@@ -108,6 +111,33 @@ painted before this check. Restyling (motif, palette, prompt) keeps an adopted b
 follow the §2c.2 authority. `targets.<id>.base: generate` turns adoption off for a target;
 `adopt` is the default. A target with no avatar, or one showing our own mark, gets a
 generated base.
+
+## Scenes for new groups (ARCH §2c.11)
+
+When group memory creates a group's folder (or the group is renamed) it fires the
+`group_memory_created` plugin hook. The badge keeps the name and asks the agent to write the
+group's scene: one short run through the plugin runtime (`runtime.subagent.run`) in its own
+throwaway session, deleted afterwards. The writer's only inputs are the group name and the
+top few snippets of the agent's own memory search for it (memory files only; no chat
+messages, member names or numbers). It returns one concrete scene of at most 40 words.
+
+What it returns is checked: one line, ≤ 40 words, no quotes, none of the §2c.10 banned words,
+no id-like digit runs, no proper noun taken from the group name. A rejected, failed or timed
+out answer (default 60 s) falls back to the §2c.10 motif scene. The accepted scene is wrapped
+in the same full-bleed template. A member's steering `prompt` still overrides it.
+
+Boundary: the writer runs inside the same agent, so it only sees that agent's memory, and it
+is skipped (motif scene) unless `imageGen` is a local command or an `openai-images` URL on
+loopback or a private address, so names and memory never leave the box in a prompt.
+
+The writer is not called for a group on its own adopted artwork (§2c.8), and the outcome is
+cached per target, keyed by (name, generation), in `scenes/scenes.json`: the same inputs
+never call it twice. A rename or a `regenerate` makes new inputs. Scenes are never logged;
+`/badge status` shows the scene and where it came from.
+
+`imageGen.promptWriter`: `enabled` (default true), `model` (`provider/model`, default the
+agent's default model), `timeoutMs` (default 60000), `memory` (default true; false sends the
+name only).
 
 ## Which groups (operator addendum, §2c target selection)
 

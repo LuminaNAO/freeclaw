@@ -18,6 +18,17 @@ export type TargetOverride = { motif?: string; palette?: string; base?: "adopt" 
 
 export type SecretRefLike = { source: string; provider: string; id: string };
 
+// ARCH §2c.11: the agent writes a new group's scene. `model` defaults to the agent's
+// default model; `memory` sends the agent's own memory snippets for the group name.
+export type PromptWriterConfig = {
+  enabled: boolean;
+  model?: string;
+  timeoutMs: number;
+  memory: boolean;
+};
+
+export const PROMPT_WRITER_DEFAULTS = { enabled: true, timeoutMs: 60_000, memory: true };
+
 export type ImageGenConfig =
   | {
       kind: "openai-images";
@@ -30,6 +41,7 @@ export type ImageGenConfig =
       maxAttempts: number;
       maxPerDay: number;
       maxPerRun: number;
+      promptWriter: PromptWriterConfig;
     }
   | {
       kind: "command";
@@ -39,6 +51,7 @@ export type ImageGenConfig =
       maxAttempts: number;
       maxPerDay: number;
       maxPerRun: number;
+      promptWriter: PromptWriterConfig;
     };
 
 export const DEFAULT_TIMING = {
@@ -163,6 +176,38 @@ function isSecretRef(v: unknown): v is SecretRefLike {
   );
 }
 
+function normalizePromptWriter(raw: unknown, errors: string[]): PromptWriterConfig {
+  if (raw === undefined || raw === null) {
+    return { ...PROMPT_WRITER_DEFAULTS };
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    errors.push("imageGen.promptWriter must be an object");
+    return { ...PROMPT_WRITER_DEFAULTS };
+  }
+  const c = obj(raw);
+  if (c.enabled !== undefined && typeof c.enabled !== "boolean") {
+    errors.push("imageGen.promptWriter.enabled must be a boolean");
+  }
+  if (c.memory !== undefined && typeof c.memory !== "boolean") {
+    errors.push("imageGen.promptWriter.memory must be a boolean");
+  }
+  if (c.model !== undefined && !(typeof c.model === "string" && /^[^\s/]+\/\S+$/.test(c.model))) {
+    errors.push('imageGen.promptWriter.model must be "provider/model"');
+  }
+  if (
+    c.timeoutMs !== undefined &&
+    !(Number.isInteger(c.timeoutMs) && (c.timeoutMs as number) > 0)
+  ) {
+    errors.push("imageGen.promptWriter.timeoutMs must be a positive integer");
+  }
+  return {
+    enabled: c.enabled !== false,
+    ...(typeof c.model === "string" && c.model ? { model: c.model } : {}),
+    timeoutMs: posInt(c.timeoutMs, PROMPT_WRITER_DEFAULTS.timeoutMs),
+    memory: c.memory !== false,
+  };
+}
+
 function normalizeImageGen(raw: unknown, errors: string[]): ImageGenConfig | null {
   if (raw === undefined || raw === null) {
     return null;
@@ -179,6 +224,7 @@ function normalizeImageGen(raw: unknown, errors: string[]): ImageGenConfig | nul
       Number.isInteger(c.maxPerRun) && (c.maxPerRun as number) >= 0
         ? (c.maxPerRun as number)
         : IMAGE_DEFAULTS.maxPerRun,
+    promptWriter: normalizePromptWriter(c.promptWriter, errors),
   };
   if (c.kind === "openai-images") {
     if (typeof c.baseUrl !== "string" || !/^https?:\/\//.test(c.baseUrl)) {

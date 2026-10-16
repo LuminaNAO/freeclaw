@@ -13,7 +13,9 @@ import { rasterBaseSvg, sniffImage, verifyPng, type Renderer, type RenderSize } 
 // parametric generator (always available); `image` is a configured image-generation
 // system. Only the base is ever generated; marks are composited by our renderer.
 
-export type BaseStyle = { motif?: string; palette?: string; prompt?: string };
+// `scene` is the scene the agent wrote for a group (§2c.11), already validated; a
+// member's steering `prompt` still overrides it.
+export type BaseStyle = { motif?: string; palette?: string; prompt?: string; scene?: string };
 // `seed` is the image seed (§2c.3: it covers the target's generation counter); `portrait`
 // marks the account's own profile picture (§2c.5).
 export type BaseTarget = { seed: string; params: BaseParams; portrait?: boolean };
@@ -91,13 +93,17 @@ function steeringWords(prompt: string): string {
   );
 }
 
-// Built only from style words and the generated base's own parameters. Group names,
-// member names and chat content are never inputs, so they can never leak into a prompt.
+// Built only from style words, the generated base's own parameters and, for a group, the
+// validated scene its agent wrote (§2c.11). Group names, member names and chat content
+// are never inputs here, so they can never leak into a prompt.
 export function buildPrompt(target: BaseTarget, style: BaseStyle): string {
   const steered = style.prompt ? steeringWords(style.prompt) : "";
   let scene: string;
   if (steered) {
     scene = steered;
+  } else if (style.scene) {
+    // Wrapped in the same full-bleed template; an explicit palette rule still applies.
+    scene = style.palette ? `${style.scene}, in ${style.palette} colours` : style.scene;
   } else {
     const motif = isMotif(style.motif) ? style.motif : target.params.motif;
     const palette = style.palette ?? target.params.palette;
@@ -122,7 +128,7 @@ function imagesRoot(baseUrl: string): string {
 // OpenAI-compatible /v1/images/generations. The key comes from a resolver (SecretRef);
 // it is sent only in the Authorization header, never logged or put in argv.
 export function createOpenAiImagesGenerator(opts: {
-  config: Extract<ImageGenConfig, { kind: "openai-images" }>;
+  config: Omit<Extract<ImageGenConfig, { kind: "openai-images" }>, "promptWriter">;
   apiKey: () => Promise<string>;
   fetch?: FetchLike;
 }): BaseArtGenerator {
@@ -190,7 +196,7 @@ async function isExecutable(file: string): Promise<boolean> {
 // Local command: absolute path + fixed args; the prompt goes on stdin (never argv or
 // env), PNG bytes come back on stdout, bounded by a timeout.
 export function createCommandGenerator(opts: {
-  config: Extract<ImageGenConfig, { kind: "command" }>;
+  config: Omit<Extract<ImageGenConfig, { kind: "command" }>, "promptWriter">;
   spawn?: SpawnLike;
   maxBytes?: number;
   isExecutable?: (file: string) => Promise<boolean>;

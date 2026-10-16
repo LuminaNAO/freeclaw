@@ -85,6 +85,29 @@
       "label": "Image Attempts",
       "help": "Attempts per target before giving up until its inputs change (default 10; backoff capped by timing.imageGenMaxBackoffMs, default 30 min).",
       "advanced": true
+    },
+    "imageGen.promptWriter": {
+      "label": "Scene Writer",
+      "help": "A new group's image scene is written by the agent from the group name and its own memory (ARCH §2c.11). Only used when imageGen is loopback, a private address or a local command; otherwise the motif scene is used."
+    },
+    "imageGen.promptWriter.enabled": {
+      "label": "Write Scenes For New Groups",
+      "help": "Default true. Off: every generated base uses the motif scene."
+    },
+    "imageGen.promptWriter.model": {
+      "label": "Writer Model",
+      "help": "provider/model for the writer run. Default: the agent's default model.",
+      "advanced": true
+    },
+    "imageGen.promptWriter.timeoutMs": {
+      "label": "Writer Timeout (ms)",
+      "help": "Default 60000. A timed-out writer falls back to the motif scene.",
+      "advanced": true
+    },
+    "imageGen.promptWriter.memory": {
+      "label": "Use Agent Memory",
+      "help": "Default true. Off: the writer gets the group name only, no memory snippets.",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -224,6 +247,27 @@
           "maxPerRun": {
             "type": "number",
             "default": 16
+          },
+          "promptWriter": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "model": {
+                "type": "string"
+              },
+              "timeoutMs": {
+                "type": "number",
+                "default": 60000
+              },
+              "memory": {
+                "type": "boolean",
+                "default": true
+              }
+            }
           }
         },
         "required": ["kind"]
