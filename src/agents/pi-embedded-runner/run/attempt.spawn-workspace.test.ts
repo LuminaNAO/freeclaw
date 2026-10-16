@@ -30,6 +30,7 @@ const hoisted = vi.hoisted(() => {
   const subscribeEmbeddedPiSessionMock = vi.fn();
   const acquireSessionWriteLockMock = vi.fn();
   const applyExtraParamsToAgentMock = vi.fn();
+  const buildEmbeddedSystemPromptMock = vi.fn((_params: unknown) => "system prompt");
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
     branch: vi.fn(),
@@ -45,6 +46,7 @@ const hoisted = vi.hoisted(() => {
     subscribeEmbeddedPiSessionMock,
     acquireSessionWriteLockMock,
     applyExtraParamsToAgentMock,
+    buildEmbeddedSystemPromptMock,
     sessionManager,
   };
 });
@@ -185,7 +187,7 @@ vi.mock("../../system-prompt-report.js", () => ({
 
 vi.mock("../system-prompt.js", () => ({
   applySystemPromptOverrideToSession: () => {},
-  buildEmbeddedSystemPrompt: () => "system prompt",
+  buildEmbeddedSystemPrompt: (params: unknown) => hoisted.buildEmbeddedSystemPromptMock(params),
   createSystemPromptOverride: (prompt: string) => () => prompt,
 }));
 
@@ -849,5 +851,76 @@ describe("runEmbeddedAttempt attribution headers", () => {
 
     expect(headers?.["X-OpenClaw-Cache-Policy"]).toBe("hdd");
     expect(headers?.["X-OpenClaw-Agent-Id"]).toBe("beta");
+  });
+});
+
+describe("runEmbeddedAttempt system prompt block-streaming state (narration follows delivery §2.4)", () => {
+  const tempPaths: string[] = [];
+
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness({ subscribeImpl: createSubscriptionMock });
+    hoisted.buildEmbeddedSystemPromptMock.mockClear();
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
+  });
+
+  async function promptBlockStreaming(params: {
+    blockStreaming?: "on" | "off";
+    blockStreamingDefault?: "on" | "off";
+  }) {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bs-workspace-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bs-agent-"));
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
+    tempPaths.push(workspaceDir, agentDir);
+    await fs.writeFile(sessionFile, "", "utf8");
+    hoisted.createAgentSessionMock.mockImplementation(async () => ({
+      session: createDefaultEmbeddedSession(),
+    }));
+    hoisted.buildEmbeddedSystemPromptMock.mockClear();
+
+    const result = await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:main",
+      sessionFile,
+      workspaceDir,
+      agentDir,
+      config: params.blockStreamingDefault
+        ? { agents: { defaults: { blockStreamingDefault: params.blockStreamingDefault } } }
+        : {},
+      prompt: "hello",
+      timeoutMs: 10_000,
+      runId: "run-block-streaming",
+      provider: "openai",
+      modelId: "gpt-test",
+      model: testModel,
+      authStorage: {} as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+      ...(params.blockStreaming ? { blockStreaming: params.blockStreaming } : {}),
+    });
+    expect(result.promptError).toBeNull();
+    expect(hoisted.buildEmbeddedSystemPromptMock).toHaveBeenCalledTimes(1);
+    const call = hoisted.buildEmbeddedSystemPromptMock.mock.calls[0]?.[0] as {
+      blockStreaming?: string;
+    };
+    return call.blockStreaming;
+  }
+
+  it("passes the resolved turn state through unchanged", async () => {
+    expect(await promptBlockStreaming({ blockStreaming: "off", blockStreamingDefault: "on" })).toBe(
+      "off",
+    );
+    expect(await promptBlockStreaming({ blockStreaming: "on", blockStreamingDefault: "off" })).toBe(
+      "on",
+    );
+  });
+
+  it("falls back to the agent default when the caller passes no state", async () => {
+    expect(await promptBlockStreaming({})).toBe("on");
+    expect(await promptBlockStreaming({ blockStreamingDefault: "off" })).toBe("off");
   });
 });

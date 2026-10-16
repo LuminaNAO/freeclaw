@@ -192,6 +192,25 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
   });
 });
 
+describe("createFollowupRunner block-streaming state (narration follows delivery §2.4)", () => {
+  it("forwards the queued turn's resolved block-streaming state to the embedded run", async () => {
+    for (const blockStreaming of ["on", "off", undefined] as const) {
+      runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+      const runner = createFollowupRunner({
+        opts: { onBlockReply: vi.fn(async () => {}) },
+        typing: createMockTypingController(),
+        typingMode: "instant",
+        defaultModel: "anthropic/claude-opus-4-5",
+      });
+      await runner(createQueuedRun({ run: { blockStreaming } }));
+      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+        | { blockStreaming?: string }
+        | undefined;
+      expect(call?.blockStreaming, String(blockStreaming)).toBe(blockStreaming);
+    }
+  });
+});
+
 describe("createFollowupRunner messaging tool dedupe", () => {
   function createMessagingDedupeRunner(
     onBlockReply: (payload: unknown) => Promise<void>,

@@ -47,12 +47,17 @@ function createTelegramMessage(messageSid: string) {
   } as const;
 }
 
-function createReplyConfig(home: string, streamMode?: "block"): OpenClawConfig {
+function createReplyConfig(
+  home: string,
+  streamMode?: "block",
+  blockStreamingDefault?: "on" | "off",
+): OpenClawConfig {
   return {
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-5" },
         workspace: path.join(home, "openclaw"),
+        ...(blockStreamingDefault ? { blockStreamingDefault } : {}),
       },
     },
     channels: { telegram: { allowFrom: ["*"], streamMode } },
@@ -67,6 +72,7 @@ async function runTelegramReply(params: {
   onReplyStart?: GetReplyOptions["onReplyStart"];
   disableBlockStreaming?: boolean;
   streamMode?: "block";
+  blockStreamingDefault?: "on" | "off";
 }) {
   return getReplyFromConfig(
     createTelegramMessage(params.messageSid),
@@ -75,7 +81,7 @@ async function runTelegramReply(params: {
       onBlockReply: params.onBlockReply,
       disableBlockStreaming: params.disableBlockStreaming,
     },
-    createReplyConfig(params.home, params.streamMode),
+    createReplyConfig(params.home, params.streamMode, params.blockStreamingDefault),
   );
 }
 
@@ -212,6 +218,58 @@ describe("block streaming", () => {
       expect(onBlockReply.mock.calls[0][0]).toMatchObject({
         text: "Result",
         mediaUrls: [path.join(home, "openclaw", "image.png")],
+      });
+    });
+  });
+
+  describe("resolved state reaches the system prompt (narration follows delivery §2.4)", () => {
+    async function resolvedPromptBlockStreaming(params: {
+      home: string;
+      messageSid: string;
+      disableBlockStreaming?: boolean;
+      blockStreamingDefault?: "on" | "off";
+    }) {
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(async () => createEmbeddedReply("done"));
+      await runTelegramReply({ ...params, onBlockReply: vi.fn() });
+      expect(piEmbeddedMock.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+      const call = piEmbeddedMock.runEmbeddedPiAgent.mock.calls[0]?.[0];
+      piEmbeddedMock.runEmbeddedPiAgent.mockClear();
+      return call?.blockStreaming;
+    }
+
+    it("passes the agent default when the channel sets no override", async () => {
+      await withTempHome(async (home) => {
+        expect(await resolvedPromptBlockStreaming({ home, messageSid: "bs-1" })).toBe("on");
+        expect(
+          await resolvedPromptBlockStreaming({
+            home,
+            messageSid: "bs-2",
+            blockStreamingDefault: "off",
+          }),
+        ).toBe("off");
+      });
+    });
+
+    it("respects a channel override in either direction", async () => {
+      await withTempHome(async (home) => {
+        // Channel blockStreaming: false (e.g. channels.signal.blockStreaming) with agent default on.
+        expect(
+          await resolvedPromptBlockStreaming({
+            home,
+            messageSid: "bs-3",
+            disableBlockStreaming: true,
+            blockStreamingDefault: "on",
+          }),
+        ).toBe("off");
+        // Channel blockStreaming: true with agent default off.
+        expect(
+          await resolvedPromptBlockStreaming({
+            home,
+            messageSid: "bs-4",
+            disableBlockStreaming: false,
+            blockStreamingDefault: "off",
+          }),
+        ).toBe("on");
       });
     });
   });
