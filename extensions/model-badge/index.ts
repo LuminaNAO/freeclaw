@@ -2,11 +2,14 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/model-badge";
 import { createBadgeCommand } from "./src/commands.js";
 import type { Engine } from "./src/core/engine.js";
 import { buildRuntime, type Runtime } from "./src/runtime.js";
+import { createSceneWriter } from "./src/scene-writer.js";
 import { TOOL_NAMES, createBadgeTool } from "./src/tool.js";
 
 // model-badge (ARCH §5.1). The writer runs as a plugin service; triggers are the closed
 // set of §5.2 (see README "Triggers"): startup and periodic passes, the store/models
-// watcher, and the session_start plugin event as an early nudge for new targets.
+// watcher, and the session_start plugin event as an early nudge for new targets. ARCH
+// §2c.11: group memory's group_memory_created event names a new (or renamed) group, and
+// the agent writes its image scene.
 
 export default function register(api: OpenClawPluginApi) {
   let runtime: Runtime | undefined;
@@ -61,6 +64,20 @@ export default function register(api: OpenClawPluginApi) {
     }
   });
 
+  // ARCH §2c.11 trigger: group-memory ARCH §8's new-group event, created or renamed.
+  // Only this agent's own groups; the name goes to the engine of that channel's provider.
+  api.on("group_memory_created", async (event) => {
+    const r = runtime;
+    if (!r || event.agentId.toLowerCase() !== r.config.agentId.toLowerCase()) {
+      return;
+    }
+    for (const e of engines()) {
+      if (e.provider.id === event.channel) {
+        await e.groupNamed(event.groupId, event.name);
+      }
+    }
+  });
+
   api.registerService({
     id: "model-badge",
     start: async (ctx) => {
@@ -69,6 +86,10 @@ export default function register(api: OpenClawPluginApi) {
         gatewayConfig: ctx.config,
         gatewayStateDir: ctx.stateDir,
         log: ctx.logger,
+        sceneWriterFor: api.runtime?.subagent
+          ? (agentId) =>
+              createSceneWriter({ runtime: api.runtime, agentId, gatewayConfig: ctx.config })
+          : undefined,
       });
       if (runtime.errors.length) {
         ctx.logger.error(`[model-badge] config: ${runtime.errors.join("; ")}`);

@@ -18,6 +18,7 @@ import { normalizeConfig, type ImageGenConfig, type ModelBadgeConfig } from "./c
 import { createEngine, type Engine } from "./core/engine.js";
 import { createNodeFs, type CoreFs } from "./core/fsio.js";
 import { createRenderer, detectRasteriser, type Renderer } from "./core/render.js";
+import type { SceneWriter } from "./core/scene.js";
 import { createSteering, type Steering } from "./core/steering.js";
 import { createStyleStore, seededRules } from "./core/style.js";
 import { createProviderRegistry, type ProviderRegistry } from "./providers/registry.js";
@@ -73,6 +74,9 @@ export async function buildRuntime(opts: {
   registry?: ProviderRegistry;
   renderer?: Renderer | null;
   configPath?: string;
+  // ARCH §2c.11: the agent-run scene writer (built from the plugin runtime in index.ts).
+  sceneWriter?: SceneWriter | null;
+  sceneWriterFor?: (agentId: string) => SceneWriter;
 }): Promise<Runtime> {
   const clock = opts.clock ?? realClock;
   const fs = opts.fs ?? createNodeFs();
@@ -92,6 +96,7 @@ export async function buildRuntime(opts: {
   const sessionsStore = resolveStorePath(opts.gatewayConfig.session?.store, { agentId });
   const modelsJson = path.join(resolveAgentDir(opts.gatewayConfig, agentId), "models.json");
   const imageGenerator = imageGeneratorFor(config.imageGen, opts.gatewayConfig);
+  const sceneWriter = opts.sceneWriter ?? opts.sceneWriterFor?.(agentId) ?? null;
 
   const engines: Engine[] = [];
   for (const id of config.providers) {
@@ -124,6 +129,7 @@ export async function buildRuntime(opts: {
         log: opts.log,
         renderer,
         imageGenerator,
+        sceneWriter,
         parseConfigText: (text) => {
           const r = parseConfigJson5(text);
           if (!r.ok) {

@@ -23,7 +23,7 @@ import { BADGE_TOOL, createBadgeTool, STYLE_TOOL } from "./tool.js";
 const OP = "+10000000002";
 
 describe("plugin registration (ARCH §5.1)", () => {
-  it("registers the writer service, /badge, the model_badge tool (+ alias) and the session_start nudge", () => {
+  it("registers the writer service, /badge, the model_badge tool (+ alias), the session_start nudge and the §2c.11 new-group hook", () => {
     const seen = {
       services: [] as string[],
       commands: [] as string[],
@@ -47,7 +47,7 @@ describe("plugin registration (ARCH §5.1)", () => {
       services: ["model-badge"],
       commands: ["badge"],
       tools: [BADGE_TOOL, STYLE_TOOL],
-      hooks: ["session_start"],
+      hooks: ["session_start", "group_memory_created"],
     });
   });
 

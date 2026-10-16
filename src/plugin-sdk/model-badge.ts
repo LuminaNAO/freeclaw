@@ -7,6 +7,8 @@ export type {
   OpenClawPluginServiceContext,
   OpenClawPluginToolContext,
   PluginCommandContext,
+  PluginHookGroupMemoryCreatedEvent,
+  PluginRuntime,
 } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { SecretRef } from "../config/types.secrets.js";

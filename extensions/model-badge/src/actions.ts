@@ -187,6 +187,18 @@ export function createActions(deps: ActionDeps) {
     if (s.queuePosition >= 0) {
       lines.push(`Queued at position ${s.queuePosition + 1}`);
     }
+    // ARCH §2c.11: `/badge status` shows the scene the image prompt is built from.
+    if (s.scene) {
+      const from =
+        s.scene.source === "writer"
+          ? "written by the agent"
+          : s.scene.source === "steering"
+            ? "from a member's prompt"
+            : s.scene.source === "pending"
+              ? "motif, the agent is writing one"
+              : `motif${s.scene.why ? ` (${s.scene.why})` : ""}`;
+      lines.push(`Scene (${from}): ${s.scene.text}`);
+    }
     const ig = e.status().imageGen;
     lines.push(`Image generation ${ig.state}`);
     return { lines, summary: { ...s, imageGen: ig.state } };

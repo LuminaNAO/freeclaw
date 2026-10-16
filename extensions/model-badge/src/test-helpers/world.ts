@@ -5,6 +5,7 @@ import { createEngine, type Engine } from "../core/engine.js";
 import type { Lease } from "../core/lease.js";
 import type { ApplyResult, BadgeProvider } from "../core/provider.js";
 import type { Renderer } from "../core/render.js";
+import type { SceneWriter } from "../core/scene.js";
 import type { RpcOutcome } from "../providers/signal/classify.js";
 import { createSignalProvider } from "../providers/signal/provider.js";
 import { createFakeChatProvider, createFakeChatServer } from "./fake-provider.js";
@@ -308,6 +309,7 @@ export type MakeEngineExtra = {
   renderer?: Renderer | null;
   failRender?: (svg: string) => boolean;
   imageGenerator?: BaseArtGenerator | null;
+  sceneWriter?: SceneWriter | null;
 };
 
 export type WorldOpts = {
@@ -448,6 +450,7 @@ export async function createWorld(opts: WorldOpts = {}) {
         log,
         renderer,
         imageGenerator: extra.imageGenerator ?? null,
+        sceneWriter: extra.sceneWriter ?? null,
         random: () => 0,
         hostname: "test-host",
         instanceId: extra.instanceId ?? `inst-${w.engines.length + 1}`,

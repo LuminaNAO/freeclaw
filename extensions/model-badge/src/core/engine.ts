@@ -6,7 +6,12 @@
 import os from "node:os";
 import path from "node:path";
 import { createAdoptedStore, type AdoptedStore } from "./adopted.js";
-import { createImageBases, type BaseArtGenerator, type ImageBases } from "./baseart.js";
+import {
+  createImageBases,
+  MOTIF_SCENES,
+  type BaseArtGenerator,
+  type ImageBases,
+} from "./baseart.js";
 import { createAssetCache, type AssetCache, type AssetJob } from "./cache.js";
 import type { Clock, Logger } from "./clock.js";
 import { ALL_GROUPS, groupSelected, normalizeConfig, type ModelBadgeConfig } from "./config.js";
@@ -20,7 +25,7 @@ import {
 import type { CoreFs } from "./fsio.js";
 import { sha256 } from "./hash.js";
 import { createLease, type Lease } from "./lease.js";
-import type { BaseParams } from "./motif.js";
+import { isMotif, seedFor, type BaseParams } from "./motif.js";
 import {
   parseTargetKey,
   targetKey,
@@ -30,6 +35,13 @@ import {
 } from "./provider.js";
 import { isStamped, type Renderer } from "./render.js";
 import { overrideSnapshot, type SessionEntryLike } from "./resolve.js";
+import {
+  createSceneStore,
+  imageGenIsPrivate,
+  validateScene,
+  type SceneRecord,
+  type SceneWriter,
+} from "./scene.js";
 import { createStyleStore, seededRules, type StyleRule } from "./style.js";
 
 // Keeps ids and phone numbers out of logs and status messages.
@@ -62,6 +74,8 @@ export type EngineDeps = {
   // null: no rasteriser on the host → health renderer-missing, writer idle.
   renderer: Renderer | null;
   imageGenerator?: BaseArtGenerator | null;
+  // ARCH §2c.11: writes a new group's scene through the plugin runtime (one agent run).
+  sceneWriter?: SceneWriter | null;
   parseConfigText?: (text: string) => unknown;
   initialGatewayConfig?: unknown;
   instanceId?: string;
@@ -152,6 +166,11 @@ export function createEngine(deps: EngineDeps) {
     log,
   });
   const adoptAttempts = new Map<string, number>();
+  // ARCH §2c.11: the scene the agent wrote per target, keyed by (name, generation).
+  const scenes = createSceneStore({ fs, dir: path.join(P.stateDir, "scenes") });
+  let scenesLoaded = false;
+  const sceneQueue = new Set<string>();
+  let sceneRun: Promise<void> | null = null;
   const styleStore = createStyleStore({ fs, stateDir: P.rootDir });
   const lease =
     deps.lease ??
@@ -341,6 +360,10 @@ export function createEngine(deps: EngineDeps) {
     await images.load();
     await adopted.load();
     adoptAttempts.clear();
+    if ((await scenes.load()) > 0) {
+      await scenes.save();
+    }
+    scenesLoaded = true;
   }
 
   // ---------------- inputs ----------------
@@ -462,6 +485,7 @@ export function createEngine(deps: EngineDeps) {
         held: heldBase,
         generation: (key) => images.generation(key),
         adopted: (key) => adopted.active(key),
+        scene: (key, generation) => writtenScene(key, generation),
       },
       { providerId: provider.id, size },
     );
@@ -587,6 +611,9 @@ export function createEngine(deps: EngineDeps) {
       removedBases.add(want.key);
       await images.remove(want.key);
       await adopted.remove(want.key);
+      if (scenes.remove(want.key)) {
+        await scenes.save();
+      }
     }
     if (had) {
       log.info(`${tag} target removed: ${why}`);
@@ -650,7 +677,10 @@ export function createEngine(deps: EngineDeps) {
     }
     const t0 = clock.now();
     const refs = [...targets.values()].map((t) => t.ref);
-    const wants = refs.filter((r) => !view!.baseLocked(r)).map((r) => view!.imageWant(r));
+    const wants = refs
+      .filter((r) => !view!.baseLocked(r))
+      .map((r) => view!.imageWant(r))
+      .filter((w) => !scenePending(w.key));
     const img = await images.ensure(wants);
     if (img.generated > 0) {
       view = makeView(inputs);
@@ -749,6 +779,186 @@ export function createEngine(deps: EngineDeps) {
       }
     }
     return images.prune({ seeds, shas });
+  }
+
+  // ---------------- written scenes (§2c.11) ----------------
+
+  // The scene the agent wrote for this base key at this generation, if it was accepted.
+  function writtenScene(key: string, generation: number): string | null {
+    const name = scenes.name(key);
+    const rec = name ? scenes.record(key, name, generation) : null;
+    return rec?.source === "writer" && rec.scene ? rec.scene : null;
+  }
+
+  // A target whose scene is being written: its image waits for it, so one new group makes
+  // one picture, not a motif picture first and the written one after.
+  function scenePending(key: string): boolean {
+    return sceneQueue.has(key);
+  }
+
+  type SceneCandidate = { key: string; name: string; generation: number };
+
+  // Which group targets need the writer now: a name came from the new-group event, no
+  // outcome exists for (name, generation) yet, the adoption check is done and the group
+  // is not on its own artwork (§2c.8: then the writer is not called).
+  function sceneCandidates(): SceneCandidate[] {
+    const pw = deps.config.imageGen?.promptWriter;
+    if (!view || !scenesLoaded || !pw?.enabled || !deps.sceneWriter) {
+      return [];
+    }
+    if (images.state === "unconfigured") {
+      return [];
+    }
+    const out: SceneCandidate[] = [];
+    for (const t of targets.values()) {
+      if (t.ref.kind !== "group" || !driven(t.ref)) {
+        continue;
+      }
+      const key = view.imageWant(t.ref).key;
+      const name = scenes.name(key);
+      if (!name || awaitingAdoption(t) || view.adoptedFor(t.ref)) {
+        continue;
+      }
+      const generation = images.generation(key);
+      if (scenes.record(key, name, generation)) {
+        continue;
+      }
+      out.push({ key, name, generation });
+    }
+    return out;
+  }
+
+  async function writeOne(c: SceneCandidate): Promise<SceneRecord> {
+    const pw = deps.config.imageGen!.promptWriter;
+    const base = { name: c.name, generation: c.generation, at: clock.now() };
+    // Boundary: names and memory never leave the box in a prompt.
+    if (!imageGenIsPrivate(deps.config.imageGen)) {
+      return { ...base, source: "motif", why: "imageGen is not loopback or private" };
+    }
+    let timer: unknown = null;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timer = clock.setTimeout(() => resolve("timeout"), pw.timeoutMs);
+    });
+    try {
+      const out = await Promise.race([
+        deps.sceneWriter!.write({
+          name: c.name,
+          memory: pw.memory,
+          ...(pw.model ? { model: pw.model } : {}),
+          timeoutMs: pw.timeoutMs,
+        }),
+        timeout,
+      ]);
+      if (out === "timeout") {
+        return { ...base, source: "motif", why: "the writer timed out" };
+      }
+      const v = validateScene(out, c.name);
+      return v.ok
+        ? { ...base, source: "writer", scene: v.scene }
+        : { ...base, source: "motif", why: `rejected (${v.reason})` };
+    } catch {
+      return { ...base, source: "motif", why: "the writer failed" };
+    } finally {
+      clock.clearTimeout(timer);
+    }
+  }
+
+  // Runs the writer for every candidate, one at a time, then refreshes the inputs so the
+  // image is made with the new scene. Never blocks a pass.
+  function scheduleScenes() {
+    if (role !== "writer" || !running) {
+      return;
+    }
+    const candidates = sceneCandidates();
+    for (const c of candidates) {
+      sceneQueue.add(c.key);
+    }
+    if (sceneRun || candidates.length === 0) {
+      return;
+    }
+    sceneRun = (async () => {
+      let wrote = false;
+      const done = new Set<string>();
+      for (;;) {
+        const next = sceneCandidates().find((c) => sceneQueue.has(c.key));
+        if (!next || !running) {
+          break;
+        }
+        const rec = await writeOne(next);
+        // The inputs may have moved on (rename, regenerate) while the writer ran: then the
+        // target stays queued and is written again for its new inputs.
+        if (
+          scenes.name(next.key) === next.name &&
+          images.generation(next.key) === next.generation
+        ) {
+          sceneQueue.delete(next.key);
+          scenes.setRecord(next.key, rec);
+          wrote = true;
+          done.add(next.key);
+          // Scenes are never logged; only the outcome is.
+          log.info(
+            `${tag} scene for a new group: ${rec.source === "writer" ? "written" : `motif (${rec.why})`}`,
+          );
+        }
+      }
+      // Anything still queued that no longer needs the writer (adopted meanwhile, removed,
+      // or stopped) is released, so its image is not held back.
+      const still = new Set(sceneCandidates().map((c) => c.key));
+      for (const k of [...sceneQueue]) {
+        if (!still.has(k) || !running) {
+          sceneQueue.delete(k);
+        }
+      }
+      if (wrote) {
+        await scenes
+          .save()
+          .catch((err) =>
+            log.error(`${tag} scene write failed: ${(err as Error)?.message ?? err}`),
+          );
+      }
+      // The image held back while the scene was written is made now, with the written
+      // scene or the motif one; the fingerprint alone would miss a motif fallback.
+      if (running && role === "writer" && inputs && done.size > 0) {
+        view = makeView(inputs);
+        await rebuild("scene written");
+        for (const [k, t] of targets) {
+          if (done.has(view.imageWant(t.ref).key)) {
+            markDirty(k);
+          }
+        }
+      }
+    })()
+      .catch((err) => log.error(`${tag} scene writer: ${(err as Error)?.message ?? err}`))
+      .finally(() => {
+        sceneRun = null;
+        // Queued while this run was finishing: start the next one.
+        if (sceneQueue.size > 0) {
+          scheduleScenes();
+        }
+      });
+  }
+
+  // `/badge status` shows the scene (§2c.11): what the image prompt is built from.
+  function sceneSummary(ref: TargetRef): { source: string; text: string; why?: string } | null {
+    if (!view || images.state === "unconfigured" || view.baseLocked(ref)) {
+      return null;
+    }
+    const want = view.imageWant(ref);
+    if (want.style.prompt) {
+      return { source: "steering", text: want.style.prompt };
+    }
+    if (want.style.scene) {
+      return { source: "writer", text: want.style.scene };
+    }
+    const name = scenes.name(want.key);
+    const rec = name ? scenes.record(want.key, name, want.generation) : null;
+    const motif = isMotif(want.style.motif) ? want.style.motif : want.target.params.motif;
+    const palette = want.style.palette ?? want.target.params.palette;
+    return {
+      source: scenePending(want.key) ? "pending" : "motif",
+      text: `${MOTIF_SCENES[motif]}, in ${palette} colours`,
+      ...(rec?.why ? { why: rec.why } : {}),
+    };
   }
 
   // ---------------- adoption (§2c.8) ----------------
@@ -1267,6 +1477,7 @@ export function createEngine(deps: EngineDeps) {
     await recordStats();
     if ([...targets.keys()].some((k) => !prevKeys.has(k))) {
       await adoptNew();
+      scheduleScenes();
     }
 
     const refs = [...targets.values()].map((t) => t.ref);
@@ -1349,8 +1560,14 @@ export function createEngine(deps: EngineDeps) {
     await recordStats();
     const refs = [...targets.values()].map((t) => t.ref);
     await adoptNew();
+    scheduleScenes();
     const imagesPending =
-      images.pending(refs.filter((r) => !view!.baseLocked(r)).map((r) => view!.imageWant(r))) > 0;
+      images.pending(
+        refs
+          .filter((r) => !view!.baseLocked(r))
+          .map((r) => view!.imageWant(r))
+          .filter((w) => !scenePending(w.key)),
+      ) > 0;
     if (reason === "startup" || imagesPending || view!.fingerprint(refs) !== lastBuiltFingerprint) {
       await rebuild(reason);
     } else {
@@ -1524,6 +1741,32 @@ export function createEngine(deps: EngineDeps) {
       }
     },
 
+    // ARCH §2c.11: group memory's new-group event (created or renamed) names a group.
+    // The name is kept per target; a new name means new writer inputs. `idLower` is the
+    // provider's group id.
+    async groupNamed(idLower: string, name: string) {
+      const clean = name.replace(/[\r\n]+/g, " ").trim();
+      if (!clean) {
+        return { ok: false as const, message: "no name" };
+      }
+      const ref: TargetRef = { kind: "group", idLower: idLower.toLowerCase() };
+      if (!driven(ref)) {
+        return { ok: false as const, message: notDrivenOr(targetKey(ref)) };
+      }
+      const key = seedFor(provider.id, ref.idLower);
+      const changed = scenes.setName(key, clean, { loaded: scenesLoaded && role === "writer" });
+      if (changed && scenesLoaded && role === "writer") {
+        await scenes.save();
+      }
+      // A brand-new group may not be a known target yet; the watcher or the next pass
+      // picks it up and schedules the writer then.
+      if (provider.sessionKeyFor(ref)) {
+        nudged.add(provider.sessionKeyFor(ref)!);
+      }
+      scheduleScenes();
+      return { ok: true as const, changed };
+    },
+
     // Stepping seams for tests.
     watchTick,
     rebuild: (reason = "manual") => rebuild(reason),
@@ -1535,6 +1778,9 @@ export function createEngine(deps: EngineDeps) {
     },
     markDirty,
     async idle() {
+      while (sceneRun) {
+        await sceneRun;
+      }
       await rebuildPromise;
       await currentSend;
       await writeChain;
@@ -1701,6 +1947,7 @@ export function createEngine(deps: EngineDeps) {
         parked: status.parked[k] ?? null,
         waiting: status.waiting[k] ?? null,
         queuePosition: queue.indexOf(k),
+        scene: sceneSummary(t.ref),
       };
     },
 

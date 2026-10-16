@@ -32,6 +32,8 @@ export type ViewInputs = {
   generation?: (baseKey: string) => number;
   // ARCH §2c.8: the target's adopted base (its own artwork) when in use, by base key.
   adopted?: (baseKey: string) => { sha: string; file: string } | null;
+  // ARCH §2c.11: the validated scene the agent wrote for a group at this generation.
+  scene?: (baseKey: string, generation: number) => string | null;
 };
 
 // What a target shows now: a vector base (with its exact parameters), a stored raster
@@ -70,11 +72,18 @@ export function createView(inputs: ViewInputs, ctx: { providerId: string; size: 
     const key = seedFor(ctx.providerId, id, ns);
     const generation = inputs.generation?.(key) ?? 0;
     const { motif, palette } = inputs.overrides[id] ?? {};
-    const style = {
+    const style: ImageWant["style"] = {
       ...(motif ? { motif } : {}),
       ...(palette ? { palette } : {}),
       ...baseStyleFor(inputs.rules, id),
     };
+    // §2c.11: a group's written scene; a member's steering prompt still overrides it.
+    if (ref.kind === "group" && !style.prompt) {
+      const scene = inputs.scene?.(key, generation);
+      if (scene) {
+        style.scene = scene;
+      }
+    }
     const portrait = ref.kind === "profile";
     const params = baseParamsForSeed(key, style, { portrait });
     const seed = imageSeedFor(ctx.providerId, id, generation, ns);
