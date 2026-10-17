@@ -3,6 +3,13 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  clearFocusState,
+  FOCUS_COMBINED_HEADER,
+  holdFocusFiles,
+  setFocusState,
+  takeHeldFocusFiles,
+} from "../infra/focus-mode.js";
+import {
   listStack,
   resolveStackDir,
   stackFilesOf,
@@ -41,7 +48,7 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   loadConfig: () => ({}),
 }));
 
-const { replaySessionStack } = await import("./session-stack-replay.js");
+const { replayFocusWaiting, replaySessionStack } = await import("./session-stack-replay.js");
 
 describe("session prompt stack startup replay (§5)", () => {
   it("re-submits oldest first through the original ingress with the payload byte-identical", async () => {
@@ -329,5 +336,124 @@ describe("session prompt stack: stale replay guards (stale replay ARCH §2, §3,
         expect(fs.readdirSync(path.join(resolveStackDir(), dir))).toEqual([]);
       }
     }
+  });
+});
+
+describe("focus mode: startup replay and the combined replay (focus-mode ARCH §5)", () => {
+  beforeEach(() => {
+    calls.length = 0;
+    clearFocusState();
+    takeHeldFocusFiles();
+  });
+
+  it("§5.4: while focused, non-target inbound files are held; agent files and the target replay as usual", async () => {
+    setFocusState({ target: "agent:main:focus-target", by: "op" });
+    const other = "agent:main:focus-other";
+    const heldA = writeStackFile({ sessionKey: other, ...inboundEntry(other, "fa") });
+    const agentFile = writeStackFile({
+      sessionKey: other,
+      source: "agent",
+      payload: { params: { message: "A", sessionKey: other, idempotencyKey: "fx" }, client: null },
+    });
+    const heldB = ageStackFile(
+      writeStackFile({ sessionKey: other, ...inboundEntry(other, "fb") }),
+      30 * 60 * 60 * 1000,
+    );
+    const target = writeStackFile({
+      sessionKey: "agent:main:focus-target",
+      ...inboundEntry("agent:main:focus-target", "ft"),
+    });
+    const log = makeLog();
+
+    await replaySessionStack({ logGateway: log } as never);
+
+    expect(callsFor(other).map((c) => c.source)).toEqual(["agent"]);
+    expect(callsFor("agent:main:focus-target").map((c) => c.source)).toEqual(["inbound"]);
+    // Held files are kept (no 24 h drop: focus has no timeout) and registered for the replay.
+    expect(fs.existsSync(heldA)).toBe(true);
+    expect(fs.existsSync(heldB)).toBe(true);
+    expect(logLines(log)).toContain(
+      `session stack: holding 2 file(s) for ${other} (focus mode on agent:main:focus-target)`,
+    );
+    const held = takeHeldFocusFiles();
+    expect([...(held.get(other) ?? [])].toSorted()).toEqual([heldA, heldB].toSorted());
+    for (const f of [heldA, heldB, agentFile, target]) {
+      fs.rmSync(f, { force: true });
+    }
+  });
+
+  it("§5.2-§5.3: one combined inbound dispatch per session, oldest session first, all files bound to it", async () => {
+    const s1 = "agent:main:focus-s1";
+    const s2 = "agent:main:focus-s2";
+    const t0 = Date.UTC(2026, 9, 17, 10, 0, 0);
+    // Oldest session first is by arrival (the file name); s2's file arrived first.
+    const s2a = ageStackFile(
+      writeStackFile({
+        sessionKey: s2,
+        ...inboundEntry(s2, "s2a", { SenderName: "Zed", Timestamp: t0, OriginatingTo: "z" }),
+      }),
+      60_000,
+    );
+    const s1a = writeStackFile({
+      sessionKey: s1,
+      ...inboundEntry(s1, "s1a", {
+        SenderName: "Ann",
+        Timestamp: t0 + 1000,
+        OriginatingTo: "old-route",
+        MediaPath: "/m/1.png",
+        MediaType: "image/png",
+      }),
+    });
+    const s1b = writeStackFile({
+      sessionKey: s1,
+      ...inboundEntry(s1, "s1b", {
+        SenderName: "Bob",
+        Timestamp: t0 + 2000,
+        OriginatingTo: "new-route",
+        AccountId: "acct-2",
+        MediaPaths: ["/m/2.jpg", "/m/3.pdf"],
+        MediaUrls: ["/m/2.jpg", "/m/3.pdf"],
+        MediaTypes: ["image/jpeg", "application/pdf"],
+      }),
+    });
+    holdFocusFiles(s1, [s1b, s1a]);
+    holdFocusFiles(s2, [s2a]);
+
+    const { sessions, done } = replayFocusWaiting(makeLog() as never);
+    await done;
+
+    expect(sessions).toBe(2);
+    expect(calls.map((c) => (c.payload as { SessionKey: string }).SessionKey)).toEqual([s2, s1]);
+    const combined = callsFor(s1)[0];
+    const ctx = combined.payload as Record<string, unknown>;
+    expect(combined.boundFiles).toEqual([s1a, s1b]);
+    expect(String(ctx.Body).split("\n")[0]).toBe(FOCUS_COMBINED_HEADER);
+    expect(ctx.Body).toMatch(/\[Ann, [^\]]+\] body s1a\n\[Bob, [^\]]+\] body s1b$/);
+    expect(ctx.BodyForAgent).toBe(ctx.Body);
+    // Route, account and reply target are the newest message's.
+    expect(ctx.OriginatingTo).toBe("new-route");
+    expect(ctx.AccountId).toBe("acct-2");
+    expect(ctx.MessageSid).toBe("s1b");
+    // Attachments of all of them.
+    expect(ctx.MediaPaths).toEqual(["/m/1.png", "/m/2.jpg", "/m/3.pdf"]);
+    expect(ctx.MediaTypes).toEqual(["image/png", "image/jpeg", "application/pdf"]);
+    // Nothing deleted here: the turn end deletes the bound files (stack §3).
+    expect([s1a, s1b, s2a].every((f) => fs.existsSync(f))).toBe(true);
+    // Taken once.
+    expect(replayFocusWaiting(makeLog() as never).sessions).toBe(0);
+    for (const f of [s1a, s1b, s2a]) {
+      fs.rmSync(f, { force: true });
+    }
+  });
+
+  it("a held file already gone is skipped", async () => {
+    const key = "agent:main:focus-gone";
+    const file = writeStackFile({ sessionKey: key, ...inboundEntry(key, "g1") });
+    fs.rmSync(file);
+    holdFocusFiles(key, [file]);
+    const { sessions, done } = replayFocusWaiting(makeLog() as never);
+    await done;
+    expect(sessions).toBe(0);
+    expect(callsFor(key)).toEqual([]);
   });
 });

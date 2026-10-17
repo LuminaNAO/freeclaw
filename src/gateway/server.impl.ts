@@ -31,6 +31,7 @@ import {
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
+import { registerFocusReplayer } from "../infra/focus-mode.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
@@ -111,7 +112,7 @@ import {
 import { resolveHookClientIpConfig } from "./server/hooks.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
-import { replaySessionStack } from "./session-stack-replay.js";
+import { replayFocusWaiting, replaySessionStack } from "./session-stack-replay.js";
 import {
   ensureGatewayStartupAuth,
   mergeGatewayAuthConfig,
@@ -947,7 +948,12 @@ export async function startGatewayServer(
     announceGatewayCrash(cfgAtStart, log);
   }
 
+  // Focus mode (focus-mode ARCH §5): ending focus replays each session's waiting
+  // prompts as one combined prompt through the normal inbound path.
+  registerFocusReplayer(() => replayFocusWaiting(gatewayRequestContext.logGateway));
+
   // Session prompt stack (§5): after channels start, re-submit unfinished prompts.
+  // While focused, non-target inbound files are held, not replayed (focus-mode ARCH §5.4).
   if (!minimalTestGateway) {
     void replaySessionStack(gatewayRequestContext);
   }

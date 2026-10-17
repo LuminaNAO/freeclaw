@@ -10,16 +10,28 @@
 import fs from "node:fs";
 import path from "node:path";
 import { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import {
+  buildFocusCombinedContext,
+  type FocusWaitingMessage,
+} from "../auto-reply/reply/focus-combine.js";
+import { forgetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { isRoutableChannel, routeReply } from "../auto-reply/reply/route-reply.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
 import {
+  holdFocusFiles,
+  readFocusState,
+  sameSessionKey,
+  takeHeldFocusFiles,
+} from "../infra/focus-mode.js";
+import {
   bindStackFiles,
   deleteStackFile,
   listStack,
   type StackEntry,
+  type StackFileContent,
 } from "../infra/session-stack.js";
 import { isWebchatClient } from "../utils/message-channel.js";
 import { agentHandlers } from "./server-methods/agent.js";
@@ -139,7 +151,18 @@ function replayInbound(
   log: GatewayRequestContext["logGateway"],
 ): Promise<unknown> {
   const { ctx, images } = entry.content.payload as InboundPayload;
-  bindStackFiles(ctx, [entry.file]);
+  return dispatchReplayed({ ctx, images, files: [entry.file], log });
+}
+
+/** Re-submit through inbound dispatch with `files` bound, so the turn end deletes them (§3). */
+function dispatchReplayed(params: {
+  ctx: MsgContext;
+  images?: GetReplyOptions["images"];
+  files: string[];
+  log: GatewayRequestContext["logGateway"];
+}): Promise<unknown> {
+  const { ctx, images, files, log } = params;
+  bindStackFiles(ctx, files);
   const cfg = loadConfig();
   const channel = ctx.OriginatingChannel;
   const to = ctx.OriginatingTo;
@@ -219,6 +242,35 @@ function dropStaleEntries(
   return keep;
 }
 
+/**
+ * Focus mode ARCH §5.4: while focused, the inbound files of non-target sessions are
+ * not replayed at startup; they are held for the combined replay when focus ends.
+ * Agent files are not gated (§3.3) and replay as usual. Held files are taken out
+ * before the stale guards: they were never run, and focus has no timeout (§2).
+ */
+function holdFocusedEntries(
+  sessionKey: string,
+  entries: StackEntry[],
+  log: GatewayRequestContext["logGateway"],
+): StackEntry[] {
+  const focus = readFocusState();
+  if (!focus || sameSessionKey(sessionKey, focus.target)) {
+    return entries;
+  }
+  const held = entries.filter((entry) => entry.content.source === "inbound");
+  if (held.length === 0) {
+    return entries;
+  }
+  holdFocusFiles(
+    sessionKey,
+    held.map((entry) => entry.file),
+  );
+  log.info(
+    `session stack: holding ${held.length} file(s) for ${sessionKey} (focus mode on ${focus.target})`,
+  );
+  return entries.filter((entry) => entry.content.source !== "inbound");
+}
+
 /** §5: per session, oldest first, each through the ingress point it came from. */
 export function replaySessionStack(context: GatewayRequestContext): Promise<void> {
   const log = context.logGateway;
@@ -226,7 +278,12 @@ export function replaySessionStack(context: GatewayRequestContext): Promise<void
   const sessions = listStack()
     .map((session) => ({
       ...session,
-      entries: dropStaleEntries(session.sessionKey, session.entries, now, log),
+      entries: dropStaleEntries(
+        session.sessionKey,
+        holdFocusedEntries(session.sessionKey, session.entries, log),
+        now,
+        log,
+      ),
     }))
     .filter((session) => session.entries.length > 0);
   if (sessions.length > 0) {
@@ -255,4 +312,74 @@ export function replaySessionStack(context: GatewayRequestContext): Promise<void
       }
     }),
   ).then(() => {});
+}
+
+function readHeldEntry(file: string): StackEntry | undefined {
+  const match = /^(\d+)-(\d+)\.json$/.exec(path.basename(file));
+  if (!match) {
+    return undefined;
+  }
+  try {
+    const content = JSON.parse(fs.readFileSync(file, "utf8")) as StackFileContent;
+    if (content.source !== "inbound") {
+      return undefined;
+    }
+    return { file, arrivalMs: Number(match[1]), content };
+  } catch {
+    // Gone (or unreadable): nothing to replay.
+    return undefined;
+  }
+}
+
+function heldOrder(a: StackEntry, b: StackEntry): number {
+  const n = (entry: StackEntry) => Number(/-(\d+)\.json$/.exec(entry.file)?.[1] ?? 0);
+  return a.arrivalMs - b.arrivalMs || n(a) - n(b);
+}
+
+/**
+ * Focus mode ARCH §5.2-§5.3: per session with held prompts, oldest session first,
+ * combine them into ONE prompt and replay it through the normal inbound path. All
+ * of the session's files are bound to that one turn, so they are deleted when it
+ * ends (stack §3, several prompts consumed by one turn).
+ */
+export function replayFocusWaiting(log: GatewayRequestContext["logGateway"]): {
+  sessions: number;
+  done: Promise<void>;
+} {
+  const cfg = loadConfig();
+  const sessions = [...takeHeldFocusFiles()]
+    .map(([sessionKey, files]) => ({
+      sessionKey,
+      entries: [...files]
+        .map(readHeldEntry)
+        .filter((entry): entry is StackEntry => Boolean(entry))
+        .toSorted(heldOrder),
+    }))
+    .filter((session) => session.entries.length > 0)
+    .toSorted((a, b) => heldOrder(a.entries[0], b.entries[0]));
+  if (sessions.length > 0) {
+    log.info(`focus mode: replaying waiting prompts for ${sessions.length} session(s)`);
+  }
+  const runs = sessions.map((session) => {
+    const messages: FocusWaitingMessage[] = session.entries.map((entry) => {
+      const payload = entry.content.payload as InboundPayload;
+      return { ctx: payload.ctx, images: payload.images, arrivalMs: entry.arrivalMs };
+    });
+    const files = session.entries.map((entry) => entry.file);
+    log.info(
+      `focus mode: replay ${session.sessionKey} combined=${files.length} ${files.map((f) => path.basename(f)).join(",")}`,
+    );
+    try {
+      const { ctx, images } = buildFocusCombinedContext(messages, cfg);
+      // The newest message's id was seen by the dedupe cache when it was held.
+      forgetInboundDedupe(ctx);
+      return dispatchReplayed({ ctx, images, files, log }).catch((err: unknown) => {
+        log.warn(`focus mode replay failed for ${session.sessionKey}: ${String(err)}`);
+      });
+    } catch (err) {
+      log.warn(`focus mode replay failed for ${session.sessionKey}: ${String(err)}`);
+      return Promise.resolve();
+    }
+  });
+  return { sessions: sessions.length, done: Promise.all(runs).then(() => {}) };
 }

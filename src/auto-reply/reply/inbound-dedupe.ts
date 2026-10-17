@@ -80,3 +80,15 @@ export function shouldSkipDuplicateInbound(
 export function resetInboundDedupe(): void {
   inboundDedupeCache.clear();
 }
+
+/**
+ * Forget one message's dedupe key, so the same message can be dispatched again in
+ * this process (focus mode ARCH §5.2: the combined replay carries the newest
+ * held message's id, which the dedupe cache saw when it was held).
+ */
+export function forgetInboundDedupe(ctx: MsgContext, opts?: { cache?: DedupeCache }): void {
+  const key = buildInboundDedupeKey(ctx);
+  if (key) {
+    (opts?.cache ?? inboundDedupeCache).delete(key);
+  }
+}
