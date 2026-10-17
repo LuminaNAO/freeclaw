@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import { clearFocusState, setFocusState } from "../../infra/focus-mode.js";
 import { listStack } from "../../infra/session-stack.js";
 import { markGatewayDraining, resetAllLanes } from "../../process/command-queue.js";
 import { agentHandlers } from "./agent.js";
@@ -438,6 +439,18 @@ describe("gateway agent handler", () => {
           "test-stack-drain",
       );
     expect(stored).toBeDefined();
+  });
+
+  it("focus mode: agent ingress is not gated; a non-target session runs while focused (focus-mode ARCH §3.3)", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    setFocusState({ target: "agent:main:some-other-session", by: "op" });
+    try {
+      await runMainAgent("not gated", "test-focus-agent");
+      await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalledTimes(1));
+    } finally {
+      clearFocusState();
+    }
   });
 
   it("session stack: an admin request replayed from its file runs with the same sender and owner status (§2.1, §5)", async () => {

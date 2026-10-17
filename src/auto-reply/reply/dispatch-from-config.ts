@@ -17,6 +17,7 @@ import {
   toPluginMessageReceivedEvent,
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { focusHolding } from "../../infra/focus-mode.js";
 import {
   bindStackFiles,
   finishStackFiles,
@@ -38,6 +39,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
+import { holdForFocus } from "./focus-gate.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
@@ -193,6 +195,16 @@ export async function dispatchReplyFromConfig(params: {
   }
   if (stackFiles && isGatewayDraining()) {
     // Restart drain (§6): stored, accepted, run after the restart.
+    return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+  }
+  const focus = stackFiles && sessionKey ? focusHolding(sessionKey) : undefined;
+  if (
+    focus &&
+    stackFiles &&
+    sessionKey &&
+    (await holdForFocus({ ctx, cfg, dispatcher, sessionKey, stackFiles, focus }))
+  ) {
+    // Focus mode (focus-mode ARCH §3.2): stored, not run; replayed combined when focus ends.
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
   try {
