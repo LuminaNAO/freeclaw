@@ -368,6 +368,21 @@ function buildChatCommands(): ChatCommandDefinition[] {
       ],
     }),
     defineChatCommand({
+      key: "focusmode",
+      nativeName: "focusmode",
+      description: "Focus mode: only one session runs, others wait (operator).",
+      textAlias: "/focusmode",
+      category: "management",
+      args: [
+        {
+          name: "target",
+          description: "Session key, here, or off",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "unfocus",
       nativeName: "unfocus",
       description: "Remove the current thread (Discord) or topic/conversation (Telegram) binding.",

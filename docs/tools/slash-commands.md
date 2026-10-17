@@ -91,6 +91,7 @@ Text + native (when enabled):
 - `/agents` (list thread-bound agents for this session)
 - `/focus <target>` (Discord: bind this thread, or a new thread, to a session/subagent target)
 - `/unfocus` (Discord: remove the current thread binding)
+- `/focusmode <session-key|here>|off` (focus mode, operator-only: only the target session runs; other sessions' messages wait on disk, get one "busy" notice, and are replayed as one combined prompt per session on `off`. No argument shows the target, since, and waiting count per session. Not the same as `/focus`.)
 - `/kill <id|#|all>` (immediately abort one or all running sub-agents for this session; no confirmation message)
 - `/steer <id|#> <message>` (steer a running sub-agent immediately: in-run when possible, otherwise abort current work and restart on the steer message)
 - `/tell <id|#> <message>` (alias for `/steer`)
