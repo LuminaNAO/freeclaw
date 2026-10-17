@@ -27,12 +27,14 @@ At inbound dispatch, at the same point as the restart-drain check (stack §6), a
    gets one notice. Silent-reply surfaces are respected (the notice is a normal reply).
 3. **Not gated:** cron and heartbeat turns (not stored, stack §4) and the gateway `agent` ingress used by
    subagents, announces and the swarm. Focus is about people's inbound messages only.
-4. **Escape hatch:** an operator's `/focus` command is always handled, in any session, even while focused away.
+4. **Escape hatch:** an operator's `/focusmode` command is always handled, in any session, even while focused away.
 
 ## 4. Commands and tool
 
-- `/focus <session-key | here>` sets the target (`here` = the session the command is sent from). `/focus off` ends
-  it. `/focus` with no argument shows target, since, and the per-session waiting count (`gateway stack`).
+- `/focusmode <session-key | here>` sets the target (`here` = the session the command is sent from). `/focusmode off`
+  ends it. `/focusmode` with no argument shows target, since, and the per-session waiting count (`gateway stack`).
+  (Operator decision 2026-10-17: the chat command is `/focusmode`. The existing `/focus` and `/unfocus` are the
+  Discord/Telegram thread-binding commands and stay exactly as they are.)
 - Same actions on the CLI (`openclaw gateway focus [set <key>|off|status]`) and as a gateway method, so the agent can
   do it with its tools when asked by an operator. Operator authority only (the existing owner/command-authorization
   check); anyone else gets the standard refusal.
@@ -53,7 +55,8 @@ At inbound dispatch, at the same point as the restart-drain check (stack §6), a
 
 - Focused: target session runs; another session's message is stored, not run, and gets one busy notice; a second
   message to it gets no second notice; cron and `agent`-ingress turns run normally.
-- `/focus` from an operator works in a non-target session while focused; a non-operator is refused.
+- `/focusmode` from an operator works in a non-target session while focused; a non-operator is refused.
+- The existing `/focus` and `/unfocus` thread-binding commands are unchanged (their tests stay green).
 - Off: three waiting prompts in one session → exactly one turn whose prompt contains all three in order with sender
   and time; all three files deleted after; route is the newest message's.
 - Restart while focused: focus still on after start; non-target files not replayed until off.
