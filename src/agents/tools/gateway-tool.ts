@@ -38,6 +38,7 @@ const GATEWAY_ACTIONS = [
   "config.apply",
   "config.patch",
   "update.run",
+  "focus",
 ] as const;
 
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
@@ -61,6 +62,9 @@ const GatewayToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Number()),
+  // focus (focus mode: set <target> | off | status)
+  focusAction: Type.Optional(stringEnum(["set", "off", "status"] as const)),
+  target: Type.Optional(Type.String()),
 });
 // NOTE: We intentionally avoid top-level `allOf`/`anyOf`/`oneOf` conditionals here:
 // - OpenAI rejects tool schemas that include these keywords at the *top-level*.
@@ -76,7 +80,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Focus mode (action=focus, focusAction=set+target|off|status): only the target session runs while others' messages wait; use it only when an operator asks. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -219,6 +223,20 @@ export function createGatewayTool(opts?: {
           restartDelayMs,
           timeoutMs: updateTimeoutMs,
         });
+        return jsonResult({ ok: true, result });
+      }
+
+      if (action === "focus") {
+        const focusAction = readStringParam(params, "focusAction") ?? "status";
+        const target =
+          focusAction === "set"
+            ? readStringParam(params, "target", { required: true, label: "target" })
+            : undefined;
+        const result = await callGatewayTool(
+          "focus",
+          gatewayOpts,
+          target ? { action: focusAction, target } : { action: focusAction },
+        );
         return jsonResult({ ok: true, result });
       }
 

@@ -25,6 +25,7 @@ import {
   pickGatewayPort,
   renderBeaconLines,
 } from "./discover.js";
+import { runGatewayFocus } from "./focus.js";
 import { addGatewayRunCommand } from "./run.js";
 import { runGatewayStack, runGatewayStackDrop } from "./stack.js";
 
@@ -126,6 +127,68 @@ export function registerGatewayCli(program: Command) {
     .action(async (opts: { yes?: boolean }) => {
       await runGatewayCommand(() => runGatewayStackDrop(opts), "Gateway stack drop failed");
     });
+
+  const focus = gatewayCallOpts(
+    gateway
+      .command("focus")
+      .description(
+        "Focus mode: only one session runs, the others' messages wait (status by default)",
+      )
+      .action(async (opts, command) => {
+        await runGatewayCommand(
+          () =>
+            runGatewayFocus({ action: "status", opts: resolveGatewayRpcOptions(opts, command) }),
+          "Gateway focus failed",
+        );
+      }),
+  );
+  gatewayCallOpts(
+    focus
+      .command("set")
+      .description("Focus on one session (session key)")
+      .argument("<session-key>", "Session key to focus on")
+      .action(async (target: string, opts, command) => {
+        await runGatewayCommand(
+          () =>
+            runGatewayFocus({
+              action: "set",
+              target,
+              opts: resolveGatewayRpcOptions({ ...command.parent?.opts(), ...opts }, command),
+            }),
+          "Gateway focus set failed",
+        );
+      }),
+  );
+  gatewayCallOpts(
+    focus
+      .command("off")
+      .description("End focus; waiting messages are replayed, one combined prompt per session")
+      .action(async (opts, command) => {
+        await runGatewayCommand(
+          () =>
+            runGatewayFocus({
+              action: "off",
+              opts: resolveGatewayRpcOptions({ ...command.parent?.opts(), ...opts }, command),
+            }),
+          "Gateway focus off failed",
+        );
+      }),
+  );
+  gatewayCallOpts(
+    focus
+      .command("status")
+      .description("Show the focus target, since, and waiting messages per session")
+      .action(async (opts, command) => {
+        await runGatewayCommand(
+          () =>
+            runGatewayFocus({
+              action: "status",
+              opts: resolveGatewayRpcOptions({ ...command.parent?.opts(), ...opts }, command),
+            }),
+          "Gateway focus status failed",
+        );
+      }),
+  );
 
   gateway
     .command("crashes")

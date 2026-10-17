@@ -131,6 +131,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "system-event",
     "agents.files.set",
     "gateway.heapSnapshot",
+    "focus",
     "signal.link.start",
     "signal.link.status",
     "signal.link.cancel",

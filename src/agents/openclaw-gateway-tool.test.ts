@@ -159,6 +159,29 @@ describe("gateway tool", () => {
     });
   });
 
+  it("passes focus (focus mode set/off/status) through the gateway focus method", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = requireGatewayTool("agent:main:main");
+    await tool.execute("focus1", {
+      action: "focus",
+      focusAction: "set",
+      target: "agent:main:main",
+    });
+    expect(callGatewayTool).toHaveBeenCalledWith("focus", expect.any(Object), {
+      action: "set",
+      target: "agent:main:main",
+    });
+    await tool.execute("focus2", { action: "focus", focusAction: "off" });
+    expect(callGatewayTool).toHaveBeenCalledWith("focus", expect.any(Object), { action: "off" });
+    await tool.execute("focus3", { action: "focus" });
+    expect(callGatewayTool).toHaveBeenCalledWith("focus", expect.any(Object), {
+      action: "status",
+    });
+    await expect(tool.execute("focus4", { action: "focus", focusAction: "set" })).rejects.toThrow(
+      /target/,
+    );
+  });
+
   it("passes update.run through gateway call", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";

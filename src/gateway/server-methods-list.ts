@@ -93,6 +93,7 @@ const BASE_METHODS = [
   "cron.runs",
   "gateway.identity.get",
   "gateway.heapSnapshot",
+  "focus",
   "system-presence",
   "system-event",
   "send",
