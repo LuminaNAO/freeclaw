@@ -96,6 +96,8 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
         accountId: "ops-bot", // optional multi-account channel id
         prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
         ackMaxChars: 300, // max chars allowed after HEARTBEAT_OK
+        compactAt: 100000, // optional; default min(100k, half the model window); clamped to min(150k, half); "off" disables
+        compactInstructions: "Keep open todos and decisions.", // optional
       },
     },
   },
@@ -228,6 +230,8 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `prompt`: overrides the default prompt body (not merged).
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
+- `compactAt`: heartbeat session compaction threshold in tokens. Before each heartbeat turn, if the heartbeat session's context is above it, the session is compacted first (same compaction as `/compact`, memory flush included) on the model the heartbeat turn uses, then the turn runs on the compacted session. Default (unset): `min(100000, half the model's context window)`; explicit values are clamped to `min(150000, half the window)`. Skipped while a run is active on the session or the gateway is draining (retried at the next heartbeat). Quiet: one log line, nothing sent to chats; `openclaw status` shows the heartbeat session size, threshold and last compaction. Set `"off"` to disable.
+- `compactInstructions`: optional custom instructions passed to that compaction.
 - `activeHours`: restricts heartbeat runs to a time window. Object with `start` (HH:MM, inclusive; use `00:00` for start-of-day), `end` (HH:MM exclusive; `24:00` allowed for end-of-day), and optional `timezone`.
   - Omitted or `"user"`: uses your `agents.defaults.userTimezone` if set, otherwise falls back to the host system timezone.
   - `"local"`: always uses the host system timezone.
@@ -383,3 +387,7 @@ off in group chats.
 Heartbeats run full agent turns. Shorter intervals burn more tokens. Keep
 `HEARTBEAT.md` small and consider a cheaper `model` or `target: "none"` if you
 only want internal state updates.
+
+Long-lived heartbeat sessions are compacted automatically before a turn once
+they pass `compactAt` (default 100k tokens, or half the model window if smaller),
+so their context, and with it the per-turn cost, stays bounded.

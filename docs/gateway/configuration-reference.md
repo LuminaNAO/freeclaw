@@ -987,6 +987,8 @@ Periodic heartbeat runs.
         prompt: "Read HEARTBEAT.md if it exists...",
         ackMaxChars: 300,
         suppressToolErrorWarnings: false,
+        compactAt: 100000, // optional; default min(100k, half the model window); clamped to min(150k, half); "off" disables
+        compactInstructions: "Keep open todos and decisions.", // optional
       },
     },
   },
@@ -997,6 +999,8 @@ Periodic heartbeat runs.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
+- `compactAt`: heartbeat session compaction threshold in tokens. Before each heartbeat turn, if the heartbeat session's context is above it, the session is compacted first (same compaction as `/compact`, memory flush included) on the model the heartbeat turn uses, then the turn runs on the compacted session. Default (unset): `min(100000, half the model's context window)`; explicit values are clamped to `min(150000, half the window)`. Skipped while a run is active on the session or the gateway is draining (retried at the next heartbeat). Quiet: one log line, nothing sent to chats; `openclaw status` shows the heartbeat session size, threshold and last compaction. Set `"off"` to disable.
+- `compactInstructions`: optional custom instructions passed to that compaction.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
