@@ -17,6 +17,8 @@ type TrackedTurnBrowserTab = {
   targetId: string;
   baseUrl?: string;
   profile?: string;
+  /** Custom closer (for example a node browser proxy); default closes via the browser client. */
+  close?: () => Promise<void>;
 };
 
 const trackedTabsBySession = new Map<string, Map<string, TrackedSessionBrowserTab>>();
@@ -72,6 +74,8 @@ export function trackSessionBrowserTab(params: {
   profile?: string;
   runId?: string;
   keep?: boolean;
+  /** Close this tab another way at turn end (node browser proxy). Turn tracking only. */
+  close?: () => Promise<void>;
 }): void {
   const targetIdRaw = params.targetId?.trim();
   if (!targetIdRaw) {
@@ -85,6 +89,7 @@ export function trackSessionBrowserTab(params: {
       targetId: normalizeTargetId(targetIdRaw),
       baseUrl: normalizeBaseUrl(params.baseUrl),
       profile: normalizeProfile(params.profile),
+      ...(params.close ? { close: params.close } : {}),
     };
     let forRun = trackedTabsByRun.get(runId);
     if (!forRun) {
@@ -94,7 +99,7 @@ export function trackSessionBrowserTab(params: {
     forRun.set(toTrackedTabId(turnTab), turnTab);
   }
   const sessionKeyRaw = params.sessionKey?.trim();
-  if (!sessionKeyRaw) {
+  if (!sessionKeyRaw || params.close) {
     return;
   }
   const sessionKey = normalizeSessionKey(sessionKeyRaw);
@@ -224,7 +229,11 @@ export async function closeTrackedBrowserTabsForRun(params: {
       }
     }
     try {
-      await closeTab({ targetId: tab.targetId, baseUrl: tab.baseUrl, profile: tab.profile });
+      if (tab.close) {
+        await tab.close();
+      } else {
+        await closeTab({ targetId: tab.targetId, baseUrl: tab.baseUrl, profile: tab.profile });
+      }
       closed += 1;
     } catch (err) {
       if (!isIgnorableCloseError(err)) {

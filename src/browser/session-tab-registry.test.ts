@@ -173,6 +173,16 @@ describe("session tab registry", () => {
       expect(warnings).toEqual([expect.stringContaining("network down")]);
     });
 
+    it("uses a custom closer for proxied tabs and keeps them out of session tracking", async () => {
+      const close = vi.fn(async () => {});
+      trackSessionBrowserTab({ sessionKey: "s", targetId: "node-tab", runId: "run-1", close });
+      expect(__countTrackedSessionBrowserTabsForTests("s")).toBe(0);
+      const closeTab = vi.fn(async () => {});
+      expect(await closeTrackedBrowserTabsForRun({ runId: "run-1", closeTab })).toBe(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(closeTab).not.toHaveBeenCalled();
+    });
+
     it("session reset also forgets the turn's tabs so they are not closed twice", async () => {
       trackSessionBrowserTab({ sessionKey: "s", targetId: "t1", runId: "run-1" });
       const closeTab = vi.fn(async () => {});

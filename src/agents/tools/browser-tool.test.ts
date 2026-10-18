@@ -400,6 +400,52 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
+  it("tracks node-proxied tabs for turn-end close unless keep (ARCH §2.3)", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: { result: { targetId: "node-tab", url: "https://example.com" } },
+    } as never);
+    const tool = createBrowserTool({ runId: "run-node" });
+    await tool.execute?.("call-1", {
+      action: "open",
+      target: "node",
+      url: "https://example.com",
+    });
+    const tracked = sessionTabRegistryMocks.trackSessionBrowserTab.mock.calls.at(-1)?.[0] as
+      | { targetId?: string; runId?: string; close?: () => Promise<void> }
+      | undefined;
+    expect(tracked).toMatchObject({ targetId: "node-tab", runId: "run-node" });
+    await tracked?.close?.();
+    expect(gatewayMocks.callGatewayTool).toHaveBeenLastCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({
+        params: expect.objectContaining({ method: "DELETE", path: "/tabs/node-tab" }),
+      }),
+    );
+
+    sessionTabRegistryMocks.trackSessionBrowserTab.mockClear();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: { result: { targetId: "node-keep" } },
+    } as never);
+    await tool.execute?.("call-2", {
+      action: "open",
+      target: "node",
+      url: "https://example.com",
+      keep: true,
+    });
+    expect(sessionTabRegistryMocks.trackSessionBrowserTab).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).toHaveBeenLastCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({
+        params: expect.objectContaining({ body: { url: "https://example.com", keep: true } }),
+      }),
+    );
+  });
+
   it("gives node.invoke extra slack beyond the default proxy timeout", async () => {
     mockSingleBrowserProxyNode();
     gatewayMocks.callGatewayTool.mockResolvedValueOnce({

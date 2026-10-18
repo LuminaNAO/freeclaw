@@ -457,6 +457,26 @@ export function createBrowserTool(opts?: {
               profile,
               body: keep ? { url: targetUrl, keep: true } : { url: targetUrl },
             });
+            const rawTargetId =
+              result && typeof result === "object"
+                ? (result as { targetId?: unknown }).targetId
+                : undefined;
+            const proxiedTargetId = typeof rawTargetId === "string" ? rawTargetId.trim() : "";
+            if (proxiedTargetId && !keep) {
+              // ARCH §2.3: node-hosted browsers are launched by freeclaw too; close at turn end.
+              trackSessionBrowserTab({
+                targetId: proxiedTargetId,
+                profile,
+                runId: opts?.runId,
+                close: async () => {
+                  await proxyRequest({
+                    method: "DELETE",
+                    path: `/tabs/${encodeURIComponent(proxiedTargetId)}`,
+                    profile,
+                  });
+                },
+              });
+            }
             return jsonResult(result);
           }
           const opened = await browserOpenTab(
@@ -493,6 +513,9 @@ export function createBrowserTool(opts?: {
         case "close": {
           const targetId = readStringParam(params, "targetId");
           if (proxyRequest) {
+            if (targetId) {
+              untrackSessionBrowserTab({ targetId, profile });
+            }
             const result = targetId
               ? await proxyRequest({
                   method: "DELETE",
