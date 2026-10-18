@@ -209,6 +209,12 @@ fallback for hosts with no image model at all.
     call twice; over-40-words / quotes / banned words / name proper noun rejected → motif scene; timeout and failure
     fall back; non-private imageGen skips the writer; memory off sends no snippets; writer input never contains chat
     content or member ids (fixture asserts); throwaway session deleted.
+12. **On by default for new installs only (operator, 2026-10-18).** Onboarding (`src/wizard/onboarding.finalize.ts`
+    and the non-interactive install path) writes `plugins.entries.model-badge.enabled: true` into a NEW config, with
+    `providers` set to the channels that onboarding configured that the badge supports. An existing config is never
+    changed on upgrade: if it has no `model-badge` entry the extension stays off (bundled default) until an operator
+    enables it; the release note says how in one line. Tests: fresh onboarding writes the entry; re-running
+    onboarding or `doctor` on an existing config without the entry does not add it; upgrade leaves it off.
 
 ## 3. Lifecycle (generated and removed as the world changes)
 
