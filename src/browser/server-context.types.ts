@@ -17,6 +17,8 @@ export type ProfileRuntimeState = {
   lastTargetId?: string | null;
   /** Open time and keep flag of tabs opened through openTab (ARCH §2.3). */
   tabMeta?: ManagedTabRegistry;
+  /** Last browser-tree RSS sample taken by the memory watchdog (ARCH §2.4-§2.5). */
+  memorySample?: { rssBytes: number | null; sampledAt: number } | null;
   reconcile?: {
     previousProfile: ResolvedBrowserProfile;
     reason: string;
@@ -28,6 +30,8 @@ export type BrowserServerState = {
   port: number;
   resolved: ResolvedBrowserConfig;
   profiles: Map<string, ProfileRuntimeState>;
+  /** Periodic memory watchdog (ARCH §2.4); null when the cap is off. */
+  memoryWatchdog?: { stop: () => void } | null;
 };
 
 export type OpenTabOptions = {

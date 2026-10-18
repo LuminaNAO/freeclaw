@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
+import { startBrowserMemoryWatchdog } from "./memory-watchdog.js";
 import { isPwAiLoaded } from "./pw-ai-state.js";
-import type { BrowserServerState } from "./server-context.js";
+import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
 import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
 
 export async function createBrowserRuntimeState(params: {
@@ -21,6 +22,13 @@ export async function createBrowserRuntimeState(params: {
     onWarn: params.onWarn,
   });
 
+  // ARCH §2.4: watch the memory of browsers freeclaw launches (off when memoryLimitMb is 0).
+  const ctx = createBrowserRouteContext({ getState: () => state, refreshConfigFromDisk: true });
+  state.memoryWatchdog = startBrowserMemoryWatchdog({
+    getState: () => state,
+    deps: { forProfile: (name) => ctx.forProfile(name) },
+  });
+
   return state;
 }
 
@@ -34,6 +42,9 @@ export async function stopBrowserRuntime(params: {
   if (!params.current) {
     return;
   }
+
+  params.current.memoryWatchdog?.stop();
+  params.current.memoryWatchdog = null;
 
   await stopKnownBrowserProfiles({
     getState: params.getState,
