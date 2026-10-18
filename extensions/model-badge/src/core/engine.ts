@@ -1495,7 +1495,17 @@ export function createEngine(deps: EngineDeps) {
     const prevKeys = new Set(targets.keys());
     targets = targetsFromStore();
     await recordStats();
-    if ([...targets.keys()].some((k) => !prevKeys.has(k))) {
+    const fresh = [...targets].filter(([k]) => !prevKeys.has(k)).map(([, t]) => t.ref);
+    if (fresh.length) {
+      // §2c.11 migration: a target first seen here (created while the badge was down, or
+      // named before the provider listed it) drops its raw-id scene entry now, before the
+      // writer is scheduled, not at the next periodic pass.
+      if (
+        scenesLoaded &&
+        dropMiskeyedScenes(fresh.filter((r) => r.kind === "group").map((r) => r.idLower))
+      ) {
+        await scenes.save();
+      }
       await adoptNew();
       scheduleScenes();
     }

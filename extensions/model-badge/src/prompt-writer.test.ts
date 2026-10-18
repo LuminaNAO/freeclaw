@@ -879,4 +879,39 @@ describe("the real group_memory_created event shape reaches the writer (ARCH §2
     expect(writer.calls.map((c) => c.name)).toEqual(["Garden Club"]);
     await e2.stop();
   });
+
+  it("a raw-id entry for a target unknown at load is dropped when the watcher first sees it", async () => {
+    const bad = seedFor("signal", `group:${IDS.a.toLowerCase()}`);
+    const { w, e, writer } = await world({ targets: [] });
+    await e.stop();
+    const file = `${w.paths.stateDir}/scenes/scenes.json`;
+    w.fs.putJson(file, {
+      version: 1,
+      targets: { [bad]: { name: "Garden Club" }, [keyOf(IDS.b)]: { name: "Book Circle" } },
+    });
+    const e2 = await w.startEngine({
+      instanceId: "migrate-late",
+      imageGenerator: fakeImageGen(),
+      sceneWriter: writer,
+    });
+    await w.settle(T_WATCH * 2);
+    // Unknown at load: nothing to match the raw key against yet.
+    expect(e2.knownTargets()).not.toContain(w.tk(IDS.a));
+    expect(w.fs.getJson<{ targets: Record<string, unknown> }>(file).targets[bad]).toEqual({
+      name: "Garden Club",
+    });
+    // The group appears through the watcher only (well inside the periodic interval).
+    w.addTarget(IDS.a);
+    await w.settle(T_WATCH * 2);
+    await e2.idle();
+    expect(e2.knownTargets()).toContain(w.tk(IDS.a));
+    const stored = w.fs.getJson<{ targets: Record<string, unknown> }>(file);
+    expect(stored.targets[bad]).toBeUndefined();
+    expect(stored.targets[keyOf(IDS.b)]).toEqual({ name: "Book Circle" });
+    expect(writer.calls).toHaveLength(0);
+    // The next real event names it under the target key and the writer runs.
+    await named(w, e2, `group:${IDS.a}`, "Garden Club");
+    expect(writer.calls.map((c) => c.name)).toEqual(["Garden Club"]);
+    await e2.stop();
+  });
 });
