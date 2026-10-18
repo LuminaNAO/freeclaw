@@ -9,10 +9,12 @@ import {
   makeState,
   originalFetch,
 } from "./server-context.remote-tab-ops.harness.js";
+import { beginTabUse, resetTabUsesForTests } from "./tab-hygiene.js";
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
+  resetTabUsesForTests();
 });
 
 function seedRunningProfileState(
@@ -244,5 +246,91 @@ describe("browser server-context tab selection state", () => {
       InvalidBrowserNavigationUrlError,
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  describe("maxTabs eviction (ARCH §2.3)", () => {
+    function makeTabs(ids: string[]) {
+      return ids.map((id, index) => ({
+        id,
+        title: String(index),
+        url: `http://127.0.0.1:30${index}`,
+        webSocketDebuggerUrl: `ws://127.0.0.1/devtools/page/${id}`,
+        type: "page" as const,
+      }));
+    }
+
+    function trackingFetch(getTabs: () => ReturnType<typeof makeTabs>) {
+      const closed: string[] = [];
+      const fetchMock = vi.fn(async (url: unknown) => {
+        const value = String(url);
+        if (value.includes("/json/list")) {
+          return { ok: true, json: async () => getTabs() } as unknown as Response;
+        }
+        const match = /\/json\/close\/([^/?]+)/.exec(value);
+        if (match) {
+          closed.push(match[1]);
+          return { ok: true, json: async () => ({}) } as unknown as Response;
+        }
+        throw new Error(`unexpected fetch: ${value}`);
+      });
+      return { fetchMock, closed };
+    }
+
+    it("evicts the oldest page the agent did not mark keep", async () => {
+      const ids: string[] = [];
+      const { fetchMock, closed } = trackingFetch(() => makeTabs(ids));
+      global.fetch = withFetchPreconnect(fetchMock);
+      const state = makeState("openclaw");
+      state.resolved.maxTabs = 3;
+      seedRunningProfileState(state);
+      const openclaw = createBrowserRouteContext({ getState: () => state }).forProfile("openclaw");
+      const createTarget = vi.spyOn(cdpModule, "createTargetViaCdp");
+
+      let now = 1_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const open = async (id: string, keep?: boolean) => {
+        createTarget.mockResolvedValueOnce({ targetId: id });
+        ids.push(id);
+        now += 10;
+        await openclaw.openTab(`http://127.0.0.1:3000/${id}`, keep ? { keep: true } : undefined);
+      };
+
+      await open("A", true);
+      await open("B");
+      await open("C");
+      expect(closed).toEqual([]);
+      await open("D");
+      // A is oldest but kept, so B (oldest non-kept) is evicted.
+      await vi.waitFor(() => expect(closed).toEqual(["B"]));
+    });
+
+    it("never evicts a tab in use by an active tool call", async () => {
+      const ids = ["A", "B", "C"];
+      const { fetchMock, closed } = trackingFetch(() => makeTabs(ids));
+      global.fetch = withFetchPreconnect(fetchMock);
+      const state = makeState("openclaw");
+      state.resolved.maxTabs = 2;
+      seedRunningProfileState(state);
+      const openclaw = createBrowserRouteContext({ getState: () => state }).forProfile("openclaw");
+      const release = beginTabUse("http://127.0.0.1:18800", "A");
+      vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValueOnce({ targetId: "C" });
+      await openclaw.openTab("http://127.0.0.1:3000/C");
+      await vi.waitFor(() => expect(closed).toEqual(["B"]));
+      release();
+    });
+
+    it("honours a configured maxTabs above the old fixed limit", async () => {
+      const ids = Array.from({ length: 10 }, (_, i) => `T${i}`);
+      const { fetchMock, closed } = trackingFetch(() => makeTabs(ids));
+      global.fetch = withFetchPreconnect(fetchMock);
+      const state = makeState("openclaw");
+      state.resolved.maxTabs = 12;
+      seedRunningProfileState(state);
+      const openclaw = createBrowserRouteContext({ getState: () => state }).forProfile("openclaw");
+      vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValueOnce({ targetId: "T9" });
+      await openclaw.openTab("http://127.0.0.1:3000/T9");
+      await new Promise((r) => setTimeout(r, 20));
+      expect(closed).toEqual([]);
+    });
   });
 });

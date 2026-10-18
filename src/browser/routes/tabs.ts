@@ -121,6 +121,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
+    const keep = (req.body as { keep?: unknown })?.keep === true;
 
     await withTabsProfileRoute({
       req,
@@ -129,7 +130,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       mapTabError: true,
       run: async (profileCtx) => {
         await profileCtx.ensureBrowserAvailable();
-        const tab = await profileCtx.openTab(url);
+        const tab = await profileCtx.openTab(url, keep ? { keep: true } : undefined);
         res.json(tab);
       },
     });

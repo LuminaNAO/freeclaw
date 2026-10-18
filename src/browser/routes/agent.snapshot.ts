@@ -23,6 +23,7 @@ import {
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { beginTabUse } from "../tab-hygiene.js";
 import {
   getPwAiModule,
   handleRouteError,
@@ -391,8 +392,10 @@ export function registerBrowserAgentSnapshotRoutes(
       hasPlaywright,
     });
 
+    let releaseTab: (() => void) | undefined;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
+      releaseTab = beginTabUse(profileCtx.profile.cdpUrl, tab.targetId);
       if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {
         return jsonError(res, 400, "labels/mode=efficient require format=ai");
       }
@@ -587,6 +590,8 @@ export function registerBrowserAgentSnapshotRoutes(
       });
     } catch (err) {
       handleRouteError(ctx, res, err);
+    } finally {
+      releaseTab?.();
     }
   });
 }

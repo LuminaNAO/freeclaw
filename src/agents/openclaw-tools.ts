@@ -32,6 +32,8 @@ export function createOpenClawTools(
     sandboxBrowserBridgeUrl?: string;
     allowHostBrowserControl?: boolean;
     agentSessionKey?: string;
+    /** Agent turn id (used to close browser tabs opened in the turn when it ends). */
+    runId?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
     /** Delivery target (e.g. telegram:group:123:topic:456) for topic/thread routing. */
@@ -141,6 +143,7 @@ export function createOpenClawTools(
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
       allowHostControl: options?.allowHostBrowserControl,
       agentSessionKey: options?.agentSessionKey,
+      runId: options?.runId,
     }),
     createCanvasTool({ config: options?.config }),
     createNodesTool({

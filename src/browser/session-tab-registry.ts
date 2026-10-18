@@ -6,9 +6,21 @@ export type TrackedSessionBrowserTab = {
   baseUrl?: string;
   profile?: string;
   trackedAt: number;
+  /** Agent turn (run id) that opened the tab; closed when that turn ends unless keep. */
+  runId?: string;
+  /** Opened with keep: true; survives turn end (ARCH §2.3). */
+  keep?: boolean;
+};
+
+type TrackedTurnBrowserTab = {
+  sessionKey?: string;
+  targetId: string;
+  baseUrl?: string;
+  profile?: string;
 };
 
 const trackedTabsBySession = new Map<string, Map<string, TrackedSessionBrowserTab>>();
+const trackedTabsByRun = new Map<string, Map<string, TrackedTurnBrowserTab>>();
 
 function normalizeSessionKey(raw: string): string {
   return raw.trim().toLowerCase();
@@ -48,15 +60,41 @@ function isIgnorableCloseError(err: unknown): boolean {
   );
 }
 
+function normalizeRunId(raw?: string): string | undefined {
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export function trackSessionBrowserTab(params: {
   sessionKey?: string;
   targetId?: string;
   baseUrl?: string;
   profile?: string;
+  runId?: string;
+  keep?: boolean;
 }): void {
-  const sessionKeyRaw = params.sessionKey?.trim();
   const targetIdRaw = params.targetId?.trim();
-  if (!sessionKeyRaw || !targetIdRaw) {
+  if (!targetIdRaw) {
+    return;
+  }
+  const runId = normalizeRunId(params.runId);
+  if (runId && params.keep !== true) {
+    // ARCH §2.3: tabs opened in a turn are closed when that turn ends.
+    const turnTab: TrackedTurnBrowserTab = {
+      sessionKey: params.sessionKey?.trim() ? normalizeSessionKey(params.sessionKey) : undefined,
+      targetId: normalizeTargetId(targetIdRaw),
+      baseUrl: normalizeBaseUrl(params.baseUrl),
+      profile: normalizeProfile(params.profile),
+    };
+    let forRun = trackedTabsByRun.get(runId);
+    if (!forRun) {
+      forRun = new Map();
+      trackedTabsByRun.set(runId, forRun);
+    }
+    forRun.set(toTrackedTabId(turnTab), turnTab);
+  }
+  const sessionKeyRaw = params.sessionKey?.trim();
+  if (!sessionKeyRaw) {
     return;
   }
   const sessionKey = normalizeSessionKey(sessionKeyRaw);
@@ -69,6 +107,8 @@ export function trackSessionBrowserTab(params: {
     baseUrl,
     profile,
     trackedAt: Date.now(),
+    ...(runId ? { runId } : {}),
+    ...(params.keep === true ? { keep: true } : {}),
   };
   const trackedId = toTrackedTabId(tracked);
   let trackedForSession = trackedTabsBySession.get(sessionKey);
@@ -87,12 +127,7 @@ export function untrackSessionBrowserTab(params: {
 }): void {
   const sessionKeyRaw = params.sessionKey?.trim();
   const targetIdRaw = params.targetId?.trim();
-  if (!sessionKeyRaw || !targetIdRaw) {
-    return;
-  }
-  const sessionKey = normalizeSessionKey(sessionKeyRaw);
-  const trackedForSession = trackedTabsBySession.get(sessionKey);
-  if (!trackedForSession) {
+  if (!targetIdRaw) {
     return;
   }
   const trackedId = toTrackedTabId({
@@ -100,6 +135,19 @@ export function untrackSessionBrowserTab(params: {
     baseUrl: normalizeBaseUrl(params.baseUrl),
     profile: normalizeProfile(params.profile),
   });
+  for (const [runId, forRun] of trackedTabsByRun) {
+    if (forRun.delete(trackedId) && forRun.size === 0) {
+      trackedTabsByRun.delete(runId);
+    }
+  }
+  if (!sessionKeyRaw) {
+    return;
+  }
+  const sessionKey = normalizeSessionKey(sessionKeyRaw);
+  const trackedForSession = trackedTabsBySession.get(sessionKey);
+  if (!trackedForSession) {
+    return;
+  }
   trackedForSession.delete(trackedId);
   if (trackedForSession.size === 0) {
     trackedTabsBySession.delete(sessionKey);
@@ -139,6 +187,54 @@ function takeTrackedTabsForSessionKeys(
   return tabs;
 }
 
+type CloseTab = (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
+
+const defaultCloseTab: CloseTab = async (tab) => {
+  await browserCloseTab(tab.baseUrl, tab.targetId, {
+    profile: tab.profile,
+  });
+};
+
+/**
+ * ARCH §2.3: close every tab the browser tool opened during an agent turn, except the ones
+ * opened with keep: true. Called when the turn ends. Returns the number of tabs closed.
+ */
+export async function closeTrackedBrowserTabsForRun(params: {
+  runId?: string;
+  closeTab?: CloseTab;
+  onWarn?: (message: string) => void;
+}): Promise<number> {
+  const runId = normalizeRunId(params.runId);
+  if (!runId) {
+    return 0;
+  }
+  const forRun = trackedTabsByRun.get(runId);
+  trackedTabsByRun.delete(runId);
+  if (!forRun || forRun.size === 0) {
+    return 0;
+  }
+  const closeTab = params.closeTab ?? defaultCloseTab;
+  let closed = 0;
+  for (const [trackedId, tab] of forRun) {
+    if (tab.sessionKey) {
+      const forSession = trackedTabsBySession.get(tab.sessionKey);
+      forSession?.delete(trackedId);
+      if (forSession && forSession.size === 0) {
+        trackedTabsBySession.delete(tab.sessionKey);
+      }
+    }
+    try {
+      await closeTab({ targetId: tab.targetId, baseUrl: tab.baseUrl, profile: tab.profile });
+      closed += 1;
+    } catch (err) {
+      if (!isIgnorableCloseError(err)) {
+        params.onWarn?.(`failed to close turn browser tab ${tab.targetId}: ${String(err)}`);
+      }
+    }
+  }
+  return closed;
+}
+
 export async function closeTrackedBrowserTabsForSessions(params: {
   sessionKeys: Array<string | undefined>;
   closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
@@ -148,13 +244,15 @@ export async function closeTrackedBrowserTabsForSessions(params: {
   if (tabs.length === 0) {
     return 0;
   }
-  const closeTab =
-    params.closeTab ??
-    (async (tab: { targetId: string; baseUrl?: string; profile?: string }) => {
-      await browserCloseTab(tab.baseUrl, tab.targetId, {
-        profile: tab.profile,
-      });
-    });
+  for (const tab of tabs) {
+    const trackedId = toTrackedTabId(tab);
+    for (const [runId, forRun] of trackedTabsByRun) {
+      if (forRun.delete(trackedId) && forRun.size === 0) {
+        trackedTabsByRun.delete(runId);
+      }
+    }
+  }
+  const closeTab = params.closeTab ?? defaultCloseTab;
   let closed = 0;
   for (const tab of tabs) {
     try {
@@ -173,10 +271,17 @@ export async function closeTrackedBrowserTabsForSessions(params: {
   return closed;
 }
 
+// oxlint-disable-next-line no-underscore-dangle
 export function __resetTrackedSessionBrowserTabsForTests(): void {
   trackedTabsBySession.clear();
+  trackedTabsByRun.clear();
 }
 
+export function countTrackedRunBrowserTabsForTests(runId: string): number {
+  return trackedTabsByRun.get(runId.trim())?.size ?? 0;
+}
+
+// oxlint-disable-next-line no-underscore-dangle
 export function __countTrackedSessionBrowserTabsForTests(sessionKey?: string): number {
   if (typeof sessionKey === "string" && sessionKey.trim()) {
     return trackedTabsBySession.get(normalizeSessionKey(sessionKey))?.size ?? 0;

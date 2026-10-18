@@ -14,15 +14,16 @@ import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
-  MANAGED_BROWSER_PAGE_TAB_LIMIT,
   OPEN_TAB_DISCOVERY_POLL_MS,
   OPEN_TAB_DISCOVERY_WINDOW_MS,
 } from "./server-context.constants.js";
 import type {
   BrowserServerState,
   BrowserTab,
+  OpenTabOptions,
   ProfileRuntimeState,
 } from "./server-context.types.js";
+import { isTabInUse, pruneTabMeta, selectTabsToEvict } from "./tab-hygiene.js";
 
 type TabOpsDeps = {
   profile: ResolvedBrowserProfile;
@@ -32,7 +33,7 @@ type TabOpsDeps = {
 
 type ProfileTabOps = {
   listTabs: () => Promise<BrowserTab[]>;
-  openTab: (url: string) => Promise<BrowserTab>;
+  openTab: (url: string, opts?: OpenTabOptions) => Promise<BrowserTab>;
 };
 
 /**
@@ -104,6 +105,8 @@ export function createProfileTabOps({
       .filter((t) => Boolean(t.targetId));
   };
 
+  // ARCH §2.3: at most browser.maxTabs open pages; opening one more closes the oldest page the
+  // agent did not mark keep (never the one just opened, never one in use by a tool call).
   const enforceManagedTabLimit = async (keepTargetId: string): Promise<void> => {
     const profileState = getProfileState();
     if (
@@ -117,17 +120,29 @@ export function createProfileTabOps({
     const pageTabs = await listTabs()
       .then((tabs) => tabs.filter((tab) => (tab.type ?? "page") === "page"))
       .catch(() => [] as BrowserTab[]);
-    if (pageTabs.length <= MANAGED_BROWSER_PAGE_TAB_LIMIT) {
-      return;
-    }
-
-    const candidates = pageTabs.filter((tab) => tab.targetId !== keepTargetId);
-    const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
-    for (const tab of candidates.slice(0, excessCount)) {
+    pruneTabMeta(profileState.tabMeta, pageTabs);
+    const evict = selectTabsToEvict({
+      pageTabs,
+      meta: profileState.tabMeta,
+      maxTabs: state().resolved.maxTabs,
+      protectTargetId: keepTargetId,
+      isInUse: (targetId) => isTabInUse(profile.cdpUrl, targetId),
+    });
+    for (const tab of evict) {
+      profileState.tabMeta?.delete(tab.targetId);
       void fetchOk(appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`)).catch(() => {
         // best-effort cleanup only
       });
     }
+  };
+
+  const recordOpenedTab = (targetId: string, opts?: OpenTabOptions) => {
+    const profileState = getProfileState();
+    profileState.lastTargetId = targetId;
+    if (!profileState.tabMeta) {
+      profileState.tabMeta = new Map();
+    }
+    profileState.tabMeta.set(targetId, { openedAt: Date.now(), keep: opts?.keep === true });
   };
 
   const triggerManagedTabLimit = (keepTargetId: string): void => {
@@ -136,7 +151,7 @@ export function createProfileTabOps({
     });
   };
 
-  const openTab = async (url: string): Promise<BrowserTab> => {
+  const openTab = async (url: string, opts?: OpenTabOptions): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
 
     if (capabilities.usesChromeMcp) {
@@ -157,8 +172,7 @@ export function createProfileTabOps({
           url,
           ...ssrfPolicyOpts,
         });
-        const profileState = getProfileState();
-        profileState.lastTargetId = page.targetId;
+        recordOpenedTab(page.targetId, opts);
         triggerManagedTabLimit(page.targetId);
         return {
           targetId: page.targetId,
@@ -184,8 +198,7 @@ export function createProfileTabOps({
       .catch(() => null);
 
     if (createdViaCdp) {
-      const profileState = getProfileState();
-      profileState.lastTargetId = createdViaCdp;
+      recordOpenedTab(createdViaCdp, opts);
       const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
       while (Date.now() < deadline) {
         const tabs = await listTabs().catch(() => [] as BrowserTab[]);
@@ -222,8 +235,7 @@ export function createProfileTabOps({
     if (!created.id) {
       throw new Error("Failed to open tab (missing id)");
     }
-    const profileState = getProfileState();
-    profileState.lastTargetId = created.id;
+    recordOpenedTab(created.id, opts);
     const resolvedUrl = created.url ?? url;
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
     triggerManagedTabLimit(created.id);

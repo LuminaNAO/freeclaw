@@ -3,6 +3,7 @@ import type { RunningChrome } from "./chrome.js";
 import type { BrowserTransport } from "./client.js";
 import type { BrowserTab } from "./client.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import type { ManagedTabRegistry } from "./tab-hygiene.js";
 
 export type { BrowserTab };
 
@@ -14,6 +15,8 @@ export type ProfileRuntimeState = {
   running: RunningChrome | null;
   /** Sticky tab selection when callers omit targetId (keeps snapshot+act consistent). */
   lastTargetId?: string | null;
+  /** Open time and keep flag of tabs opened through openTab (ARCH §2.3). */
+  tabMeta?: ManagedTabRegistry;
   reconcile?: {
     previousProfile: ResolvedBrowserProfile;
     reason: string;
@@ -27,13 +30,18 @@ export type BrowserServerState = {
   profiles: Map<string, ProfileRuntimeState>;
 };
 
+export type OpenTabOptions = {
+  /** Keep this tab: it survives turn-end cleanup and is never evicted by maxTabs (ARCH §2.3). */
+  keep?: boolean;
+};
+
 type BrowserProfileActions = {
   ensureBrowserAvailable: () => Promise<void>;
   ensureTabAvailable: (targetId?: string) => Promise<BrowserTab>;
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
   isReachable: (timeoutMs?: number) => Promise<boolean>;
   listTabs: () => Promise<BrowserTab[]>;
-  openTab: (url: string) => Promise<BrowserTab>;
+  openTab: (url: string, opts?: OpenTabOptions) => Promise<BrowserTab>;
   focusTab: (targetId: string) => Promise<void>;
   closeTab: (targetId: string) => Promise<void>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;

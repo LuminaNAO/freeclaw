@@ -225,13 +225,13 @@ export async function browserTabs(
 export async function browserOpenTab(
   baseUrl: string | undefined,
   url: string,
-  opts?: { profile?: string },
+  opts?: { profile?: string; keep?: boolean },
 ): Promise<BrowserTab> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserTab>(withBaseUrl(baseUrl, `/tabs/open${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify(opts?.keep ? { url, keep: true } : { url }),
     timeoutMs: 15000,
   });
 }

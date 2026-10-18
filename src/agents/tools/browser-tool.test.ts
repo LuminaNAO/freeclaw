@@ -486,7 +486,47 @@ describe("browser tool url alias support", () => {
       targetId: "tab-123",
       baseUrl: undefined,
       profile: undefined,
+      runId: undefined,
+      keep: false,
     });
+  });
+
+  it("tracks opened tabs against the current turn for turn-end cleanup (ARCH §2.3)", async () => {
+    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
+      targetId: "tab-turn",
+      title: "Example",
+      url: "https://example.com",
+    });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main", runId: "run-42" });
+    await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      { profile: undefined },
+    );
+    expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "tab-turn", runId: "run-42", keep: false }),
+    );
+  });
+
+  it("passes keep: true to the server and the registry (ARCH §2.3)", async () => {
+    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
+      targetId: "tab-keep",
+      title: "Example",
+      url: "https://example.com",
+    });
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main", runId: "run-42" });
+    await tool.execute?.("call-1", { action: "open", url: "https://example.com", keep: true });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      { profile: undefined, keep: true },
+    );
+    expect(sessionTabRegistryMocks.trackSessionBrowserTab).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "tab-keep", runId: "run-42", keep: true }),
+    );
   });
 
   it("accepts url alias for navigate", async () => {

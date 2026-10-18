@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { closeTrackedBrowserTabsForRun } from "../../browser/session-tab-registry.js";
 import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
@@ -1905,6 +1906,13 @@ export async function runEmbeddedPiAgent(
         await contextEngine.dispose?.();
         stopCopilotRefreshTimer();
         process.chdir(prevCwd);
+        // ARCH §2.3: the turn is over; close the browser tabs it opened (except keep: true).
+        void closeTrackedBrowserTabsForRun({
+          runId: params.runId,
+          onWarn: (message) => log.warn(message),
+        }).catch((err) => {
+          log.warn(`turn browser tab cleanup failed: runId=${params.runId} ${String(err)}`);
+        });
       }
     }),
   );

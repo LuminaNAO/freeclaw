@@ -16,7 +16,6 @@ import { createProfileTabOps } from "./server-context.tab-ops.js";
 import type {
   BrowserServerState,
   BrowserRouteContext,
-  BrowserTab,
   ContextOptions,
   ProfileContext,
   ProfileRuntimeState,
@@ -244,7 +243,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
     isReachable: (timeoutMs) => getDefaultContext().isReachable(timeoutMs),
     listTabs: () => getDefaultContext().listTabs(),
-    openTab: (url) => getDefaultContext().openTab(url),
+    openTab: (url, openOpts) => getDefaultContext().openTab(url, openOpts),
     focusTab: (targetId) => getDefaultContext().focusTab(targetId),
     closeTab: (targetId) => getDefaultContext().closeTab(targetId),
     stopRunningBrowser: () => getDefaultContext().stopRunningBrowser(),

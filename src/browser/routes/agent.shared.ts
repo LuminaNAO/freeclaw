@@ -2,6 +2,7 @@ import { toBrowserErrorResponse } from "../errors.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { beginTabUse } from "../tab-hygiene.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 import { getProfileContext, jsonError } from "./utils.js";
 
@@ -107,8 +108,11 @@ export async function withRouteTabContext<T>(
   if (!profileCtx) {
     return undefined;
   }
+  let releaseTab: (() => void) | undefined;
   try {
     const tab = await profileCtx.ensureTabAvailable(params.targetId);
+    // ARCH §2.3-§2.4: the watchdog and maxTabs eviction never close a tab in active use.
+    releaseTab = beginTabUse(profileCtx.profile.cdpUrl, tab.targetId);
     return await params.run({
       profileCtx,
       tab,
@@ -117,6 +121,8 @@ export async function withRouteTabContext<T>(
   } catch (err) {
     handleRouteError(params.ctx, params.res, err);
     return undefined;
+  } finally {
+    releaseTab?.();
   }
 }
 

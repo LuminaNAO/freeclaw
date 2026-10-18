@@ -301,6 +301,8 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  /** Agent turn id; tabs opened during the turn are closed when it ends unless keep (ARCH §2.3). */
+  runId?: string;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -319,6 +321,7 @@ export function createBrowserTool(opts?: {
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
+      "Tabs you open are closed when your turn ends; pass keep=true with action=open only for a tab you must reuse in a later turn. Open tabs are capped; the oldest non-kept tab is closed when you open one more.",
       `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
       hostHint,
     ].join(" "),
@@ -446,21 +449,28 @@ export function createBrowserTool(opts?: {
           return await executeTabsAction({ baseUrl, profile, proxyRequest });
         case "open": {
           const targetUrl = readTargetUrlParam(params);
+          const keep = params.keep === true;
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
               path: "/tabs/open",
               profile,
-              body: { url: targetUrl },
+              body: keep ? { url: targetUrl, keep: true } : { url: targetUrl },
             });
             return jsonResult(result);
           }
-          const opened = await browserOpenTab(baseUrl, targetUrl, { profile });
+          const opened = await browserOpenTab(
+            baseUrl,
+            targetUrl,
+            keep ? { profile, keep: true } : { profile },
+          );
           trackSessionBrowserTab({
             sessionKey: opts?.agentSessionKey,
             targetId: opened.targetId,
             baseUrl,
             profile,
+            runId: opts?.runId,
+            keep,
           });
           return jsonResult(opened);
         }
