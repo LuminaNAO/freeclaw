@@ -13,6 +13,7 @@ import {
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
+import { applyFreshInstallModelBadge } from "../commands/onboard-config.js";
 import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
@@ -22,7 +23,7 @@ import {
   resolveControlUiLinks,
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import { CONTROL_UI_ENABLE_COMMAND, isControlUiEnabled } from "../config/control-ui-enabled.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
@@ -41,6 +42,8 @@ type FinalizeOnboardingOptions = {
   opts: OnboardOptions;
   baseConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
+  /** No config existed (or the user reset it): onboarding is creating it (ARCH model-badge §2c.12). */
+  freshInstall?: boolean;
   workspaceDir: string;
   settings: GatewayWizardSettings;
   prompter: WizardPrompter;
@@ -50,7 +53,19 @@ type FinalizeOnboardingOptions = {
 export async function finalizeOnboardingWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
-  const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
+  const { flow, opts, baseConfig, settings, prompter, runtime } = options;
+  let nextConfig = options.nextConfig;
+
+  // ARCH model-badge §2c.12: a NEW install gets the badge on, with the channels onboarding
+  // configured that it supports. Written before the service is installed so the first gateway
+  // start loads it. An existing config is never changed here (upgrades keep it off).
+  if (options.freshInstall) {
+    const withBadge = applyFreshInstallModelBadge(nextConfig);
+    if (withBadge !== nextConfig) {
+      nextConfig = withBadge;
+      await writeConfigFile(nextConfig);
+    }
+  }
 
   const withWizardProgress = async <T>(
     label: string,

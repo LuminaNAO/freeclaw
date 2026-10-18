@@ -558,6 +558,7 @@ export async function runOnboardingWizard(
     opts,
     baseConfig,
     nextConfig,
+    freshInstall,
     workspaceDir,
     settings,
     prompter,
