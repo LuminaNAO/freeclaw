@@ -47,6 +47,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
+import { maybeCompactHeartbeatSession } from "./heartbeat-compaction.js";
 import {
   buildExecEventPrompt,
   buildCronEventPrompt,
@@ -78,6 +79,8 @@ export type HeartbeatDeps = OutboundSendDeps &
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
     nowMs?: () => number;
+    /** Pre-turn heartbeat session compaction (heartbeat-compaction ARCH §2); injectable for tests. */
+    compactHeartbeatSession?: typeof maybeCompactHeartbeatSession;
   };
 
 const log = createSubsystemLogger("gateway/heartbeat");
@@ -756,6 +759,16 @@ export async function runHeartbeatOnce(opts: {
     });
     return true;
   };
+
+  // ARCH §2.1: compact the heartbeat session first when it is over the threshold, then run the
+  // turn on the compacted session. Never throws; a failure is logged and retried next time.
+  await (opts.deps?.compactHeartbeatSession ?? maybeCompactHeartbeatSession)({
+    cfg,
+    agentId,
+    heartbeat,
+    sessionKey,
+    storePath,
+  });
 
   try {
     // Capture transcript state before the heartbeat run so we can prune if HEARTBEAT_OK
