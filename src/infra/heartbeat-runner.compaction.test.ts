@@ -27,7 +27,7 @@ const { calls, piMocks, logMock } = vi.hoisted(() => {
     logMock,
     piMocks: {
       compactEmbeddedPiSession: vi.fn(),
-      isEmbeddedPiRunActive: vi.fn(() => false),
+      isEmbeddedPiRunActive: vi.fn((_sessionId: string): boolean => false),
       runEmbeddedPiAgent: vi.fn(),
     },
   };
@@ -350,7 +350,7 @@ describe("runHeartbeatOnce – heartbeat session compaction (ARCH §2, §4)", ()
   });
 
   it("active run on the session → no compaction, never interrupts", async () => {
-    piMocks.isEmbeddedPiRunActive.mockImplementation((id: string) => id === SESSION_ID);
+    piMocks.isEmbeddedPiRunActive.mockImplementation((id: string): boolean => id === SESSION_ID);
     await withScenario({ totalTokens: 150_000 }, async ({ heartbeatOnce }) => {
       await heartbeatOnce();
       expect(piMocks.compactEmbeddedPiSession).not.toHaveBeenCalled();
