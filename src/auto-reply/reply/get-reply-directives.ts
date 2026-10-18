@@ -19,6 +19,7 @@ import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-di
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import { resolveUnsetReasoningLevel } from "./reasoning-default.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import type { TypingController } from "./typing.js";
 
@@ -410,16 +411,24 @@ export async function resolveReplyDirectives(params: {
     (await modelState.resolveDefaultThinkingLevel()) ??
     (agentCfg?.thinkingDefault as ThinkLevel | undefined);
 
-  // When neither directive nor session set reasoning, default to model capability
-  // (e.g. OpenRouter with reasoning: true). Skip auto-enabling when thinking is
-  // active, including model-inferred defaults, or internal thinking blocks can
-  // be emitted as visible "Reasoning:" messages.
+  // When neither directive nor session set reasoning: a configured reasoningDefault wins;
+  // messaging channels stay off (never auto-enabled); only non-channel surfaces fall back to
+  // the model catalog, and only while thinking is off (reasoning-display ARCH §2).
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
     (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null);
-  const thinkingActive = resolvedThinkLevelWithDefault !== "off";
-  if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
-    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
+  if (!reasoningExplicitlySet) {
+    resolvedReasoningLevel = await resolveUnsetReasoningLevel({
+      cfg,
+      agentId,
+      ctx: {
+        OriginatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+        Surface: ctx.Surface ?? sessionCtx.Surface,
+        Provider: ctx.Provider ?? sessionCtx.Provider,
+      },
+      thinkingActive: resolvedThinkLevelWithDefault !== "off",
+      resolveCatalogDefault: () => modelState.resolveDefaultReasoningLevel(),
+    });
   }
 
   let contextTokens = resolveContextTokens({
