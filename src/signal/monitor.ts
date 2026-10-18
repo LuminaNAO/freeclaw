@@ -48,6 +48,7 @@ import {
 } from "./socket-dir.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 import { parseSignalUnixEndpoint } from "./transport.js";
+import { createSignalAgentPeers } from "./trust/agent-peers.js";
 import { createSignalTrustGate } from "./trust/gate.js";
 
 export type MonitorSignalOpts = {
@@ -628,9 +629,12 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       }
     }
 
+    const agentPeers = createSignalAgentPeers({ accountId: accountInfo.accountId, runtime });
+
     const handleEvent = createSignalEventHandler({
       runtime,
       trustGate,
+      agentPeers,
       cfg,
       baseUrl,
       account,

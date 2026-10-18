@@ -55,7 +55,7 @@ import type {
   SignalReactionMessage,
   SignalReceivePayload,
 } from "./event-handler.types.js";
-import { renderSignalMentions } from "./mentions.js";
+import { mentionsSignalAccount, renderSignalMentions } from "./mentions.js";
 import {
   enqueueTrustedSignalSystemEvent,
   recordTrustedSignalPendingHistory,
@@ -731,12 +731,32 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
     });
-    const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
-    if (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) {
+    let effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+    // Agent peers ARCH §2.2: a group message from an operator-marked agent runs a turn only when
+    // it mentions us (Signal mention of our account, or our name per the mention patterns).
+    // Otherwise it is recorded in group history like any skipped message. DMs are unchanged, and
+    // with nothing marked this is a no-op (§2.3).
+    const senderIsMarkedAgent =
+      isGroup && deps.agentPeers ? await deps.agentPeers.isMarkedAgent(trusted.uuid) : false;
+    let skipUnmentionedAgentPeer = false;
+    if (senderIsMarkedAgent) {
+      const agentMentionedUs =
+        wasMentioned ||
+        mentionsSignalAccount(dataMessage.mentions, {
+          uuid: accountUuid,
+          number: normalizedAccount,
+        });
+      skipUnmentionedAgentPeer = !agentMentionedUs;
+      effectiveWasMentioned = agentMentionedUs;
+    }
+    if (
+      (isGroup && requireMention && canDetectMention && mentionGate.shouldSkip) ||
+      skipUnmentionedAgentPeer
+    ) {
       logInboundDrop({
         log: logVerbose,
         channel: "signal",
-        reason: "no mention",
+        reason: skipUnmentionedAgentPeer ? "agent peer without mention" : "no mention",
         target: senderDisplay,
       });
       const quoteText = dataMessage.quote?.text?.trim() || "";

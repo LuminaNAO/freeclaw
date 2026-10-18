@@ -54,3 +54,32 @@ export function renderSignalMentions(message: string, mentions?: SignalMention[]
 
   return normalized;
 }
+
+/**
+ * Agent peers ARCH §2.2: true when Signal's native mention metadata addresses our own account
+ * (by account uuid or account number).
+ */
+export function mentionsSignalAccount(
+  mentions: SignalMention[] | null | undefined,
+  account: { uuid?: string; number?: string },
+): boolean {
+  if (!mentions?.length) {
+    return false;
+  }
+  const uuid = account.uuid?.trim().toLowerCase() || undefined;
+  const number = account.number?.trim() || undefined;
+  if (!uuid && !number) {
+    return false;
+  }
+  return mentions.some((mention) => {
+    if (!mention) {
+      return false;
+    }
+    const mentionUuid = mention.uuid?.trim().toLowerCase();
+    if (uuid && mentionUuid && mentionUuid === uuid) {
+      return true;
+    }
+    const mentionNumber = mention.number?.trim();
+    return Boolean(number && mentionNumber && mentionNumber === number);
+  });
+}

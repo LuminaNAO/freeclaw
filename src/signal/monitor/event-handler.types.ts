@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { DmPolicy, GroupPolicy, SignalReactionNotificationMode } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { SignalSender } from "../identity.js";
+import type { SignalAgentPeers } from "../trust/agent-peers.js";
 import type { SignalTrustGate } from "../trust/gate.js";
 
 export type SignalEnvelope = {
@@ -72,6 +73,11 @@ export type SignalEventHandlerDeps = {
   runtime: RuntimeEnv;
   /** Ingress trust gate (ARCH §4.4); runs before every other access or sink decision. */
   trustGate: SignalTrustGate;
+  /**
+   * Agent peers ARCH §2.2: operator-marked agent identities. Group messages from a marked agent
+   * only run a turn when they mention us. Absent or nothing marked: no-op.
+   */
+  agentPeers?: SignalAgentPeers;
   cfg: OpenClawConfig;
   baseUrl: string;
   account?: string;
