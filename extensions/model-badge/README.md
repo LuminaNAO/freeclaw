@@ -33,6 +33,15 @@ src/providers/registry.ts     provider registry (config `providers` picks from i
 src/providers/signal/         Signal provider on freeclaw's own Signal client (HTTP + unix socket)
 ```
 
+## On for new installs only (ARCH §2c.12)
+
+`openclaw onboard` (interactive and `--non-interactive`) writes
+`plugins.entries.model-badge: { enabled: true, config: { providers: [...] } }` into a config it is
+creating, with `providers` set to the channels onboarding configured that the badge supports
+(`signal`; an empty list when none, and the writer stays idle). An existing config is never
+changed: re-running onboarding, `doctor` or an upgrade leaves a config without the entry off (the
+bundled default). Enable it with `openclaw plugins enable model-badge`.
+
 ## Configuration
 
 `plugins.entries.model-badge.config`:
