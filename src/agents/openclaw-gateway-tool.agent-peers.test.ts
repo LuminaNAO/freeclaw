@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { applyOwnerOnlyToolPolicy } from "./tool-policy.js";
+import { OWNER_ONLY_TOOL_ERROR } from "./tools/common.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -36,6 +37,31 @@ beforeEach(() => {
 });
 
 describe("gateway tool agent-peer actions (ARCH §2a)", () => {
+  it("description states the operator-only rule", () => {
+    const tool = gatewayToolFor(true);
+    expect(tool.description).toContain(
+      "allowed only when the current turn's sender is an operator (senderIsOwner); otherwise they are refused",
+    );
+  });
+
+  it("calls the very gateway methods the CLI path registers (no parallel implementation)", async () => {
+    const { signalTrustHandlers } = await import("../gateway/server-methods/signal-trust.js");
+    const { sessionsQuietHandlers } = await import("../gateway/server-methods/sessions-quiet.js");
+    const tool = gatewayToolFor(true);
+    await tool.execute?.("a", { action: "signal.trust.markAgent", uuid: UUID });
+    await tool.execute?.("b", { action: "signal.trust.unmarkAgent", uuid: UUID });
+    await tool.execute?.("c", { action: "sessions.setQuiet", slashCommands: false });
+    const methods = vi.mocked(callGatewayTool).mock.calls.map((call) => call[0]);
+    expect(methods).toEqual([
+      "signal.trust.markAgent",
+      "signal.trust.unmarkAgent",
+      "sessions.setQuiet",
+    ]);
+    for (const method of methods) {
+      expect(signalTrustHandlers[method] ?? sessionsQuietHandlers[method]).toBeTypeOf("function");
+    }
+  });
+
   it("lists the new actions in the schema", () => {
     const tool = gatewayToolFor(true);
     const actionEnum = (tool.parameters as { properties: { action: { enum?: string[] } } })
@@ -105,7 +131,7 @@ describe("gateway tool agent-peer actions (ARCH §2a)", () => {
         { action: "signal.trust.unmarkAgent", uuid: UUID },
         { action: "sessions.setQuiet", errorReplies: false },
       ]) {
-        await expect(tool.execute?.("call", args)).rejects.toThrow(/restricted to operator/);
+        await expect(tool.execute?.("call", args)).rejects.toThrow(OWNER_ONLY_TOOL_ERROR);
       }
     }
     expect(callGatewayTool).not.toHaveBeenCalled();

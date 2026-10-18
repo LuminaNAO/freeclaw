@@ -11,7 +11,7 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringEnum } from "../schema/typebox.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import { type AnyAgentTool, jsonResult, OWNER_ONLY_TOOL_ERROR, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 
 const log = createSubsystemLogger("gateway-tool");
@@ -99,7 +99,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Focus mode (action=focus, focusAction=set+target|off|status): only the target session runs while others' messages wait; use it only when an operator asks. Operator-only: signal.trust.markAgent / signal.trust.unmarkAgent (uuid) mark a trusted Signal identity as another agent; sessions.setQuiet (sessionKey, errorReplies?, slashCommands?; false = quiet, true = default) sets a session's quiet settings. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Focus mode (action=focus, focusAction=set+target|off|status): only the target session runs while others' messages wait; use it only when an operator asks. signal.trust.markAgent / signal.trust.unmarkAgent (uuid) mark or unmark a trusted Signal identity as another agent; sessions.setQuiet (sessionKey, errorReplies?, slashCommands?; false = quiet, true = default) sets a session's quiet settings. These three call the same gateway methods as the CLI and are allowed only when the current turn's sender is an operator (senderIsOwner); otherwise they are refused. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -107,7 +107,7 @@ export function createGatewayTool(opts?: {
       if (OPERATOR_TURN_ACTIONS.has(action)) {
         // Agent peers ARCH §2a: refused unless the sender of this turn is an operator.
         if (opts?.senderIsOwner !== true) {
-          throw new Error(`${action} is restricted to operator senders.`);
+          throw new Error(OWNER_ONLY_TOOL_ERROR);
         }
         const gatewayOpts = readGatewayCallOptions(params);
         if (action === "sessions.setQuiet") {
