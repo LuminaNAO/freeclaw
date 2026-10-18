@@ -10,7 +10,14 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -22,6 +29,7 @@ import {
   normalizeAttachments,
 } from "../../media-understanding/attachments.normalize.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isErrorRepliesDisabled } from "../../sessions/quiet-settings.js";
 import { maybeApplyTtsToPayload, resolveTtsConfig } from "../../tts/tts.js";
 import {
   isCommandEnabled,
@@ -31,6 +39,7 @@ import {
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
+import { reportSuppressedTurnError } from "./quiet-session.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 
 type DispatchProcessedRecorder = (
@@ -151,26 +160,18 @@ function hasBoundConversationForSession(params: {
   channelRaw: string | undefined;
   accountIdRaw: string | undefined;
 }): boolean {
-  const channel = String(params.channelRaw ?? "")
-    .trim()
-    .toLowerCase();
+  const channel = (params.channelRaw ?? "").trim().toLowerCase();
   if (!channel) {
     return false;
   }
-  const accountId = String(params.accountIdRaw ?? "")
-    .trim()
-    .toLowerCase();
+  const accountId = (params.accountIdRaw ?? "").trim().toLowerCase();
   const normalizedAccountId = accountId || "default";
   const bindingService = getSessionBindingService();
   const bindings = bindingService.listBySession(params.sessionKey);
   return bindings.some((binding) => {
-    const bindingChannel = String(binding.conversation.channel ?? "")
-      .trim()
-      .toLowerCase();
-    const bindingAccountId = String(binding.conversation.accountId ?? "")
-      .trim()
-      .toLowerCase();
-    const conversationId = String(binding.conversation.conversationId ?? "").trim();
+    const bindingChannel = (binding.conversation.channel ?? "").trim().toLowerCase();
+    const bindingAccountId = (binding.conversation.accountId ?? "").trim().toLowerCase();
+    const conversationId = (binding.conversation.conversationId ?? "").trim();
     return (
       bindingChannel === channel &&
       (bindingAccountId || "default") === normalizedAccountId &&
@@ -183,6 +184,20 @@ export type AcpDispatchAttemptResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
 };
+
+function loadAcpSessionEntryForQuiet(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+): { entry?: SessionEntry; storePath?: string } {
+  try {
+    const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const store = loadSessionStore(storePath);
+    return { entry: resolveSessionStoreEntry({ store, sessionKey }).existing, storePath };
+  } catch {
+    return {};
+  }
+}
 
 export async function tryDispatchAcpReply(params: {
   ctx: FinalizedMsgContext;
@@ -374,11 +389,22 @@ export async function tryDispatchAcpReply(params: {
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "ACP turn failed before completion.",
     });
-    const delivered = await delivery.deliver("final", {
-      text: formatAcpRuntimeErrorText(acpError),
-      isError: true,
-    });
-    queuedFinal = queuedFinal || delivered;
+    const errorText = formatAcpRuntimeErrorText(acpError);
+    // Quiet sessions ARCH §3.1: with `errorReplies: false` the error is logged and recorded only.
+    const quietEntry = loadAcpSessionEntryForQuiet(params.cfg, sessionKey);
+    if (isErrorRepliesDisabled(quietEntry.entry)) {
+      await reportSuppressedTurnError({
+        sessionKey,
+        storePath: quietEntry.storePath,
+        text: errorText,
+      });
+    } else {
+      const delivered = await delivery.deliver("final", {
+        text: errorText,
+        isError: true,
+      });
+      queuedFinal = queuedFinal || delivered;
+    }
     const counts = params.dispatcher.getQueuedCounts();
     delivery.applyRoutedCounts(counts);
     const acpStats = acpManager.getObservabilitySnapshot(params.cfg);

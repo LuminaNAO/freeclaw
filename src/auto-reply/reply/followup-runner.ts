@@ -23,6 +23,7 @@ import {
   resolveOriginMessageTo,
 } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
+import { filterErrorPayloadsForQuietSession } from "./quiet-session.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
@@ -269,7 +270,13 @@ export function createFollowupRunner(params: {
         });
       }
 
-      const payloadArray = runResult.payloads ?? [];
+      // Quiet sessions ARCH §3.1: drop provider error text when `errorReplies: false`.
+      const payloadArray = await filterErrorPayloadsForQuietSession({
+        entry: (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry,
+        sessionKey,
+        storePath,
+        payloads: runResult.payloads ?? [],
+      });
       if (payloadArray.length === 0) {
         return;
       }

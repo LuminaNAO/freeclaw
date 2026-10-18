@@ -261,3 +261,59 @@ describe("signal agent peers: nothing marked is a no-op (ARCH §2.3)", () => {
     expect(withPeers).toEqual(base);
   });
 });
+
+describe("signal quiet sessions: slashCommands off at ingress (ARCH §3.1)", () => {
+  async function runSlash(slashCommands: false | undefined) {
+    const sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "signal-quiet-store-"));
+    const sessionStorePath = path.join(sessionsDir, "sessions.json");
+    const groupKey = "agent:main:signal:group:g1";
+    fs.writeFileSync(
+      sessionStorePath,
+      JSON.stringify({
+        [groupKey]: {
+          sessionId: "s-1",
+          updatedAt: Date.now(),
+          ...(slashCommands === false ? { slashCommands } : {}),
+        },
+      }),
+    );
+    // Command allow-lists configured and the sender is on neither: unauthorized control
+    // commands are dropped at ingress today. groupPolicy "open" still admits the sender.
+    const cfg = {
+      ...makeCfg(),
+      session: { store: sessionStorePath },
+      channels: {
+        signal: {
+          groupPolicy: "open",
+          groupAllowFrom: [`uuid:${AGENT_UUID}`],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg,
+        account: OUR_NUMBER,
+        accountUuid: OUR_UUID,
+        historyLimit: 5,
+        groupHistories: new Map(),
+        allowFrom: [`uuid:${AGENT_UUID}`],
+        groupAllowFrom: [`uuid:${AGENT_UUID}`],
+        groupPolicy: "open",
+      }),
+    );
+    await handler(groupEvent({ senderUuid: HUMAN_UUID, message: "/status" }));
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  }
+
+  it("unset: an unauthorized /status is dropped as a control command (today)", async () => {
+    await runSlash(undefined);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("slashCommands: false: /status is ordinary text and reaches dispatch", async () => {
+    await runSlash(false);
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(captured[0]?.BodyForAgent).toBe("/status");
+  });
+});

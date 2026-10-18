@@ -17,6 +17,11 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import {
+  applyQuietSessionPatch,
+  formatQuietSessionSettings,
+  type QuietSessionPatch,
+} from "../../sessions/quiet-settings.js";
+import {
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "../../telegram/thread-bindings.js";
@@ -34,10 +39,82 @@ const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
+// Quiet sessions ARCH §3.1: operator-only quiet settings.
+const SESSION_ACTION_QUIET = "quiet";
+const SESSION_ACTION_ERROR_REPLIES = "error-replies";
+const SESSION_ACTION_SLASH_COMMANDS = "slash-commands";
+const QUIET_ON_VALUES = new Set(["on", "true", "yes", "enable", "enabled"]);
+const QUIET_OFF_VALUES = new Set(["off", "false", "no", "disable", "disabled"]);
+
+function resolveQuietSessionUsage() {
+  return "Usage: /session quiet | /session error-replies <on|off> | /session slash-commands <on|off>";
+}
+
+function parseQuietToggle(raw: string | undefined): boolean | null {
+  const value = raw?.trim().toLowerCase();
+  if (value && QUIET_ON_VALUES.has(value)) {
+    return true;
+  }
+  if (value && QUIET_OFF_VALUES.has(value)) {
+    return false;
+  }
+  return null;
+}
 
 function resolveSessionCommandUsage() {
-  return "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)";
+  return `Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)\n${resolveQuietSessionUsage()}`;
 }
+
+/**
+ * Quiet sessions ARCH §3.1: `/session quiet` (show), `/session error-replies on|off`,
+ * `/session slash-commands on|off`. Operator (owner) only. Still parsed in a
+ * `slashCommands: false` session so the setting can be undone.
+ */
+const handleQuietSessionAction: CommandHandler = async (params) => {
+  const tokens = params.command.commandBodyNormalized
+    .slice(SESSION_COMMAND_PREFIX.length)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const action = tokens[0]?.toLowerCase();
+  if (!params.command.senderIsOwner) {
+    logVerbose(
+      `Ignoring /session ${action} from non-operator sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return {
+      shouldContinue: false,
+      reply: { text: "⚠️ Only an operator can change this session's quiet settings." },
+    };
+  }
+  const entry = params.sessionEntry;
+  if (!entry || !params.sessionKey) {
+    return { shouldContinue: false, reply: { text: "⚠️ No session to configure here." } };
+  }
+  if (action === SESSION_ACTION_QUIET) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: [`Session ${params.sessionKey}`, ...formatQuietSessionSettings(entry)].join("\n"),
+      },
+    };
+  }
+  const toggle = parseQuietToggle(tokens[1]);
+  if (toggle === null) {
+    return { shouldContinue: false, reply: { text: resolveQuietSessionUsage() } };
+  }
+  const patch: QuietSessionPatch =
+    action === SESSION_ACTION_ERROR_REPLIES ? { errorReplies: toggle } : { slashCommands: toggle };
+  applyQuietSessionPatch(entry, patch);
+  await persistSessionEntry(params);
+  return {
+    shouldContinue: false,
+    reply: {
+      text: [`✅ Updated session ${params.sessionKey}`, ...formatQuietSessionSettings(entry)].join(
+        "\n",
+      ),
+    },
+  };
+};
 
 function parseSessionDurationMs(raw: string): number {
   const normalized = raw.trim().toLowerCase();
@@ -361,6 +438,13 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const rest = normalized.slice(SESSION_COMMAND_PREFIX.length).trim();
   const tokens = rest.split(/\s+/).filter(Boolean);
   const action = tokens[0]?.toLowerCase();
+  if (
+    action === SESSION_ACTION_QUIET ||
+    action === SESSION_ACTION_ERROR_REPLIES ||
+    action === SESSION_ACTION_SLASH_COMMANDS
+  ) {
+    return await handleQuietSessionAction(params, allowTextCommands);
+  }
   if (action !== SESSION_ACTION_IDLE && action !== SESSION_ACTION_MAX_AGE) {
     return {
       shouldContinue: false,

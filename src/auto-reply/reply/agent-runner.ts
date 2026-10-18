@@ -26,6 +26,7 @@ import {
 } from "../../infra/session-stack.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import { isErrorRepliesDisabled } from "../../sessions/quiet-settings.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
   buildFallbackClearedNotice,
@@ -58,6 +59,7 @@ import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-r
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
+import { filterErrorPayloadsForQuietSession, reportSuppressedTurnError } from "./quiet-session.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -392,6 +394,16 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
+      // Every `final` outcome is a failure notice (⚠️ …) or provider error text. Quiet sessions
+      // ARCH §3.1: with `errorReplies: false` it is logged and recorded, never posted.
+      if (isErrorRepliesDisabled(activeSessionEntry)) {
+        await reportSuppressedTurnError({
+          sessionKey,
+          storePath,
+          text: runOutcome.payload.text ?? "",
+        });
+        return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+      }
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
@@ -428,7 +440,14 @@ export async function runReplyAgent(params: {
       }
     }
 
-    const payloadArray = runResult.payloads ?? [];
+    // Quiet sessions ARCH §3.1: provider error text (`isError` payloads) is not posted when the
+    // session has `errorReplies: false`. Unset: unchanged.
+    const payloadArray = await filterErrorPayloadsForQuietSession({
+      entry: activeSessionEntry,
+      sessionKey,
+      storePath,
+      payloads: runResult.payloads ?? [],
+    });
 
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });

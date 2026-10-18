@@ -265,7 +265,10 @@ export async function handleInlineActions(params: {
     await opts.onBlockReply(reply);
   };
 
-  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
+  // Quiet sessions ARCH §3.1: no command (including stop words) is parsed when slash commands
+  // are off for this message; it is ordinary text for the model.
+  const slashCommandsDisabled = ctx.SlashCommandsDisabled === true;
+  const isStopLikeInbound = !slashCommandsDisabled && isAbortRequestText(command.rawBodyNormalized);
   if (!isStopLikeInbound && sessionEntry) {
     const cutoff = readAbortCutoffFromSessionEntry(sessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);
@@ -430,6 +433,14 @@ export async function handleInlineActions(params: {
   let abortedLastRun = initialAbortedLastRun;
   if (!sessionEntry && command.abortKey) {
     abortedLastRun = getAbortMemory(command.abortKey) ?? false;
+  }
+
+  if (slashCommandsDisabled) {
+    return {
+      kind: "continue",
+      directives,
+      abortedLastRun,
+    };
   }
 
   const commandResult = await runCommands(command);

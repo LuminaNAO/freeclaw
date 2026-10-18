@@ -41,6 +41,7 @@ import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { holdForFocus } from "./focus-gate.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
+import { isSlashCommandParsingDisabled, resolveQuietSlashCommands } from "./quiet-session.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
@@ -122,7 +123,7 @@ export async function dispatchReplyFromConfig(params: {
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
-  const channel = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
+  const channel = (ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const sessionKey = ctx.SessionKey;
@@ -215,6 +216,8 @@ export async function dispatchReplyFromConfig(params: {
 
   async function dispatchStoredInbound(): Promise<DispatchFromConfigResult> {
     const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
+    // Quiet sessions ARCH §3.1: decide once whether command parsing is off for this message.
+    resolveQuietSlashCommands({ ctx, cfg, entry: sessionStoreEntry.entry });
     const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
     const inboundAudio = isInboundAudioContext(ctx);
     const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
@@ -321,7 +324,9 @@ export async function dispatchReplyFromConfig(params: {
     markProcessing();
 
     try {
-      const fastAbort = await tryFastAbortFromMessage({ ctx, cfg });
+      const fastAbort = isSlashCommandParsingDisabled(ctx)
+        ? { handled: false, aborted: false, stoppedSubagents: undefined }
+        : await tryFastAbortFromMessage({ ctx, cfg });
       if (fastAbort.handled) {
         const payload = {
           text: formatAbortReplyText(fastAbort.stoppedSubagents),
@@ -359,7 +364,8 @@ export async function dispatchReplyFromConfig(params: {
         return { queuedFinal, counts };
       }
 
-      const bypassAcpForCommand = shouldBypassAcpDispatchForCommand(ctx, cfg);
+      const bypassAcpForCommand =
+        !isSlashCommandParsingDisabled(ctx) && shouldBypassAcpDispatchForCommand(ctx, cfg);
 
       const sendPolicy = resolveSendPolicy({
         cfg,

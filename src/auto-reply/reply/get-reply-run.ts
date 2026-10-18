@@ -288,7 +288,10 @@ export async function runPreparedReply(
     typing.cleanup();
     return undefined;
   }
-  const isBareNewOrReset = rawBodyTrimmed === "/new" || rawBodyTrimmed === "/reset";
+  // Quiet sessions ARCH §3.1: `/new` / `/reset` are plain text when slash commands are off.
+  const isBareNewOrReset =
+    ctx.SlashCommandsDisabled !== true &&
+    (rawBodyTrimmed === "/new" || rawBodyTrimmed === "/reset");
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);

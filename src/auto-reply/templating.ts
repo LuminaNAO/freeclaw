@@ -144,6 +144,11 @@ export type MsgContext = {
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
+  /**
+   * Internal (quiet sessions ARCH §3.1): command parsing is off for this message because its
+   * session has `slashCommands: false`. Decided once per message by resolveQuietSlashCommands.
+   */
+  SlashCommandsDisabled?: boolean;
   CommandTargetSessionKey?: string;
   /**
    * Internal flag: command handling prepared trailing prompt text for ACP dispatch.

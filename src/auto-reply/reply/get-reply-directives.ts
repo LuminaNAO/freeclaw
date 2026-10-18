@@ -167,11 +167,15 @@ export async function resolveReplyDirectives(params: {
     triggerBodyNormalized,
     commandAuthorized,
   });
-  const allowTextCommands = shouldHandleTextCommands({
-    cfg,
-    surface: command.surface,
-    commandSource: ctx.CommandSource,
-  });
+  // Quiet sessions ARCH §3.1: with `slashCommands: false` the message is ordinary text, so no
+  // text command or directive is parsed from it.
+  const allowTextCommands =
+    ctx.SlashCommandsDisabled !== true &&
+    shouldHandleTextCommands({
+      cfg,
+      surface: command.surface,
+      commandSource: ctx.CommandSource,
+    });
   const reservedCommands = new Set(
     listChatCommands().flatMap((cmd) =>
       cmd.textAliases.map((a) => a.replace(/^\//, "").toLowerCase()),
@@ -215,7 +219,7 @@ export async function resolveReplyDirectives(params: {
       skipSenderLabel,
       isIgnorableToken: isIgnorableLeadingToken,
     });
-    if (!rest.startsWith("/")) {
+    if (!rest.startsWith("/") || ctx.SlashCommandsDisabled === true) {
       return null;
     }
     const parsed = parseInlineDirectives(rest, {
