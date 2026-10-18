@@ -29,6 +29,12 @@ const resolveGatewayInstallToken = vi.hoisted(() =>
   })),
 );
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
+const writeConfigFile = vi.hoisted(() => vi.fn(async (_cfg: unknown) => {}));
+
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  writeConfigFile,
+}));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
@@ -441,5 +447,70 @@ describe("finalizeOnboardingWizard", () => {
     expect(gatewayServiceUninstall).not.toHaveBeenCalled();
     expect(progressUpdate).toHaveBeenCalledWith("Restarting Gateway service…");
     expect(progressStop).toHaveBeenCalledWith("Gateway service restart scheduled.");
+  });
+
+  describe("model-badge on for new installs only (ARCH model-badge §2c.12)", () => {
+    const signalConfig = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    async function finalize(params: { freshInstall?: boolean; nextConfig: OpenClawConfig }) {
+      writeConfigFile.mockClear();
+      await finalizeOnboardingWizard({
+        flow: "quickstart",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: true,
+        },
+        baseConfig: params.freshInstall ? {} : params.nextConfig,
+        nextConfig: params.nextConfig,
+        freshInstall: params.freshInstall,
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          gatewayToken: undefined,
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter: buildWizardPrompter({
+          select: vi.fn(async () => "later") as never,
+          confirm: vi.fn(async () => false),
+        }),
+        runtime: createRuntime(),
+      });
+    }
+
+    it("fresh onboarding writes the entry with the configured supported channels", async () => {
+      await finalize({ freshInstall: true, nextConfig: signalConfig });
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      const written = writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
+      expect(written.plugins?.entries?.["model-badge"]).toEqual({
+        enabled: true,
+        config: { providers: ["signal"] },
+      });
+      expect(written.channels).toEqual(signalConfig.channels);
+    });
+
+    it("re-running onboarding on an existing config without the entry does not add it", async () => {
+      await finalize({ freshInstall: false, nextConfig: signalConfig });
+      await finalize({ nextConfig: signalConfig });
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("fresh onboarding keeps an entry already in the new config", async () => {
+      await finalize({
+        freshInstall: true,
+        nextConfig: {
+          ...signalConfig,
+          plugins: { entries: { "model-badge": { enabled: false } } },
+        },
+      });
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
   });
 });

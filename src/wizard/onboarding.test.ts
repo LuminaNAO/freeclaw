@@ -496,4 +496,64 @@ describe("runOnboardingWizard", () => {
       }),
     );
   });
+
+  describe("model-badge new installs only (ARCH model-badge §2c.12)", () => {
+    const flags = {
+      acceptRisk: true,
+      flow: "quickstart" as const,
+      authChoice: "skip" as const,
+      installDaemon: false,
+      skipProviders: true,
+      skipSkills: true,
+      skipSearch: true,
+      skipHealth: true,
+      skipUi: true,
+    };
+
+    it("a new config is finalized as a fresh install", async () => {
+      finalizeOnboardingWizard.mockClear();
+      await runOnboardingWizard(
+        flags,
+        createRuntime({ throwsOnExit: true }),
+        buildWizardPrompter({}),
+      );
+      expect(finalizeOnboardingWizard).toHaveBeenCalledWith(
+        expect.objectContaining({ freshInstall: true }),
+      );
+    });
+
+    it("re-running onboarding over an existing config is not a fresh install", async () => {
+      finalizeOnboardingWizard.mockClear();
+      readConfigFileSnapshot.mockResolvedValueOnce({
+        path: "/tmp/.openclaw/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        resolved: {},
+        valid: true,
+        config: { channels: { signal: { account: "+15550001111" } } },
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } as never);
+      const select = vi.fn(async (opts: WizardSelectParams<unknown>) =>
+        opts.message === "Config handling" ? "keep" : "quickstart",
+      ) as unknown as WizardPrompter["select"];
+      await runOnboardingWizard(
+        flags,
+        createRuntime({ throwsOnExit: true }),
+        buildWizardPrompter({ select }),
+      );
+      expect(finalizeOnboardingWizard).toHaveBeenCalledWith(
+        expect.objectContaining({ freshInstall: false }),
+      );
+      for (const call of writeConfigFile.mock.calls as unknown as Array<[Record<string, never>]>) {
+        expect(
+          (call[0] as { plugins?: { entries?: Record<string, unknown> } }).plugins?.entries?.[
+            "model-badge"
+          ],
+        ).toBeUndefined();
+      }
+    });
+  });
 });

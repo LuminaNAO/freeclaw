@@ -75,6 +75,30 @@ describe("plugin registration (ARCH §5.1)", () => {
   });
 });
 
+describe("new install with no supported channel (ARCH §2c.12)", () => {
+  it("providers: [] builds no engine, reports no error and logs that it is idle", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "badge-noprov-"));
+    try {
+      const log = createLog();
+      const rt = await buildRuntime({
+        rawConfig: { providers: [] },
+        gatewayConfig: {} as OpenClawConfig,
+        gatewayStateDir: root,
+        log,
+        renderer: null,
+        configPath: path.join(root, "openclaw.json"),
+      });
+      expect(rt.errors).toEqual([]);
+      expect(rt.engines).toEqual([]);
+      expect(log.text()).toMatch(/no providers configured; idle/);
+      await rt.start();
+      await rt.stop();
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("/badge commands (ARCH §5.3)", () => {
   async function setup() {
     const w = await createWorld();

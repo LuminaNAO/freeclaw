@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  applyFreshInstallModelBadge,
   applyOnboardingLocalWorkspaceConfig,
   ONBOARDING_DEFAULT_DM_SCOPE,
   ONBOARDING_DEFAULT_TOOLS_PROFILE,
@@ -79,5 +80,61 @@ describe("applyOnboardingLocalWorkspaceConfig", () => {
       "/tmp/workspace",
     );
     expect(result.tools?.exec).toBeUndefined();
+  });
+});
+
+describe("applyFreshInstallModelBadge (ARCH model-badge §2c.12)", () => {
+  const signal = { channels: { signal: { account: "+15550001111" } } } as OpenClawConfig;
+
+  it("enables the badge with the supported channels onboarding configured", () => {
+    const result = applyFreshInstallModelBadge(signal);
+    expect(result.plugins?.entries?.["model-badge"]).toEqual({
+      enabled: true,
+      config: { providers: ["signal"] },
+    });
+  });
+
+  it("writes an empty providers list when no supported channel was configured", () => {
+    const result = applyFreshInstallModelBadge({
+      channels: { telegram: { botToken: "x" } },
+    } as OpenClawConfig);
+    expect(result.plugins?.entries?.["model-badge"]).toEqual({
+      enabled: true,
+      config: { providers: [] },
+    });
+  });
+
+  it("skips a configured but disabled channel", () => {
+    const result = applyFreshInstallModelBadge({
+      channels: { signal: { account: "+15550001111", enabled: false } },
+    } as OpenClawConfig);
+    expect(result.plugins?.entries?.["model-badge"]?.config).toEqual({ providers: [] });
+  });
+
+  it("adds itself to an explicit plugins.allow list", () => {
+    const result = applyFreshInstallModelBadge({ ...signal, plugins: { allow: ["x"] } });
+    expect(result.plugins?.allow).toEqual(["x", "model-badge"]);
+  });
+
+  it("leaves an existing entry, a denylist and plugins-off alone", () => {
+    const off = { plugins: { entries: { "model-badge": { enabled: false } } } } as OpenClawConfig;
+    expect(applyFreshInstallModelBadge(off)).toBe(off);
+    const denied = { plugins: { deny: ["model-badge"] } } as OpenClawConfig;
+    expect(applyFreshInstallModelBadge(denied)).toBe(denied);
+    const disabled = { plugins: { enabled: false } } as OpenClawConfig;
+    expect(applyFreshInstallModelBadge(disabled)).toBe(disabled);
+  });
+
+  it("an upgrade leaves the badge off: the bundled default does not enable it", async () => {
+    const { BUNDLED_ENABLED_BY_DEFAULT, normalizePluginsConfig, resolveEnableState } =
+      await import("../plugins/config-state.js");
+    expect(BUNDLED_ENABLED_BY_DEFAULT.has("model-badge")).toBe(false);
+    // An existing (upgraded) config with no model-badge entry.
+    const state = resolveEnableState(
+      "model-badge",
+      "bundled",
+      normalizePluginsConfig({ entries: {} }),
+    );
+    expect(state.enabled).toBe(false);
   });
 });

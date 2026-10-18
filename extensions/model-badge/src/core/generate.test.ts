@@ -237,6 +237,12 @@ describe("mark derivation (ARCH §2.2, §6.2)", () => {
     expect(good.config.stateDir).toBe("/s/plugins/model-badge");
     expect(good.config.providers).toEqual(["signal"]);
   });
+
+  it("§2c.12: an explicit empty providers list (new install, no supported channel) is kept", () => {
+    const none = normalizeConfig({ providers: [] }, { gatewayStateDir: "/s" });
+    expect(none.ok).toBe(true);
+    expect(none.config.providers).toEqual([]);
+  });
 });
 
 describe("model resolution (ported)", () => {

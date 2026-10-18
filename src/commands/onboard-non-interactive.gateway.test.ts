@@ -200,6 +200,48 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  // ARCH model-badge §2c.12: the non-interactive install path enables the badge for a NEW
+  // config only; an existing config without the entry (an upgrade) is left off.
+  const badgeOnboardOpts = (workspace: string) => ({
+    nonInteractive: true,
+    mode: "local" as const,
+    workspace,
+    authChoice: "skip" as const,
+    skipSkills: true,
+    skipHealth: true,
+    installDaemon: false,
+    gatewayBind: "loopback" as const,
+    gatewayAuth: "token" as const,
+    gatewayToken: "tok_badge_123",
+  });
+  type BadgeCfg = { plugins?: { entries?: Record<string, unknown> } };
+
+  it("§2c.12: a fresh non-interactive install writes the model-badge entry", async () => {
+    await withStateDir("state-badge-fresh-", async (stateDir) => {
+      await runNonInteractiveOnboarding(badgeOnboardOpts(path.join(stateDir, "openclaw")), runtime);
+      const cfg = await readJsonFile<BadgeCfg>(resolveStateConfigPath(process.env, stateDir));
+      // No channel is configured by the non-interactive path, so no provider is listed.
+      expect(cfg?.plugins?.entries?.["model-badge"]).toEqual({
+        enabled: true,
+        config: { providers: [] },
+      });
+    });
+  }, 60_000);
+
+  it("§2c.12: re-running on an existing config without the entry does not add it", async () => {
+    await withStateDir("state-badge-existing-", async (stateDir) => {
+      const configPath = resolveStateConfigPath(process.env, stateDir);
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ channels: { signal: { account: "+15550001111" } } }),
+      );
+      await runNonInteractiveOnboarding(badgeOnboardOpts(path.join(stateDir, "openclaw")), runtime);
+      const cfg = await readJsonFile<BadgeCfg>(configPath);
+      expect(cfg?.plugins?.entries?.["model-badge"]).toBeUndefined();
+    });
+  }, 60_000);
+
   it("uses OPENCLAW_GATEWAY_TOKEN when --gateway-token is omitted", async () => {
     await withStateDir("state-env-token-", async (stateDir) => {
       const envToken = "tok_env_fallback_123";
