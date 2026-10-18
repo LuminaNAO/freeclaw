@@ -47,7 +47,11 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
-import { maybeCompactHeartbeatSession } from "./heartbeat-compaction.js";
+import {
+  type HeartbeatCompactionStatus,
+  maybeCompactHeartbeatSession,
+  resolveHeartbeatCompactionStatus,
+} from "./heartbeat-compaction.js";
 import {
   buildExecEventPrompt,
   buildCronEventPrompt,
@@ -197,6 +201,29 @@ export function resolveHeartbeatSummaryForAgent(
     model,
     ackMaxChars,
   };
+}
+
+/**
+ * Heartbeat session size, compaction threshold and last compaction time for `openclaw status`
+ * (heartbeat-compaction ARCH §2.5). Null when heartbeats are disabled for the agent.
+ */
+export function resolveHeartbeatCompactionStatusForAgent(
+  cfg: OpenClawConfig,
+  agentId: string,
+): HeartbeatCompactionStatus | null {
+  const resolvedAgentId = normalizeAgentId(agentId);
+  if (!isHeartbeatEnabledForAgent(cfg, resolvedAgentId)) {
+    return null;
+  }
+  const heartbeat = resolveHeartbeatConfig(cfg, resolvedAgentId);
+  const session = resolveHeartbeatSession(cfg, resolvedAgentId, heartbeat);
+  return resolveHeartbeatCompactionStatus({
+    cfg,
+    agentId: resolvedAgentId,
+    heartbeat,
+    sessionKey: session.sessionKey,
+    store: session.store,
+  });
 }
 
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {

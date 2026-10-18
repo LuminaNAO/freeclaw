@@ -16,7 +16,10 @@ import {
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
 import { buildChannelSummary } from "../infra/channel-summary.js";
-import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
+import {
+  resolveHeartbeatCompactionStatusForAgent,
+  resolveHeartbeatSummaryForAgent,
+} from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -93,11 +96,21 @@ export async function getStatusSummary(
   const agentList = listAgentsForGateway(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
+    let compaction: ReturnType<typeof resolveHeartbeatCompactionStatusForAgent> = null;
+    if (summary.enabled) {
+      try {
+        compaction = resolveHeartbeatCompactionStatusForAgent(cfg, agent.id);
+      } catch {
+        // Status is diagnostic: an unreadable heartbeat session store must not break it.
+        compaction = null;
+      }
+    }
     return {
       agentId: agent.id,
       enabled: summary.enabled,
       every: summary.every,
       everyMs: summary.everyMs,
+      ...(compaction ? { compaction } : {}),
     } satisfies HeartbeatStatus;
   });
   const channelSummary = await buildChannelSummary(cfg, {

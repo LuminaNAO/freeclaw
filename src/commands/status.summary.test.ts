@@ -50,6 +50,12 @@ vi.mock("../infra/heartbeat-runner.js", () => ({
     every: "5m",
     everyMs: 300_000,
   })),
+  resolveHeartbeatCompactionStatusForAgent: vi.fn(() => ({
+    sessionKey: "agent:main:main",
+    totalTokens: 42_000,
+    threshold: 100_000,
+    lastCompactedAt: 1234,
+  })),
 }));
 
 vi.mock("../infra/system-events.js", () => ({
@@ -80,6 +86,12 @@ describe("getStatusSummary", () => {
 
     expect(summary.runtimeVersion).toBe("2026.3.8");
     expect(summary.heartbeat.defaultAgentId).toBe("main");
+    expect(summary.heartbeat.agents[0]?.compaction).toEqual({
+      sessionKey: "agent:main:main",
+      totalTokens: 42_000,
+      threshold: 100_000,
+      lastCompactedAt: 1234,
+    });
     expect(summary.channelSummary).toEqual(["ok"]);
   });
 });

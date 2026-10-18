@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveMainSessionKey } from "../config/sessions.js";
 import { markGatewayDraining, resetAllLanes } from "../process/command-queue.js";
-import { runHeartbeatOnce } from "./heartbeat-runner.js";
+import { resolveHeartbeatCompactionStatusForAgent, runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
@@ -403,5 +403,30 @@ describe("runHeartbeatOnce – heartbeat session compaction (ARCH §2, §4)", ()
       );
       expect(compactionLogLines()).toHaveLength(1);
     });
+  });
+});
+
+describe("resolveHeartbeatCompactionStatusForAgent (ARCH §2.5)", () => {
+  it("reports the heartbeat session's size, threshold and last compaction time", async () => {
+    await withScenario(
+      { totalTokens: 42_000, contextWindow: 128_000, entry: { heartbeatCompactedAt: 1234 } },
+      async ({ cfg, sessionKey }) => {
+        expect(resolveHeartbeatCompactionStatusForAgent(cfg, "main")).toEqual({
+          sessionKey,
+          totalTokens: 42_000,
+          threshold: 64_000,
+          lastCompactedAt: 1234,
+        });
+      },
+    );
+  });
+
+  it("reports a null threshold when compactAt is off", async () => {
+    await withScenario(
+      { totalTokens: 42_000, heartbeat: { compactAt: "off" } },
+      async ({ cfg }) => {
+        expect(resolveHeartbeatCompactionStatusForAgent(cfg, "main")?.threshold).toBeNull();
+      },
+    );
   });
 });

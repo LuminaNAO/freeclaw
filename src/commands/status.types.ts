@@ -32,6 +32,14 @@ export type HeartbeatStatus = {
   enabled: boolean;
   every: string;
   everyMs: number | null;
+  /** Heartbeat session compaction state (heartbeat-compaction ARCH §2.5). */
+  compaction?: {
+    sessionKey: string;
+    totalTokens: number | null;
+    /** null when heartbeat.compactAt is "off". */
+    threshold: number | null;
+    lastCompactedAt: number | null;
+  };
 };
 
 export type StatusSummary = {

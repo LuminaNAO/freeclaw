@@ -29,6 +29,7 @@ import { formatGatewayAuthUsed } from "./status-all/format.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 import {
   formatDuration,
+  formatHeartbeatCompactionValue,
   formatKTokens,
   formatTokensCompact,
   shortenText,
@@ -378,6 +379,7 @@ export async function statusCommand(
       .filter(Boolean);
     return parts.length > 0 ? parts.join(", ") : "disabled";
   })();
+  const heartbeatSessionValue = formatHeartbeatCompactionValue(summary.heartbeat.agents);
   const lastHeartbeatValue = (() => {
     if (!opts.deep) {
       return null;
@@ -480,6 +482,7 @@ export async function statusCommand(
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
     { Item: "Heartbeat", Value: heartbeatValue },
+    ...(heartbeatSessionValue ? [{ Item: "Heartbeat session", Value: heartbeatSessionValue }] : []),
     ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
     {
       Item: "Sessions",
