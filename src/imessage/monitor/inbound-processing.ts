@@ -1,4 +1,3 @@
-import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
   formatInboundEnvelope,
   formatInboundFromLabel,
@@ -12,6 +11,7 @@ import {
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
+import { hasSessionControlCommand } from "../../auto-reply/reply/quiet-session.js";
 import { resolveDualTextControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop } from "../../channels/logging.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -310,7 +310,12 @@ export function resolveIMessageInboundDecision(params: {
           chatIdentifier,
         })
       : false;
-  const hasControlCommandInMessage = hasControlCommand(messageText, params.cfg);
+  // Quiet sessions ARCH §3.1: `/…` is ordinary text in a `slashCommands: false` session.
+  const hasControlCommandInMessage = hasSessionControlCommand({
+    text: messageText,
+    cfg: params.cfg,
+    sessionKey: route.sessionKey,
+  });
   const { commandAuthorized, shouldBlock } = resolveDualTextControlCommandGate({
     useAccessGroups,
     primaryConfigured: commandDmAllowFrom.length > 0,

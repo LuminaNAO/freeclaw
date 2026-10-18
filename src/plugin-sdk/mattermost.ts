@@ -104,3 +104,8 @@ export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
+// Quiet sessions ARCH §3.1.
+export {
+  hasSessionControlCommandWithRuntime,
+  isSlashTextForQuietSessionWithRuntime,
+} from "./quiet-slash-commands.js";

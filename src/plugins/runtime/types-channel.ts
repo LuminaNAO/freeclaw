@@ -85,6 +85,10 @@ export type PluginRuntimeChannel = {
     isControlCommandMessage: typeof import("../../auto-reply/command-detection.js").isControlCommandMessage;
     shouldComputeCommandAuthorized: typeof import("../../auto-reply/command-detection.js").shouldComputeCommandAuthorized;
     shouldHandleTextCommands: typeof import("../../auto-reply/commands-registry.js").shouldHandleTextCommands;
+    /** Quiet sessions ARCH §3.1: session-aware hasControlCommand for channel ingress gates. */
+    hasSessionControlCommand: typeof import("../../auto-reply/reply/quiet-session.js").hasSessionControlCommand;
+    /** Quiet sessions ARCH §3.1: `/…` text is ordinary text in this session (slashCommands off). */
+    isSlashTextForQuietSession: typeof import("../../auto-reply/reply/quiet-session.js").isSlashTextForQuietSession;
   };
   discord: {
     messageActions: typeof import("../../channels/plugins/actions/discord.js").discordMessageActions;

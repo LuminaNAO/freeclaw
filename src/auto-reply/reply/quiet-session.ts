@@ -13,6 +13,8 @@ import {
   recordSuppressedSessionError,
 } from "../../sessions/quiet-settings.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
+import { hasControlCommand } from "../command-detection.js";
+import type { CommandNormalizeOptions } from "../commands-registry.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -158,4 +160,63 @@ function lookupSessionEntry(cfg: OpenClawConfig, sessionKey: string): SessionEnt
 /** Convenience for parse points: true when command parsing is off for this message. */
 export function isSlashCommandParsingDisabled(ctx: Pick<MsgContext, "SlashCommandsDisabled">) {
   return ctx.SlashCommandsDisabled === true;
+}
+
+/**
+ * Quiet sessions ARCH §3.1, for channel ingress: true when `text` must be treated as ordinary text
+ * because its session has `slashCommands: false`. A `/session …` command is never turned into
+ * text here: ingress does not reliably know who the operator is, so `/session` keeps today's
+ * command handling at ingress and the reply pipeline (resolveQuietSlashCommands, which has the
+ * full sender context) decides operator vs. not. That keeps the operator able to undo the setting
+ * on every channel.
+ */
+export function isSlashTextForQuietSession(params: {
+  text: string | undefined | null;
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+}): boolean {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return false;
+  }
+  const raw = stripStructuralPrefixes(params.text ?? "").trim();
+  if (!raw) {
+    return false;
+  }
+  const entry = lookupSessionEntry(params.cfg, sessionKey);
+  if (!isSlashCommandsDisabled(entry)) {
+    return false;
+  }
+  const agentId = resolveSessionAgentId({ sessionKey, config: params.cfg });
+  const candidates = [
+    raw,
+    stripMentions(raw, { SessionKey: sessionKey } as MsgContext, params.cfg, agentId).trim(),
+  ];
+  // Only text starting with `/` is affected (plain stop words etc. are unchanged).
+  if (!candidates.some((text) => text.startsWith("/"))) {
+    return false;
+  }
+  return !candidates.some((text) => SESSION_COMMAND_RE.test(text));
+}
+
+/**
+ * Quiet sessions ARCH §3.1, for channel ingress: the session-aware form of `hasControlCommand`.
+ * Every channel monitor that classifies inbound text as a control command (to drop it as
+ * unauthorized, intercept it, let it bypass mention gating or keep it out of debounce) calls this
+ * instead, so in a `slashCommands: false` session `/…` text is ordinary text and reaches the
+ * model. Without the setting (or without a session key) it is exactly `detect` (hasControlCommand
+ * by default).
+ */
+export function hasSessionControlCommand(params: {
+  text: string | undefined | null;
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  commandOptions?: CommandNormalizeOptions;
+  detect?: (text: string, cfg: OpenClawConfig, options?: CommandNormalizeOptions) => boolean;
+}): boolean {
+  const detect = params.detect ?? hasControlCommand;
+  if (!detect(params.text ?? "", params.cfg, params.commandOptions)) {
+    return false;
+  }
+  return !isSlashTextForQuietSession(params);
 }

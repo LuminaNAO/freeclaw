@@ -1,5 +1,4 @@
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
-import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   formatInboundEnvelope,
@@ -12,7 +11,7 @@ import {
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
-import { resolveQuietSlashCommands } from "../../auto-reply/reply/quiet-session.js";
+import { hasSessionControlCommand } from "../../auto-reply/reply/quiet-session.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import {
@@ -690,24 +689,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       senderPeerId,
     });
     // Quiet sessions ARCH §3.1: in a `slashCommands: false` session, `/…` text is ordinary text,
-    // so it neither bypasses mention gating nor is dropped as an unauthorized command. The
-    // operator's `/session` command is still a command.
-    const hasControlCommandInMessage =
-      hasControlCommand(messageText, deps.cfg) &&
-      !resolveQuietSlashCommands({
-        ctx: {
-          SessionKey: route.sessionKey,
-          Body: messageText,
-          ChatType: isGroup ? "group" : "direct",
-          Provider: "signal",
-          Surface: "signal",
-          From: isGroup ? `group:${groupId ?? "unknown"}` : `signal:${senderRecipient}`,
-          SenderId: senderDisplay,
-          SenderMatchE164: sender.kind === "uuid" ? sender.e164 : undefined,
-          AccountId: route.accountId,
-        },
-        cfg: deps.cfg,
-      });
+    // so it neither bypasses mention gating nor is dropped as an unauthorized command. `/session`
+    // stays a command (the reply pipeline decides whether the sender is an operator).
+    const hasControlCommandInMessage = hasSessionControlCommand({
+      text: messageText,
+      cfg: deps.cfg,
+      sessionKey: route.sessionKey,
+    });
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [

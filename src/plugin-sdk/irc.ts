@@ -82,3 +82,8 @@ export {
 } from "./reply-payload.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
 export { buildBaseAccountStatusSnapshot, buildBaseChannelStatusSummary } from "./status-helpers.js";
+// Quiet sessions ARCH §3.1.
+export {
+  hasSessionControlCommandWithRuntime,
+  isSlashTextForQuietSessionWithRuntime,
+} from "./quiet-slash-commands.js";

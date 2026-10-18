@@ -115,3 +115,8 @@ export {
   resolveWebhookTargets,
   withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";
+// Quiet sessions ARCH §3.1.
+export {
+  hasSessionControlCommandWithRuntime,
+  isSlashTextForQuietSessionWithRuntime,
+} from "./quiet-slash-commands.js";

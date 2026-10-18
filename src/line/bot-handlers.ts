@@ -15,6 +15,7 @@ import {
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
+import { hasSessionControlCommand } from "../auto-reply/reply/quiet-session.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -499,7 +500,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     const requireMention = groupConfig?.requireMention !== false;
     const rawText = message.type === "text" ? message.text : "";
     const peerId = groupId ?? roomId ?? event.source.userId ?? "unknown";
-    const { agentId } = resolveAgentRoute({
+    const { agentId, sessionKey: groupSessionKey } = resolveAgentRoute({
       cfg,
       channel: "line",
       accountId: account.accountId,
@@ -519,7 +520,12 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
       wasMentioned,
       hasAnyMention: hasAnyLineMention(message),
       allowTextCommands: true,
-      hasControlCommand: hasControlCommand(rawText, cfg),
+      // Quiet sessions ARCH §3.1: no mention bypass for `/…` text in a `slashCommands: false` session.
+      hasControlCommand: hasSessionControlCommand({
+        text: rawText,
+        cfg,
+        sessionKey: groupSessionKey,
+      }),
       commandAuthorized: decision.commandAuthorized,
     });
     if (mentionGate.shouldSkip) {

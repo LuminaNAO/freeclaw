@@ -76,3 +76,8 @@ export {
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { buildBaseAccountStatusSnapshot } from "./status-helpers.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
+// Quiet sessions ARCH §3.1.
+export {
+  hasSessionControlCommandWithRuntime,
+  isSlashTextForQuietSessionWithRuntime,
+} from "./quiet-slash-commands.js";

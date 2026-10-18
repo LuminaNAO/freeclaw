@@ -123,3 +123,8 @@ export {
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 export { normalizeStringEntries } from "../shared/string-normalization.js";
+// Quiet sessions ARCH §3.1.
+export {
+  hasSessionControlCommandWithRuntime,
+  isSlashTextForQuietSessionWithRuntime,
+} from "./quiet-slash-commands.js";

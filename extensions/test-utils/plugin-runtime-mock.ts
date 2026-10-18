@@ -225,6 +225,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           vi.fn() as unknown as PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"],
         shouldHandleTextCommands:
           vi.fn() as unknown as PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"],
+        // Quiet sessions ARCH §3.1: no quiet session by default.
+        hasSessionControlCommand: vi.fn(
+          () => false,
+        ) as unknown as PluginRuntime["channel"]["commands"]["hasSessionControlCommand"],
+        isSlashTextForQuietSession: vi.fn(
+          () => false,
+        ) as unknown as PluginRuntime["channel"]["commands"]["isSlashTextForQuietSession"],
       },
       discord: {} as PluginRuntime["channel"]["discord"],
       activity: {} as PluginRuntime["channel"]["activity"],

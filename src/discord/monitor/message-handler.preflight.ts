@@ -13,6 +13,10 @@ import {
   buildMentionRegexes,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
+import {
+  hasSessionControlCommand,
+  isSlashTextForQuietSession,
+} from "../../auto-reply/reply/quiet-session.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop } from "../../channels/logging.js";
@@ -290,12 +294,11 @@ export async function preflightDiscordMessage(
     includeForwarded: true,
   });
 
-  // Intercept text-only slash commands (e.g. user typing "/reset" instead of using Discord's slash command picker)
-  // These should not be forwarded to the agent; proper slash command interactions are handled elsewhere
-  if (!isDirectMessage && baseText && hasControlCommand(baseText, params.cfg)) {
-    logVerbose(`discord: drop text-based slash command ${message.id} (intercepted at gateway)`);
-    return null;
-  }
+  // Text-only slash commands in guilds are intercepted below, once the session is known
+  // (quiet sessions ARCH §3.1: a `slashCommands: false` session keeps them as text).
+  const looksLikeControlCommand = Boolean(
+    !isDirectMessage && baseText && hasControlCommand(baseText, params.cfg),
+  );
 
   recordChannelActivity({
     channel: "discord",
@@ -334,7 +337,7 @@ export async function preflightDiscordMessage(
 
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const memberRoleIds = Array.isArray(params.data.rawMember?.roles)
-    ? params.data.rawMember.roles.map((roleId: string) => String(roleId))
+    ? params.data.rawMember.roles.map((roleId: string) => roleId)
     : [];
   const freshCfg = loadConfig();
   const route = resolveDiscordConversationRoute({
@@ -392,6 +395,21 @@ export async function preflightDiscordMessage(
     matchedBy: "binding.channel",
   });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
+  // Quiet sessions ARCH §3.1: the session this message will run in decides whether `/…` is text.
+  const quietSessionKey = boundSessionKey || effectiveRoute.sessionKey;
+  const slashIsTextHere =
+    looksLikeControlCommand &&
+    isSlashTextForQuietSession({
+      text: baseText,
+      cfg: params.cfg,
+      sessionKey: quietSessionKey,
+    });
+  // Intercept text-only slash commands (e.g. user typing "/reset" instead of using Discord's slash command picker)
+  // These should not be forwarded to the agent; proper slash command interactions are handled elsewhere
+  if (looksLikeControlCommand && !slashIsTextHere) {
+    logVerbose(`discord: drop text-based slash command ${message.id} (intercepted at gateway)`);
+    return null;
+  }
   const isBoundThreadSession = Boolean(boundSessionKey && earlyThreadChannel);
   if (
     isBoundThreadBotSystemMessage({
@@ -413,10 +431,9 @@ export async function preflightDiscordMessage(
       (message.mentionedRoles?.length ?? 0) > 0 ||
       (message.mentionedEveryone && (!author.bot || sender.isPluralKit))),
   );
-  const hasUserOrRoleMention = Boolean(
+  const hasUserOrRoleMention =
     !isDirectMessage &&
-    ((message.mentionedUsers?.length ?? 0) > 0 || (message.mentionedRoles?.length ?? 0) > 0),
-  );
+    ((message.mentionedUsers?.length ?? 0) > 0 || (message.mentionedRoles?.length ?? 0) > 0);
 
   if (
     isGuildMessage &&
@@ -625,7 +642,11 @@ export async function preflightDiscordMessage(
     cfg: params.cfg,
     surface: "discord",
   });
-  const hasControlCommandInMessage = hasControlCommand(baseText, params.cfg);
+  const hasControlCommandInMessage = hasSessionControlCommand({
+    text: baseText,
+    cfg: params.cfg,
+    sessionKey: quietSessionKey,
+  });
   const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig,
     guildInfo,
@@ -670,7 +691,7 @@ export async function preflightDiscordMessage(
   const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
   const mentionGate = resolveMentionGatingWithBypass({
     isGroup: isGuildMessage,
-    requireMention: Boolean(shouldRequireMention),
+    requireMention: shouldRequireMention,
     canDetectMention,
     wasMentioned,
     implicitMention,

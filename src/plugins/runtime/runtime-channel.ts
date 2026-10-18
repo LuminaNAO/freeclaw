@@ -33,6 +33,10 @@ import {
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
+import {
+  hasSessionControlCommand,
+  isSlashTextForQuietSession,
+} from "../../auto-reply/reply/quiet-session.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
@@ -198,6 +202,8 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       isControlCommandMessage,
       shouldComputeCommandAuthorized,
       shouldHandleTextCommands,
+      hasSessionControlCommand,
+      isSlashTextForQuietSession,
     },
     discord: {
       messageActions: discordMessageActions,

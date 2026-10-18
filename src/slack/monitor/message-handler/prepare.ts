@@ -1,5 +1,4 @@
 import { resolveAckReaction } from "../../../agents/identity.js";
-import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../../auto-reply/commands-registry.js";
 import {
   formatInboundEnvelope,
@@ -14,6 +13,7 @@ import {
   buildMentionRegexes,
   matchesMentionWithExplicit,
 } from "../../../auto-reply/reply/mentions.js";
+import { hasSessionControlCommand } from "../../../auto-reply/reply/quiet-session.js";
 import type { FinalizedMsgContext } from "../../../auto-reply/templating.js";
 import {
   shouldAckReaction as shouldAckReactionGate,
@@ -426,7 +426,12 @@ export async function prepareSlackMessage(params: {
   });
   // Strip Slack mentions (<@U123>) before command detection so "@Labrador /new" is recognized
   const textForCommandDetection = stripSlackMentionsForCommandDetection(message.text ?? "");
-  const hasControlCommandInMessage = hasControlCommand(textForCommandDetection, cfg);
+  // Quiet sessions ARCH §3.1: `/…` is ordinary text in a `slashCommands: false` session.
+  const hasControlCommandInMessage = hasSessionControlCommand({
+    text: textForCommandDetection,
+    cfg,
+    sessionKey,
+  });
 
   const ownerAuthorized = resolveSlackAllowListMatch({
     allowList: allowFromLower,
@@ -477,7 +482,7 @@ export async function prepareSlackMessage(params: {
   const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
   const mentionGate = resolveMentionGatingWithBypass({
     isGroup: isRoom,
-    requireMention: Boolean(shouldRequireMention),
+    requireMention: shouldRequireMention,
     canDetectMention,
     wasMentioned,
     implicitMention,
@@ -547,7 +552,7 @@ export async function prepareSlackMessage(params: {
         isDirect: isDirectMessage,
         isGroup: isRoomish,
         isMentionableGroup: isRoom,
-        requireMention: Boolean(shouldRequireMention),
+        requireMention: shouldRequireMention,
         canDetectMention,
         effectiveWasMentioned,
         shouldBypassMention: mentionGate.shouldBypassMention,

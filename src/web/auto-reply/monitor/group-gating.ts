@@ -1,6 +1,9 @@
-import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { parseActivationCommand } from "../../../auto-reply/group-activation.js";
 import { recordPendingHistoryEntryIfEnabled } from "../../../auto-reply/reply/history.js";
+import {
+  hasSessionControlCommand,
+  isSlashTextForQuietSession,
+} from "../../../auto-reply/reply/quiet-session.js";
 import { resolveMentionGating } from "../../../channels/mention-gating.js";
 import type { loadConfig } from "../../../config/config.js";
 import { normalizeE164 } from "../../../utils.js";
@@ -101,9 +104,24 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   );
   const activationCommand = parseActivationCommand(commandBody);
   const owner = isOwnerSender(params.baseMentionConfig, params.msg);
-  const shouldBypassMention = owner && hasControlCommand(commandBody, params.cfg);
+  // Quiet sessions ARCH §3.1: no mention bypass for `/…` text in a `slashCommands: false` session.
+  const shouldBypassMention =
+    owner &&
+    hasSessionControlCommand({
+      text: commandBody,
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    });
 
-  if (activationCommand.hasCommand && !owner) {
+  if (
+    activationCommand.hasCommand &&
+    !owner &&
+    !isSlashTextForQuietSession({
+      text: commandBody,
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    })
+  ) {
     return skipGroupMessageAndStoreHistory(
       params,
       `Ignoring /activation from non-owner in group ${params.conversationId}`,

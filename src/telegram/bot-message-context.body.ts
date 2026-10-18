@@ -4,12 +4,12 @@ import {
   modelSupportsVision,
 } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
 import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
+import { hasSessionControlCommand } from "../auto-reply/reply/quiet-session.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { formatLocationText, type NormalizedLocation } from "../channels/location.js";
@@ -84,6 +84,8 @@ export async function resolveTelegramInboundBody(params: {
   senderUsername: string;
   resolvedThreadId?: number;
   routeAgentId?: string;
+  /** Quiet sessions ARCH §3.1: the session this message runs in. */
+  sessionKey?: string;
   effectiveGroupAllow: NormalizedAllowFrom;
   effectiveDmAllow: NormalizedAllowFrom;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
@@ -105,6 +107,7 @@ export async function resolveTelegramInboundBody(params: {
     senderUsername,
     resolvedThreadId,
     routeAgentId,
+    sessionKey,
     effectiveGroupAllow,
     effectiveDmAllow,
     groupConfig,
@@ -125,8 +128,12 @@ export async function resolveTelegramInboundBody(params: {
     senderUsername,
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, cfg, {
-    botUsername,
+  // Quiet sessions ARCH §3.1: `/…` is ordinary text in a `slashCommands: false` session.
+  const hasControlCommandInMessage = hasSessionControlCommand({
+    text: messageTextParts.text,
+    cfg,
+    sessionKey,
+    commandOptions: { botUsername },
   });
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
