@@ -14,6 +14,8 @@ export type SessionStatus = {
   elevatedLevel?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Quiet sessions ARCH §3.1: last turn error kept out of the chat by `errorReplies: false`. */
+  suppressedError?: { at: number; text: string };
   inputTokens?: number;
   outputTokens?: number;
   totalTokens: number | null;

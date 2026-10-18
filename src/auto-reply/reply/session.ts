@@ -35,6 +35,7 @@ import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenanc
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { pickQuietSessionSettings } from "../../sessions/quiet-settings.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -263,7 +264,8 @@ export async function initSessionState(params: {
     if (!trigger) {
       continue;
     }
-    if (!resetAuthorized) {
+    if (!resetAuthorized || ctx.SlashCommandsDisabled === true) {
+      // Quiet sessions ARCH §3.1: `/new` / `/reset` are plain text when slash commands are off.
       break;
     }
     const triggerLower = trigger.toLowerCase();
@@ -422,6 +424,8 @@ export async function initSessionState(params: {
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     label: persistedLabel ?? baseEntry?.label,
     sendPolicy: baseEntry?.sendPolicy,
+    // Quiet sessions ARCH §3.2: operator settings survive /new, /reset and idle resets.
+    ...pickQuietSessionSettings(entry),
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,
     queueCap: baseEntry?.queueCap,

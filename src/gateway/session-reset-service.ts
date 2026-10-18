@@ -21,6 +21,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { pickQuietSessionSettings } from "../sessions/quiet-settings.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
   archiveSessionTranscripts,
@@ -313,6 +314,7 @@ export async function performGatewaySessionReset(params: {
       modelProvider: resolvedModel.provider,
       contextTokens: resetEntry?.contextTokens,
       sendPolicy: currentEntry?.sendPolicy,
+      ...pickQuietSessionSettings(currentEntry),
       label: currentEntry?.label,
       origin: snapshotSessionOrigin(currentEntry),
       lastChannel: currentEntry?.lastChannel,

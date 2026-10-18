@@ -111,6 +111,8 @@ const BASE_METHODS = [
   "signal.trust.markAgent",
   "signal.trust.unmarkAgent",
   "signal.trust.agents",
+  "sessions.setQuiet",
+  "sessions.quiet.get",
 ];
 
 export function listGatewayMethods(): string[] {

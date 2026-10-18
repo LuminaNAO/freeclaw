@@ -139,6 +139,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "signal.trust.markAgent",
     "signal.trust.unmarkAgent",
     "signal.trust.agents",
+    // Quiet sessions ARCH §3.1: operator-only.
+    "sessions.setQuiet",
+    "sessions.quiet.get",
   ],
 };
 

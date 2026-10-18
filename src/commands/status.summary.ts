@@ -56,6 +56,13 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (entry?.abortedLastRun) {
     flags.push("aborted");
   }
+  // Quiet sessions ARCH §3.1.
+  if (entry?.errorReplies === false) {
+    flags.push("error-replies:off");
+  }
+  if (entry?.slashCommands === false) {
+    flags.push("slash-commands:off");
+  }
   const sessionId = entry?.sessionId as unknown;
   if (typeof sessionId === "string" && sessionId.length > 0) {
     flags.push(`id:${sessionId}`);
@@ -192,6 +199,9 @@ export async function getStatusSummary(
           elevatedLevel: entry?.elevatedLevel,
           systemSent: entry?.systemSent,
           abortedLastRun: entry?.abortedLastRun,
+          ...(entry?.lastSuppressedError
+            ? { suppressedError: { ...entry.lastSuppressedError } }
+            : {}),
           inputTokens: entry?.inputTokens,
           outputTokens: entry?.outputTokens,
           cacheRead: entry?.cacheRead,

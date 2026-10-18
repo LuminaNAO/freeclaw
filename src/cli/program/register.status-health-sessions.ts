@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
+import { sessionsSetCommand, sessionsShowCommand } from "../../commands/sessions-quiet.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
 import { setVerbose } from "../../globals.js";
@@ -154,6 +155,62 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       );
     });
   sessionsCmd.enablePositionalOptions();
+
+  // Quiet sessions ARCH §3.1/§3.3: operator-only per-session settings.
+  sessionsCmd
+    .command("set")
+    .description("Set operator-only quiet settings on a session")
+    .argument("<key>", "Session key")
+    .option("--error-replies", "Post turn errors to the chat (default)")
+    .option("--no-error-replies", "A failed turn posts nothing to the chat (still logged)")
+    .option("--slash-commands", "Parse slash commands (default)")
+    .option("--no-slash-commands", "Treat /... as plain text (operator /session still works)")
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            "openclaw sessions set agent:main:signal:group:abc --no-error-replies --no-slash-commands",
+            "Quiet a shared group session.",
+          ],
+          [
+            "openclaw sessions set agent:main:signal:group:abc --error-replies --slash-commands",
+            "Back to defaults.",
+          ],
+        ])}`,
+    )
+    .action(async (key: string, opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      const source = (name: string) => command.getOptionValueSource(name);
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsSetCommand(
+          {
+            key,
+            errorReplies: source("errorReplies") === "cli" ? Boolean(opts.errorReplies) : undefined,
+            slashCommands:
+              source("slashCommands") === "cli" ? Boolean(opts.slashCommands) : undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
+    .command("show")
+    .description("Show a session, including its quiet settings")
+    .argument("<key>", "Session key")
+    .option("--json", "Output JSON", false)
+    .action(async (key: string, opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsShowCommand(
+          { key, json: Boolean(opts.json || parentOpts?.json) },
+          defaultRuntime,
+        );
+      });
+    });
 
   sessionsCmd
     .command("cleanup")

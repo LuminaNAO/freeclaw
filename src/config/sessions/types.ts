@@ -118,6 +118,18 @@ export type SessionEntry = {
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";
+  /**
+   * Quiet sessions ARCH §3.1 (operator-only). `false`: a failed turn posts nothing to the chat; the
+   * error is still logged and shown by `openclaw status`. Unset: today's behaviour.
+   */
+  errorReplies?: false;
+  /**
+   * Quiet sessions ARCH §3.1 (operator-only). `false`: inbound text starting with `/` is ordinary
+   * text in this session, except an operator's `/session` command. Unset: today's behaviour.
+   */
+  slashCommands?: false;
+  /** Quiet sessions ARCH §3.1: last turn error suppressed by `errorReplies: false`. */
+  lastSuppressedError?: { at: number; text: string };
   queueMode?:
     | "steer"
     | "followup"

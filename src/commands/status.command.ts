@@ -633,6 +633,28 @@ export async function statusCommand(
     }).trimEnd(),
   );
 
+  // Quiet sessions ARCH §3.1: errors kept out of the chat stay visible here.
+  const suppressedErrors = summary.sessions.recent.filter((sess) => sess.suppressedError);
+  if (suppressedErrors.length > 0) {
+    runtime.log("");
+    runtime.log(theme.heading("Suppressed errors (errorReplies off)"));
+    runtime.log(
+      renderTable({
+        width: tableWidth,
+        columns: [
+          { key: "Key", header: "Key", minWidth: 20 },
+          { key: "Age", header: "Age", minWidth: 9 },
+          { key: "Error", header: "Error", flex: true, minWidth: 24 },
+        ],
+        rows: suppressedErrors.map((sess) => ({
+          Key: shortenText(sess.key, 32),
+          Age: formatTimeAgo(Date.now() - (sess.suppressedError?.at ?? Date.now())),
+          Error: shortenText(sess.suppressedError?.text ?? "", 160),
+        })),
+      }).trimEnd(),
+    );
+  }
+
   if (summary.queuedSystemEvents.length > 0) {
     runtime.log("");
     runtime.log(theme.heading("System events"));

@@ -23,6 +23,7 @@ import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
+import { sessionsQuietHandlers } from "./server-methods/sessions-quiet.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
 import { signalLinkHandlers } from "./server-methods/signal-link.js";
 import { signalTrustHandlers } from "./server-methods/signal-trust.js";
@@ -101,6 +102,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...signalLinkHandlers,
   ...focusHandlers,
   ...signalTrustHandlers,
+  ...sessionsQuietHandlers,
 };
 
 export async function handleGatewayRequest(
