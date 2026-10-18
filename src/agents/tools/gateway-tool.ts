@@ -39,7 +39,18 @@ const GATEWAY_ACTIONS = [
   "config.patch",
   "update.run",
   "focus",
+  // Agent peers ARCH §2a: operator-only trust-graph and quiet-session actions.
+  "signal.trust.markAgent",
+  "signal.trust.unmarkAgent",
+  "sessions.setQuiet",
 ] as const;
+
+/** Agent peers ARCH §2a: actions allowed only when the current turn's sender is an operator. */
+const OPERATOR_TURN_ACTIONS = new Set<string>([
+  "signal.trust.markAgent",
+  "signal.trust.unmarkAgent",
+  "sessions.setQuiet",
+]);
 
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
@@ -58,8 +69,14 @@ const GatewayToolSchema = Type.Object({
   // config.apply, config.patch
   raw: Type.Optional(Type.String()),
   baseHash: Type.Optional(Type.String()),
-  // config.apply, config.patch, update.run
+  // config.apply, config.patch, update.run, sessions.setQuiet
   sessionKey: Type.Optional(Type.String()),
+  // signal.trust.markAgent, signal.trust.unmarkAgent
+  uuid: Type.Optional(Type.String()),
+  account: Type.Optional(Type.String()),
+  // sessions.setQuiet: false = quiet (off), true = back to default
+  errorReplies: Type.Optional(Type.Boolean()),
+  slashCommands: Type.Optional(Type.Boolean()),
   note: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Number()),
   // focus (focus mode: set <target> | off | status)
@@ -74,17 +91,53 @@ const GatewayToolSchema = Type.Object({
 export function createGatewayTool(opts?: {
   agentSessionKey?: string;
   config?: OpenClawConfig;
+  /** Whether the current turn's sender is an operator (owner). */
+  senderIsOwner?: boolean;
 }): AnyAgentTool {
   return {
     label: "Gateway",
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Focus mode (action=focus, focusAction=set+target|off|status): only the target session runs while others' messages wait; use it only when an operator asks. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Focus mode (action=focus, focusAction=set+target|off|status): only the target session runs while others' messages wait; use it only when an operator asks. Operator-only: signal.trust.markAgent / signal.trust.unmarkAgent (uuid) mark a trusted Signal identity as another agent; sessions.setQuiet (sessionKey, errorReplies?, slashCommands?; false = quiet, true = default) sets a session's quiet settings. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
+      if (OPERATOR_TURN_ACTIONS.has(action)) {
+        // Agent peers ARCH §2a: refused unless the sender of this turn is an operator.
+        if (opts?.senderIsOwner !== true) {
+          throw new Error(`${action} is restricted to operator senders.`);
+        }
+        const gatewayOpts = readGatewayCallOptions(params);
+        if (action === "sessions.setQuiet") {
+          const sessionKey =
+            readStringParam(params, "sessionKey") ?? opts?.agentSessionKey?.trim() ?? "";
+          if (!sessionKey) {
+            throw new Error("sessionKey required");
+          }
+          const errorReplies =
+            typeof params.errorReplies === "boolean" ? params.errorReplies : undefined;
+          const slashCommands =
+            typeof params.slashCommands === "boolean" ? params.slashCommands : undefined;
+          if (errorReplies === undefined && slashCommands === undefined) {
+            throw new Error("errorReplies and/or slashCommands required");
+          }
+          const result = await callGatewayTool("sessions.setQuiet", gatewayOpts, {
+            sessionKey,
+            ...(errorReplies !== undefined ? { errorReplies } : {}),
+            ...(slashCommands !== undefined ? { slashCommands } : {}),
+          });
+          return jsonResult({ ok: true, result });
+        }
+        const uuid = readStringParam(params, "uuid", { required: true });
+        const account = readStringParam(params, "account");
+        const result = await callGatewayTool(action, gatewayOpts, {
+          uuid,
+          ...(account ? { account } : {}),
+        });
+        return jsonResult({ ok: true, result });
+      }
       if (action === "restart") {
         if (!isRestartEnabled(opts?.config)) {
           throw new Error("Gateway restart is disabled (commands.restart=false).");
