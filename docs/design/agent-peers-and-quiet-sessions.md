@@ -19,6 +19,14 @@ settings**. With nothing set, behaviour is exactly as today.
 3. No identity marked → no change anywhere (the check is a no-op).
 4. `openclaw signal trust status` lists marked agents.
 
+## 2a. Agentic (operator, 2026-10-18 10:38)
+
+Everything in §2 and §3 is also an agent tool action, so an operator can just ask the agent ("mark X as an agent"):
+the agent `gateway` tool gains `signal.trust.markAgent`, `signal.trust.unmarkAgent` (uuid) and `sessions.setQuiet`
+(sessionKey, errorReplies?, slashCommands?), calling the same gateway methods as the CLI. Allowed only when the
+current turn's sender is an operator (senderIsOwner); otherwise refused. Tests: operator turn can do each; non-operator
+refused; CLI unchanged.
+
 ## 3. Quiet session settings
 
 1. Two optional per-session settings, set only by an operator (CLI `openclaw sessions set <key> --no-error-replies
