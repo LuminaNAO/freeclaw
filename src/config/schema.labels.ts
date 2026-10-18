@@ -493,6 +493,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.heartbeat.directPolicy": "Heartbeat Direct Policy",
   "agents.list.*.heartbeat.directPolicy": "Heartbeat Direct Policy",
   "agents.defaults.heartbeat.suppressToolErrorWarnings": "Heartbeat Suppress Tool Error Warnings",
+  "agents.defaults.heartbeat.compactAt": "Heartbeat Compaction Threshold",
+  "agents.defaults.heartbeat.compactInstructions": "Heartbeat Compaction Instructions",
   "agents.defaults.sandbox.browser.network": "Sandbox Browser Network",
   "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
@@ -842,6 +844,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].identity.avatar": "Agent Avatar",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Agent Heartbeat Suppress Tool Error Warnings",
+  "agents.list[].heartbeat.compactAt": "Agent Heartbeat Compaction Threshold",
+  "agents.list[].heartbeat.compactInstructions": "Agent Heartbeat Compaction Instructions",
   "agents.list[].sandbox.browser.network": "Agent Sandbox Browser Network",
   "agents.list[].sandbox.browser.cdpSourceRange": "Agent Sandbox Browser CDP Source Port Range",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":

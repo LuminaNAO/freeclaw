@@ -232,6 +232,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
+  "agents.defaults.heartbeat.compactAt":
+    'Compact the heartbeat session before a heartbeat turn once its context passes this many tokens. Default: min(100000, half the model context window); explicit values are clamped to min(150000, half the window). Set "off" to disable.',
+  "agents.list[].heartbeat.compactAt":
+    'Compact the heartbeat session before a heartbeat turn once its context passes this many tokens. Default: min(100000, half the model context window); explicit values are clamped to min(150000, half the window). Set "off" to disable.',
+  "agents.defaults.heartbeat.compactInstructions":
+    "Optional custom instructions passed to the compaction that runs before a heartbeat turn.",
+  "agents.list[].heartbeat.compactInstructions":
+    "Optional custom instructions passed to the compaction that runs before a heartbeat turn.",
   browser:
     "Browser runtime controls for local or remote CDP attachment, profile routing, and screenshot/snapshot behavior. Keep defaults unless your automation workflow requires custom browser transport settings.",
   "browser.enabled":
