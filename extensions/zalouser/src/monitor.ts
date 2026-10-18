@@ -8,6 +8,7 @@ import {
   recordPendingHistoryEntryIfEnabled,
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/compat";
+import { hasSessionControlCommandWithRuntime } from "openclaw/plugin-sdk/zalouser";
 import type {
   MarkdownTableMode,
   OpenClawConfig,
@@ -431,16 +432,6 @@ async function processMessage(
     resolveCommandAuthorizedFromAuthorizers: (params) =>
       core.channel.commands.resolveCommandAuthorizedFromAuthorizers(params),
   });
-  const hasControlCommand = core.channel.commands.isControlCommandMessage(commandBody, config);
-  if (isGroup && hasControlCommand && commandAuthorized !== true) {
-    logVerbose(
-      core,
-      runtime,
-      `zalouser: drop control command from unauthorized sender ${senderId}`,
-    );
-    return;
-  }
-
   const peer = isGroup
     ? { kind: "group" as const, id: chatId }
     : { kind: "direct" as const, id: senderId };
@@ -455,6 +446,23 @@ async function processMessage(
       id: peer.id,
     },
   });
+  // Quiet sessions ARCH §3.1: `/…` is ordinary text in a `slashCommands: false` (group) session.
+  const hasControlCommand = hasSessionControlCommandWithRuntime({
+    runtime: core,
+    text: commandBody,
+    cfg: config,
+    sessionKey: isGroup ? route.sessionKey : undefined,
+    detect: core.channel.commands.isControlCommandMessage,
+  });
+  if (isGroup && hasControlCommand && commandAuthorized !== true) {
+    logVerbose(
+      core,
+      runtime,
+      `zalouser: drop control command from unauthorized sender ${senderId}`,
+    );
+    return;
+  }
+
   const historyKey = isGroup ? route.sessionKey : undefined;
 
   const requireMention = isGroup

@@ -178,25 +178,6 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const access = await applyGoogleChatInboundAccessPolicy({
-    account,
-    config,
-    core,
-    space,
-    message,
-    isGroup,
-    senderId,
-    senderName,
-    senderEmail,
-    rawBody,
-    statusSink,
-    logVerbose: (message) => logVerbose(core, runtime, message),
-  });
-  if (!access.ok) {
-    return;
-  }
-  const { commandAuthorized, effectiveWasMentioned, groupSystemPrompt } = access;
-
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config,
     channel: "googlechat",
@@ -208,6 +189,26 @@ async function processMessageWithPipeline(params: {
     runtime: core.channel,
     sessionStore: config.session?.store,
   });
+
+  const access = await applyGoogleChatInboundAccessPolicy({
+    account,
+    config,
+    core,
+    space,
+    message,
+    isGroup,
+    senderId,
+    senderName,
+    senderEmail,
+    rawBody,
+    sessionKey: route.sessionKey,
+    statusSink,
+    logVerbose: (message) => logVerbose(core, runtime, message),
+  });
+  if (!access.ok) {
+    return;
+  }
+  const { commandAuthorized, effectiveWasMentioned, groupSystemPrompt } = access;
 
   let mediaPath: string | undefined;
   let mediaType: string | undefined;

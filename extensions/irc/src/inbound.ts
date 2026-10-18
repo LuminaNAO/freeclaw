@@ -1,3 +1,4 @@
+import { hasSessionControlCommandWithRuntime } from "openclaw/plugin-sdk/irc";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createScopedPairingAccess,
@@ -170,7 +171,24 @@ export async function handleIrcInbound(params: {
     message,
     allowNameMatching,
   }).allowed;
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
+  const peerId = message.isGroup ? message.target : message.senderNick;
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg: config as OpenClawConfig,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+    peer: {
+      kind: message.isGroup ? "group" : "direct",
+      id: peerId,
+    },
+  });
+  // Quiet sessions ARCH §3.1: `/…` is ordinary text in a `slashCommands: false` session.
+  const hasControlCommand = hasSessionControlCommandWithRuntime({
+    runtime: core,
+    text: rawBody,
+    cfg: config as OpenClawConfig,
+    sessionKey: route.sessionKey,
+    detect: core.channel.text.hasControlCommand,
+  });
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
@@ -273,17 +291,6 @@ export async function handleIrcInbound(params: {
     runtime.log?.(`irc: drop channel ${message.target} (${mentionGate.reason})`);
     return;
   }
-
-  const peerId = message.isGroup ? message.target : message.senderNick;
-  const route = core.channel.routing.resolveAgentRoute({
-    cfg: config as OpenClawConfig,
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-    peer: {
-      kind: message.isGroup ? "group" : "direct",
-      id: peerId,
-    },
-  });
 
   const fromLabel = message.isGroup ? message.target : senderDisplay;
   const storePath = core.channel.session.resolveStorePath(config.session?.store, {

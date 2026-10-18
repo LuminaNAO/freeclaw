@@ -1,4 +1,8 @@
 import {
+  hasSessionControlCommandWithRuntime,
+  isSlashTextForQuietSessionWithRuntime,
+} from "openclaw/plugin-sdk/googlechat";
+import {
   GROUP_POLICY_BLOCKED_LABEL,
   createScopedPairingAccess,
   evaluateGroupRouteAccessForPolicy,
@@ -139,6 +143,8 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   senderName: string;
   senderEmail?: string;
   rawBody: string;
+  /** Quiet sessions ARCH §3.1: the session this message runs in. */
+  sessionKey?: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   logVerbose: (message: string) => void;
 }): Promise<
@@ -286,7 +292,14 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       implicitMention: false,
       hasAnyMention: mentionInfo.hasAnyMention,
       allowTextCommands,
-      hasControlCommand: core.channel.text.hasControlCommand(rawBody, config),
+      // Quiet sessions ARCH §3.1: no mention bypass in a `slashCommands: false` session.
+      hasControlCommand: hasSessionControlCommandWithRuntime({
+        runtime: core,
+        text: rawBody,
+        cfg: config,
+        sessionKey: params.sessionKey,
+        detect: core.channel.text.hasControlCommand,
+      }),
       commandAuthorized: commandAuthorized === true,
     });
     effectiveWasMentioned = mentionGate.effectiveWasMentioned;
@@ -342,6 +355,12 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   if (
     isGroup &&
     core.channel.commands.isControlCommandMessage(rawBody, config) &&
+    !isSlashTextForQuietSessionWithRuntime({
+      runtime: core,
+      text: rawBody,
+      cfg: config,
+      sessionKey: params.sessionKey,
+    }) &&
     commandAuthorized !== true
   ) {
     logVerbose(`googlechat: drop control command from ${senderId}`);

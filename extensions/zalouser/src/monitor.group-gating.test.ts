@@ -660,3 +660,42 @@ describe("zalouser monitor group mention gating", () => {
     expect(secondDispatch?.ctx?.InboundHistory).toEqual([]);
   });
 });
+
+describe("zalouser quiet sessions (ARCH §3.1)", () => {
+  async function runUnauthorizedGroupCommand(quiet: boolean) {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      commandAuthorized: false,
+    });
+    const runtime = (await import("./runtime.js")).getZalouserRuntime() as unknown as {
+      channel: { commands: Record<string, unknown> };
+    };
+    runtime.channel.commands.isSlashTextForQuietSession = vi.fn(
+      (params: { sessionKey?: string; text?: string | null }) =>
+        quiet &&
+        params.sessionKey === "agent:main:zalouser:group:g-1" &&
+        !String(params.text).startsWith("/session"),
+    );
+    await __testing.processMessage({
+      message: createGroupMessage({
+        content: "/status",
+        commandContent: "/status",
+        hasAnyMention: true,
+        wasExplicitlyMentioned: true,
+      }),
+      account: createAccount(),
+      config: createConfig(),
+      runtime: createRuntimeEnv(),
+    });
+    return dispatchReplyWithBufferedBlockDispatcher;
+  }
+
+  it("unset: an unauthorized group /status is dropped as today", async () => {
+    expect(await runUnauthorizedGroupCommand(false)).not.toHaveBeenCalled();
+  });
+
+  it("slashCommands: false: /status is ordinary text and is dispatched", async () => {
+    const dispatch = await runUnauthorizedGroupCommand(true);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0]?.[0]?.ctx?.CommandBody).toBe("/status");
+  });
+});

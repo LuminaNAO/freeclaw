@@ -5,10 +5,14 @@ import { setMSTeamsRuntime } from "../runtime.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 
 describe("msteams monitor handler authz", () => {
-  function createDeps(cfg: OpenClawConfig) {
+  function createDeps(
+    cfg: OpenClawConfig,
+    quiet?: { hasControlCommand: boolean; isSlashTextForQuietSession: (p: unknown) => boolean },
+  ) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
     setMSTeamsRuntime({
       logging: { shouldLogVerbose: () => false },
+      system: { enqueueSystemEvent: vi.fn() },
       channel: {
         debounce: {
           resolveInboundDebounceMs: () => 0,
@@ -25,7 +29,18 @@ describe("msteams monitor handler authz", () => {
           upsertPairingRequest: vi.fn(async () => null),
         },
         text: {
-          hasControlCommand: () => false,
+          hasControlCommand: () => quiet?.hasControlCommand ?? false,
+        },
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "main",
+            accountId: "default",
+            sessionKey: "agent:main:msteams:group:19:quiet@thread.tacv2",
+            mainSessionKey: "agent:main:main",
+          }),
+        },
+        commands: {
+          isSlashTextForQuietSession: quiet?.isSlashTextForQuietSession ?? (() => false),
         },
       },
     } as unknown as PluginRuntime);
@@ -198,5 +213,55 @@ describe("msteams monitor handler authz", () => {
     } as unknown as Parameters<typeof handler>[0]);
 
     expect(conversationStore.upsert).not.toHaveBeenCalled();
+  });
+
+  describe("quiet sessions (ARCH §3.1)", () => {
+    async function runGroupCommand(quiet: boolean) {
+      const isSlashTextForQuietSession = vi.fn(() => quiet);
+      const { conversationStore, deps } = createDeps(
+        {
+          channels: {
+            msteams: {
+              dmPolicy: "pairing",
+              allowFrom: ["owner-aad"],
+              groupPolicy: "open",
+              groupAllowFrom: ["owner-aad"],
+            },
+          },
+        } as OpenClawConfig,
+        { hasControlCommand: true, isSlashTextForQuietSession },
+      );
+      const handler = createMSTeamsMessageHandler(deps);
+      await handler({
+        activity: {
+          id: "msg-quiet-1",
+          type: "message",
+          text: "/status",
+          from: { id: "member-id", aadObjectId: "member-aad", name: "Member" },
+          recipient: { id: "bot-id", name: "Bot" },
+          conversation: { id: "19:quiet@thread.tacv2", conversationType: "groupChat" },
+          channelData: {},
+          attachments: [],
+        },
+        sendActivity: vi.fn(async () => undefined),
+      } as unknown as Parameters<typeof handler>[0]);
+      return { conversationStore, isSlashTextForQuietSession };
+    }
+
+    it("unset: an unauthorized group /status is dropped as a control command", async () => {
+      const { conversationStore } = await runGroupCommand(false);
+      expect(conversationStore.upsert).not.toHaveBeenCalled();
+    });
+
+    it("slashCommands: false: /status is ordinary text and passes the command gate", async () => {
+      const { conversationStore, isSlashTextForQuietSession } = await runGroupCommand(true);
+      expect(isSlashTextForQuietSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "/status",
+          sessionKey: "agent:main:msteams:group:19:quiet@thread.tacv2",
+        }),
+      );
+      expect(conversationStore.upsert).toHaveBeenCalled();
+    });
   });
 });

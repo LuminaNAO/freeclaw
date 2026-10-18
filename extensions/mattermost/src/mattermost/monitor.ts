@@ -1,7 +1,9 @@
+import { hasSessionControlCommandWithRuntime } from "openclaw/plugin-sdk/mattermost";
 import type {
   ChannelAccountSnapshot,
   ChatType,
   OpenClawConfig,
+  PluginRuntime,
   ReplyPayload,
   RuntimeEnv,
 } from "openclaw/plugin-sdk/mattermost";
@@ -294,6 +296,26 @@ export function resolveMattermostEffectiveReplyToId(params: {
     return undefined;
   }
   return params.replyToMode === "all" || params.replyToMode === "first" ? postId : undefined;
+}
+
+/**
+ * Quiet sessions ARCH §3.1: whether an inbound post counts as a control command at ingress (for
+ * the unauthorized-command drop and the mention bypass). In a `slashCommands: false` session
+ * `/…` is ordinary text; `/session` stays a command so an operator can undo the setting.
+ */
+export function resolveMattermostInboundControlCommand(params: {
+  core: Pick<PluginRuntime, "channel">;
+  cfg: OpenClawConfig;
+  rawText: string;
+  sessionKey: string;
+}): boolean {
+  return hasSessionControlCommandWithRuntime({
+    runtime: params.core,
+    text: params.rawText,
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    detect: params.core.channel.text.hasControlCommand,
+  });
 }
 
 export function resolveMattermostThreadSessionContext(params: {
@@ -1335,7 +1357,41 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       cfg,
       surface: "mattermost",
     });
-    const hasControlCommand = core.channel.text.hasControlCommand(rawText, cfg);
+    const teamId = payload.data?.team_id ?? channelInfo?.team_id ?? undefined;
+    const channelName = payload.data?.channel_name ?? channelInfo?.name ?? "";
+    const channelDisplay =
+      payload.data?.channel_display_name ?? channelInfo?.display_name ?? channelName;
+    const roomLabel = channelName ? `#${channelName}` : channelDisplay || `#${channelId}`;
+
+    const route = core.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "mattermost",
+      accountId: account.accountId,
+      teamId,
+      peer: {
+        kind,
+        id: kind === "direct" ? senderId : channelId,
+      },
+    });
+
+    const baseSessionKey = route.sessionKey;
+    const threadRootId = post.root_id?.trim() || undefined;
+    const replyToMode = resolveMattermostReplyToMode(account, kind);
+    const threadContext = resolveMattermostThreadSessionContext({
+      baseSessionKey,
+      kind,
+      postId: post.id,
+      replyToMode,
+      threadRootId,
+    });
+    const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
+    const historyKey = kind === "direct" ? null : sessionKey;
+    const hasControlCommand = resolveMattermostInboundControlCommand({
+      core,
+      cfg,
+      rawText,
+      sessionKey,
+    });
     const isControlCommand = allowTextCommands && hasControlCommand;
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
     const commandDmAllowFrom = kind === "direct" ? effectiveAllowFrom : normalizedAllowFrom;
@@ -1425,36 +1481,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       });
       return;
     }
-
-    const teamId = payload.data?.team_id ?? channelInfo?.team_id ?? undefined;
-    const channelName = payload.data?.channel_name ?? channelInfo?.name ?? "";
-    const channelDisplay =
-      payload.data?.channel_display_name ?? channelInfo?.display_name ?? channelName;
-    const roomLabel = channelName ? `#${channelName}` : channelDisplay || `#${channelId}`;
-
-    const route = core.channel.routing.resolveAgentRoute({
-      cfg,
-      channel: "mattermost",
-      accountId: account.accountId,
-      teamId,
-      peer: {
-        kind,
-        id: kind === "direct" ? senderId : channelId,
-      },
-    });
-
-    const baseSessionKey = route.sessionKey;
-    const threadRootId = post.root_id?.trim() || undefined;
-    const replyToMode = resolveMattermostReplyToMode(account, kind);
-    const threadContext = resolveMattermostThreadSessionContext({
-      baseSessionKey,
-      kind,
-      postId: post.id,
-      replyToMode,
-      threadRootId,
-    });
-    const { effectiveReplyToId, sessionKey, parentSessionKey } = threadContext;
-    const historyKey = kind === "direct" ? null : sessionKey;
 
     const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
     const wasMentioned =

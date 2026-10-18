@@ -1609,6 +1609,54 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
 
+    it("quiet session (slashCommands: false): an unauthorized group /status is text and is dispatched (ARCH §3.1)", async () => {
+      mockHasControlCommand.mockReturnValue(true);
+      mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(false);
+
+      const account = createMockAccount({
+        groupPolicy: "open",
+        allowFrom: [],
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      const isSlashTextForQuietSession = vi.fn(() => true);
+      core.channel.commands.isSlashTextForQuietSession =
+        isSlashTextForQuietSession as unknown as PluginRuntime["channel"]["commands"]["isSlashTextForQuietSession"];
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "/status",
+          handle: { address: "+15559999999" },
+          isGroup: true,
+          isFromMe: false,
+          guid: "msg-quiet-1",
+          chatGuid: "iMessage;+;chat123456",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(isSlashTextForQuietSession).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "/status", sessionKey: expect.any(String) }),
+      );
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    });
+
     it("does not auto-authorize DM control commands in open mode without allowlists", async () => {
       mockHasControlCommand.mockReturnValue(true);
 

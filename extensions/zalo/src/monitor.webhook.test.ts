@@ -474,3 +474,87 @@ describe("handleZaloWebhookRequest", () => {
     );
   });
 });
+
+describe("zalo ingress quiet sessions (ARCH §3.1)", () => {
+  async function postGroupCommand(quiet: boolean) {
+    const formatAgentEnvelope = vi.fn(({ body }: { body: string }) => body);
+    const isSlashTextForQuietSession = vi.fn(() => quiet);
+    const core = {
+      logging: { shouldLogVerbose: () => false },
+      channel: {
+        pairing: {
+          readAllowFromStore: vi.fn().mockResolvedValue([]),
+          upsertPairingRequest: vi.fn(),
+          buildPairingReply: vi.fn(() => ""),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => true),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+          isControlCommandMessage: vi.fn((text: string) => text.trim().startsWith("/")),
+          isSlashTextForQuietSession,
+        },
+        routing: {
+          resolveAgentRoute: vi.fn(() => ({
+            agentId: "main",
+            accountId: "default",
+            sessionKey: "agent:main:zalo:group:g-quiet",
+            mainSessionKey: "agent:main:main",
+          })),
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/zalo-quiet-sessions.json"),
+          readSessionUpdatedAt: vi.fn(() => undefined),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({})),
+          // Marks "passed the command gate"; later stages are not stubbed.
+          formatAgentEnvelope,
+        },
+      },
+    } as unknown as PluginRuntime;
+    const unregister = registerTarget({
+      path: `/hook-quiet-${quiet ? "on" : "off"}`,
+      core,
+      account: {
+        ...DEFAULT_ACCOUNT,
+        config: { groupPolicy: "open", allowFrom: ["owner"], groupAllowFrom: ["*"] },
+      },
+      config: { channels: { zalo: {} } } as OpenClawConfig,
+    });
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        await fetch(`${baseUrl}/hook-quiet-${quiet ? "on" : "off"}`, {
+          method: "POST",
+          headers: { "x-bot-api-secret-token": "secret", "content-type": "application/json" },
+          body: JSON.stringify({
+            event_name: "message.text.received",
+            message: {
+              from: { id: "member", name: "Member" },
+              chat: { id: "g-quiet", chat_type: "GROUP" },
+              message_id: `msg-quiet-${quiet ? "on" : "off"}`,
+              date: Math.floor(Date.now() / 1000),
+              text: "/status",
+            },
+          }),
+        });
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } finally {
+      unregister();
+    }
+    return { formatAgentEnvelope, isSlashTextForQuietSession };
+  }
+
+  it("unset: an unauthorized group /status is dropped as a control command", async () => {
+    const { formatAgentEnvelope } = await postGroupCommand(false);
+    expect(formatAgentEnvelope).not.toHaveBeenCalled();
+  });
+
+  it("slashCommands: false: /status is ordinary text and passes the command gate", async () => {
+    const { formatAgentEnvelope, isSlashTextForQuietSession } = await postGroupCommand(true);
+    expect(isSlashTextForQuietSession).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "/status", sessionKey: "agent:main:zalo:group:g-quiet" }),
+    );
+    expect(formatAgentEnvelope).toHaveBeenCalled();
+  });
+});

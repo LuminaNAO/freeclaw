@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isSlashTextForQuietSessionWithRuntime } from "openclaw/plugin-sdk/zalo";
 import type {
   MarkdownTableMode,
   OpenClawConfig,
@@ -459,6 +460,13 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   if (
     isGroup &&
     core.channel.commands.isControlCommandMessage(rawBody, config) &&
+    // Quiet sessions ARCH §3.1: `/…` is ordinary text in a `slashCommands: false` session.
+    !isSlashTextForQuietSessionWithRuntime({
+      runtime: core,
+      text: rawBody,
+      cfg: config,
+      sessionKey: route.sessionKey,
+    }) &&
     commandAuthorized !== true
   ) {
     logVerbose(core, runtime, `zalo: drop control command from unauthorized sender ${senderId}`);

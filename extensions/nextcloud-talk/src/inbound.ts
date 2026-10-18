@@ -1,3 +1,4 @@
+import { hasSessionControlCommandWithRuntime } from "openclaw/plugin-sdk/nextcloud-talk";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createScopedPairingAccess,
@@ -134,7 +135,26 @@ export async function handleNextcloudTalkInbound(params: {
   });
   const useAccessGroups =
     (config.commands as Record<string, unknown> | undefined)?.useAccessGroups !== false;
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
+  // Quiet sessions ARCH §3.1: `/…` is ordinary text in a `slashCommands: false` session.
+  // The session is only resolved when the text looks like a command.
+  const looksLikeCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
+  const hasControlCommand =
+    looksLikeCommand &&
+    hasSessionControlCommandWithRuntime({
+      runtime: core,
+      text: rawBody,
+      cfg: config as OpenClawConfig,
+      sessionKey: core.channel.routing?.resolveAgentRoute({
+        cfg: config as OpenClawConfig,
+        channel: CHANNEL_ID,
+        accountId: account.accountId,
+        peer: {
+          kind: isGroup ? "group" : "direct",
+          id: isGroup ? roomToken : senderId,
+        },
+      }).sessionKey,
+      detect: () => true,
+    });
   const access = resolveDmGroupAccessWithCommandGate({
     isGroup,
     dmPolicy,

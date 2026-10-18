@@ -1,3 +1,4 @@
+import { hasSessionControlCommandWithRuntime } from "openclaw/plugin-sdk/msteams";
 import {
   DEFAULT_ACCOUNT_ID,
   buildPendingHistoryContextFromMap,
@@ -310,13 +311,28 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       senderName,
       allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
+    const route = core.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "msteams",
+      peer: {
+        kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
+        id: isDirectMessage ? senderId : conversationId,
+      },
+    });
     const { commandAuthorized, shouldBlock } = resolveDualTextControlCommandGate({
       useAccessGroups,
       primaryConfigured: commandDmAllowFrom.length > 0,
       primaryAllowed: ownerAllowedForCommands,
       secondaryConfigured: effectiveGroupAllowFrom.length > 0,
       secondaryAllowed: groupAllowedForCommands,
-      hasControlCommand: core.channel.text.hasControlCommand(text, cfg),
+      // Quiet sessions ARCH §3.1: `/…` is ordinary text in a `slashCommands: false` session.
+      hasControlCommand: hasSessionControlCommandWithRuntime({
+        runtime: core,
+        text,
+        cfg,
+        sessionKey: route.sessionKey,
+        detect: core.channel.text.hasControlCommand,
+      }),
     });
     if (shouldBlock) {
       logInboundDrop({
@@ -390,15 +406,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         ? `msteams:channel:${conversationId}`
         : `msteams:group:${conversationId}`;
     const teamsTo = isDirectMessage ? `user:${senderId}` : `conversation:${conversationId}`;
-
-    const route = core.channel.routing.resolveAgentRoute({
-      cfg,
-      channel: "msteams",
-      peer: {
-        kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
-        id: isDirectMessage ? senderId : conversationId,
-      },
-    });
 
     const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isDirectMessage

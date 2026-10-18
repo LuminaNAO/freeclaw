@@ -1,4 +1,5 @@
 import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
+import { hasSessionControlCommandWithRuntime } from "openclaw/plugin-sdk/matrix";
 import {
   DEFAULT_ACCOUNT_ID,
   createScopedPairingAccess,
@@ -438,7 +439,51 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               userId: senderId,
             })
           : false;
-      const hasControlCommandInMessage = core.channel.text.hasControlCommand(bodyText, cfg);
+      const messageId = event.event_id ?? "";
+      const replyToEventId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
+      const threadRootId = resolveMatrixThreadRootId({ event, content });
+      const threadTarget = resolveMatrixThreadTarget({
+        threadReplies,
+        messageId,
+        threadRootId,
+        isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
+      });
+
+      const baseRoute = core.channel.routing.resolveAgentRoute({
+        cfg,
+        channel: "matrix",
+        accountId,
+        peer: {
+          kind: isDirectMessage ? "direct" : "channel",
+          id: isDirectMessage ? senderId : roomId,
+        },
+        // For DMs, pass roomId as parentPeer so the conversation is bindable by room ID
+        // while preserving DM trust semantics (secure 1:1, no group restrictions).
+        parentPeer: isDirectMessage ? { kind: "channel", id: roomId } : undefined,
+      });
+      const baseRouteSession = resolveMatrixBaseRouteSession({
+        buildAgentSessionKey: core.channel.routing.buildAgentSessionKey,
+        baseRoute,
+        isDirectMessage,
+        roomId,
+        accountId,
+      });
+
+      const route = {
+        ...baseRoute,
+        lastRoutePolicy: baseRouteSession.lastRoutePolicy,
+        sessionKey: threadRootId
+          ? `${baseRouteSession.sessionKey}:thread:${threadRootId}`
+          : baseRouteSession.sessionKey,
+      };
+      // Quiet sessions ARCH §3.1: `/…` is ordinary text in a `slashCommands: false` session.
+      const hasControlCommandInMessage = hasSessionControlCommandWithRuntime({
+        runtime: core,
+        text: bodyText,
+        cfg,
+        sessionKey: route.sessionKey,
+        detect: core.channel.text.hasControlCommand,
+      });
       const commandGate = resolveControlCommandGate({
         useAccessGroups,
         authorizers: [
@@ -481,44 +526,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         logger.info("skipping room message", { roomId, reason: "no-mention" });
         return;
       }
-
-      const messageId = event.event_id ?? "";
-      const replyToEventId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
-      const threadRootId = resolveMatrixThreadRootId({ event, content });
-      const threadTarget = resolveMatrixThreadTarget({
-        threadReplies,
-        messageId,
-        threadRootId,
-        isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
-      });
-
-      const baseRoute = core.channel.routing.resolveAgentRoute({
-        cfg,
-        channel: "matrix",
-        accountId,
-        peer: {
-          kind: isDirectMessage ? "direct" : "channel",
-          id: isDirectMessage ? senderId : roomId,
-        },
-        // For DMs, pass roomId as parentPeer so the conversation is bindable by room ID
-        // while preserving DM trust semantics (secure 1:1, no group restrictions).
-        parentPeer: isDirectMessage ? { kind: "channel", id: roomId } : undefined,
-      });
-      const baseRouteSession = resolveMatrixBaseRouteSession({
-        buildAgentSessionKey: core.channel.routing.buildAgentSessionKey,
-        baseRoute,
-        isDirectMessage,
-        roomId,
-        accountId,
-      });
-
-      const route = {
-        ...baseRoute,
-        lastRoutePolicy: baseRouteSession.lastRoutePolicy,
-        sessionKey: threadRootId
-          ? `${baseRouteSession.sessionKey}:thread:${threadRootId}`
-          : baseRouteSession.sessionKey,
-      };
 
       let threadStarterBody: string | undefined;
       let threadLabel: string | undefined;

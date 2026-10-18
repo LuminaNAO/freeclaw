@@ -1,3 +1,4 @@
+import { hasSessionControlCommandWithRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import {
   DM_GROUP_ACCESS_REASON,
@@ -726,7 +727,14 @@ export async function processMessage(
 
   // Command gating (parity with iMessage/WhatsApp)
   const useAccessGroups = config.commands?.useAccessGroups !== false;
-  const hasControlCmd = core.channel.text.hasControlCommand(messageText, config);
+  // Quiet sessions ARCH §3.1: `/…` is ordinary text in a `slashCommands: false` session.
+  const hasControlCmd = hasSessionControlCommandWithRuntime({
+    runtime: core,
+    text: messageText,
+    cfg: config,
+    sessionKey: route.sessionKey,
+    detect: core.channel.text.hasControlCommand,
+  });
   const commandDmAllowFrom = isGroup ? configuredAllowFrom : effectiveAllowFrom;
   const ownerAllowedForCommands =
     commandDmAllowFrom.length > 0

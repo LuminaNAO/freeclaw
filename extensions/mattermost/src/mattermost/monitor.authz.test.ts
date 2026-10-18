@@ -1,10 +1,11 @@
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/mattermost";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   authorizeMattermostCommandInvocation,
   resolveMattermostEffectiveAllowFromLists,
 } from "./monitor-auth.js";
+import { resolveMattermostInboundControlCommand } from "./monitor.js";
 
 const accountFixture: ResolvedMattermostAccount = {
   accountId: "default",
@@ -118,5 +119,52 @@ describe("mattermost monitor authz", () => {
       commandAuthorized: true,
       kind: "channel",
     });
+  });
+});
+
+describe("mattermost ingress quiet sessions (ARCH §3.1)", () => {
+  function classify(quiet: boolean, rawText = "/status") {
+    const isSlashTextForQuietSession = vi.fn(() => quiet);
+    const result = resolveMattermostInboundControlCommand({
+      core: {
+        channel: {
+          text: { hasControlCommand: (text: string) => text.trim().startsWith("/") },
+          commands: { isSlashTextForQuietSession },
+        },
+      } as never,
+      cfg: {},
+      rawText,
+      sessionKey: "agent:main:mattermost:channel:chan-q",
+    });
+    return { result, isSlashTextForQuietSession };
+  }
+
+  it("unset: /status is a control command at ingress (gate drops it if unauthorized)", () => {
+    expect(classify(false).result).toBe(true);
+    const gate = resolveControlCommandGate({
+      useAccessGroups: true,
+      authorizers: [{ configured: true, allowed: false }],
+      allowTextCommands: true,
+      hasControlCommand: classify(false).result,
+    });
+    expect(gate.shouldBlock).toBe(true);
+  });
+
+  it("slashCommands: false: /status is ordinary text, so the gate neither drops nor bypasses", () => {
+    const { result, isSlashTextForQuietSession } = classify(true);
+    expect(result).toBe(false);
+    expect(isSlashTextForQuietSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "/status",
+        sessionKey: "agent:main:mattermost:channel:chan-q",
+      }),
+    );
+    const gate = resolveControlCommandGate({
+      useAccessGroups: true,
+      authorizers: [{ configured: true, allowed: false }],
+      allowTextCommands: true,
+      hasControlCommand: result,
+    });
+    expect(gate.shouldBlock).toBe(false);
   });
 });
