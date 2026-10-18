@@ -76,6 +76,29 @@ title: "Thinking Levels"
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 
+### Default reasoning visibility
+
+When neither a `/reasoning` directive nor the session sets a level, OpenClaw resolves it in this order:
+
+1. Per-agent `agents.list[].reasoningDefault` (`on|off|stream`).
+2. Global `agents.defaults.reasoningDefault` (`on|off|stream`).
+3. Messaging channels (Signal, WhatsApp, Telegram, Discord, Slack, Teams, iMessage, and every other channel
+   plugin): `off`. Reasoning display is never turned on automatically for a chat; only `/reasoning on` or a
+   configured default does that.
+4. Non-channel surfaces (CLI, TUI/webchat, gateway `agent` method): `on` when the model catalog marks the model as
+   reasoning-capable and thinking resolves to `off`; otherwise `off`.
+
+A session level set with `/reasoning` (including `/reasoning off`) always wins over these defaults.
+
+```json5
+{
+  agents: {
+    defaults: { reasoningDefault: "off" },
+    list: [{ id: "debug", reasoningDefault: "on" }],
+  },
+}
+```
+
 ## Related
 
 - Elevated mode docs live in [Elevated mode](/tools/elevated).

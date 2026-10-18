@@ -882,6 +882,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       pdfMaxBytesMb: 10,
       pdfMaxPages: 20,
       thinkingDefault: "low",
+      reasoningDefault: "off",
       verboseDefault: "off",
       elevatedDefault: "on",
       idleTimeoutSeconds: 600,
@@ -912,6 +913,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `params` merge precedence (config): `agents.defaults.models["provider/model"].params` is the base, then `agents.list[].params` (matching agent id) overrides by key.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 1.
+- `reasoningDefault`: default reasoning display (`on` | `off` | `stream`) when neither `/reasoning` nor the session sets a level. Per-agent `agents.list[].reasoningDefault` overrides it. Unset: reasoning display stays `off` on messaging channels (Signal, WhatsApp, Telegram, Discord, Slack, Teams, iMessage, …) and is never turned on automatically there; non-channel surfaces (CLI, TUI, gateway `agent` method) keep the model-catalog default. See [Thinking Levels](/tools/thinking#default-reasoning-visibility).
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
 
