@@ -9,6 +9,7 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { resolveConfiguredReasoningDefault } from "../auto-reply/reply/reasoning-default.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../channels/logging.js";
@@ -117,21 +118,25 @@ function resolveTelegramReasoningLevel(params: {
   agentId: string;
 }): TelegramReasoningLevel {
   const { cfg, sessionKey, agentId } = params;
+  // A session level wins; otherwise only an explicitly configured reasoningDefault turns
+  // reasoning display on for this channel (reasoning-display ARCH §2.1).
+  const configuredDefault = (): TelegramReasoningLevel =>
+    resolveConfiguredReasoningDefault(cfg, agentId) ?? "off";
   if (!sessionKey) {
-    return "off";
+    return configuredDefault();
   }
   try {
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     const store = loadSessionStore(storePath, { skipCache: true });
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const level = entry?.reasoningLevel;
-    if (level === "on" || level === "stream") {
+    if (level === "on" || level === "stream" || level === "off") {
       return level;
     }
   } catch {
     // Fall through to default.
   }
-  return "off";
+  return configuredDefault();
 }
 
 export const dispatchTelegramMessage = async ({

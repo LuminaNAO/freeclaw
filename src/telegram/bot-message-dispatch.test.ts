@@ -331,6 +331,75 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("suppresses reasoning segments when nothing sets a reasoning level (reasoning-display ARCH §2.1)", async () => {
+    loadSessionStore.mockReturnValue({ s1: {} });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Reasoning:\n_step_" }, { kind: "block" });
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+    });
+
+    const delivered = deliverReplies.mock.calls.flatMap(
+      (call) => (call[0] as { replies: Array<{ text?: string }> }).replies,
+    );
+    expect(delivered.some((reply) => reply.text?.includes("Reasoning:"))).toBe(false);
+  });
+
+  it("honours agents.defaults.reasoningDefault on when the session sets no level (reasoning-display ARCH §2.2)", async () => {
+    loadSessionStore.mockReturnValue({ s1: {} });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Reasoning:\n_step_" }, { kind: "block" });
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: { agents: { defaults: { reasoningDefault: "on" } } },
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "Reasoning:\n_step_" })],
+      }),
+    );
+  });
+
+  it("keeps an explicit session /reasoning off over a configured reasoningDefault (reasoning-display ARCH §2.3)", async () => {
+    loadSessionStore.mockReturnValue({ s1: { reasoningLevel: "off" } });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Reasoning:\n_step_" }, { kind: "block" });
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: { agents: { defaults: { reasoningDefault: "on" } } },
+      streamMode: "off",
+    });
+
+    const delivered = deliverReplies.mock.calls.flatMap(
+      (call) => (call[0] as { replies: Array<{ text?: string }> }).replies,
+    );
+    expect(delivered.some((reply) => reply.text?.includes("Reasoning:"))).toBe(false);
+  });
+
   it("streams reasoning draft updates even when answer stream mode is off", async () => {
     loadSessionStore.mockReturnValue({
       s1: { reasoningLevel: "stream" },
@@ -1727,7 +1796,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(answerDraftStream.update).toHaveBeenCalledWith("3");
     expect(
-      answerDraftStream.update.mock.calls.some((call) => String(call[0] ?? "").includes("<think>")),
+      answerDraftStream.update.mock.calls.some((call) => (call[0] ?? "").includes("<think>")),
     ).toBe(false);
     expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "3", expect.any(Object));
   });
@@ -1757,9 +1826,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(reasoningDraftStream.update).toHaveBeenCalledWith(
       "Reasoning:\n_Counting letters in strawberry_",
     );
-    expect(
-      answerDraftStream.update.mock.calls.some((call) => String(call[0] ?? "").includes("<")),
-    ).toBe(false);
+    expect(answerDraftStream.update.mock.calls.some((call) => (call[0] ?? "").includes("<"))).toBe(
+      false,
+    );
     expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
       999,
