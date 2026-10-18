@@ -99,6 +99,11 @@ export async function buildRuntime(opts: {
   const sceneWriter = opts.sceneWriter ?? opts.sceneWriterFor?.(agentId) ?? null;
 
   const engines: Engine[] = [];
+  if (config.providers.length === 0) {
+    opts.log.info(
+      '[model-badge] no providers configured; idle. Set plugins.entries.model-badge.config.providers (e.g. ["signal"]).',
+    );
+  }
   for (const id of config.providers) {
     const factory = registry.get(id);
     if (!factory) {

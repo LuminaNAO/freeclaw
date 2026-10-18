@@ -262,10 +262,9 @@ export function normalizeConfig(raw: unknown, ctx: { gatewayStateDir: string }):
   const errors: string[] = [];
   const c = obj(raw);
 
-  const providers =
-    Array.isArray(c.providers) && c.providers.length > 0
-      ? [...new Set(c.providers.map(String))]
-      : ["signal"];
+  // Absent → ["signal"]. ARCH §2c.12: an explicit list is kept as written, even empty (a new
+  // install whose onboarding configured no supported channel drives nothing, and says so).
+  const providers = Array.isArray(c.providers) ? [...new Set(c.providers.map(String))] : ["signal"];
   const providerBlocks: Record<string, ProviderBlock> = {};
   const groups: Record<string, GroupSelection> = {};
   for (const id of providers) {
