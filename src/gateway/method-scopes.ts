@@ -135,6 +135,10 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "signal.link.start",
     "signal.link.status",
     "signal.link.cancel",
+    // Agent peers ARCH §2.1: operator-only.
+    "signal.trust.markAgent",
+    "signal.trust.unmarkAgent",
+    "signal.trust.agents",
   ],
 };
 

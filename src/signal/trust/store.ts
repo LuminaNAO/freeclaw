@@ -19,7 +19,7 @@ export type SignalTrustSnapshot =
   | { ok: false; generation: number; error: string };
 
 const STORE_KEYS = new Set(["version", "accountId", "trusted"]);
-const ENTRY_KEYS = new Set(["number", "uuid", "addedAt"]);
+const ENTRY_KEYS = new Set(["number", "uuid", "addedAt", "agent"]);
 const LOCK_OPTIONS = {
   retries: { retries: 10, factor: 2, minTimeout: 50, maxTimeout: 2_000, randomize: true },
   stale: 30_000,
@@ -97,6 +97,12 @@ export function validateSignalTrustStore(value: unknown, accountId: string): str
     }
     if (entry.addedAt !== undefined && typeof entry.addedAt !== "string") {
       return `trusted[${index}].addedAt must be a string`;
+    }
+    if (entry.agent !== undefined && entry.agent !== true) {
+      return `trusted[${index}].agent must be true when present`;
+    }
+    if (entry.agent === true && entry.uuid === undefined) {
+      return `trusted[${index}].agent requires a uuid`;
     }
   }
   return null;
@@ -267,4 +273,60 @@ export async function readSignalTrustStoreForCli(params: {
 }): Promise<{ filePath: string; snapshot: SignalTrustSnapshot }> {
   const reader = createSignalTrustStoreReader(params);
   return { filePath: reader.filePath, snapshot: await reader.read() };
+}
+
+export type SignalAgentMarkResult =
+  | { ok: true; changed: boolean; uuid: string; filePath: string }
+  | { ok: false; error: string };
+
+/**
+ * Agent peers ARCH §2.1: set or clear the operator-only `agent: true` flag on the trust entry
+ * holding `uuid`. Shared by the CLI and the gateway method. The identity must already be in the
+ * trust store (marking never creates, and so never grants, trust).
+ */
+export async function setSignalTrustAgentMark(params: {
+  accountId: string;
+  uuid: string;
+  agent: boolean;
+  env?: NodeJS.ProcessEnv;
+}): Promise<SignalAgentMarkResult> {
+  const uuid = params.uuid;
+  if (!isCanonicalTrustUuid(uuid)) {
+    return { ok: false, error: "expected a canonical lowercase sender uuid" };
+  }
+  let missing = false;
+  const result = await updateSignalTrustStore({
+    accountId: params.accountId,
+    env: params.env,
+    mutate: (current) => {
+      const index = current.trusted.findIndex((entry) => entry.uuid === uuid);
+      if (index < 0) {
+        missing = true;
+        return null;
+      }
+      const existing = current.trusted[index];
+      if ((existing.agent === true) === params.agent) {
+        return null;
+      }
+      const { agent: _previous, ...rest } = existing;
+      const nextEntry: SignalTrustEntry = params.agent ? { ...rest, agent: true } : rest;
+      const trusted = [...current.trusted];
+      trusted[index] = nextEntry;
+      return { ...current, trusted };
+    },
+  });
+  if (missing) {
+    return {
+      ok: false,
+      error: `uuid:${uuid} is not in the Signal trust store; add it first with \`openclaw signal trust add ${uuid}\``,
+    };
+  }
+  return { ok: true, changed: result.changed, uuid, filePath: result.filePath };
+}
+
+/** Agent peers ARCH §2: uuids of trust entries the operator marked `agent: true`. */
+export function listSignalAgentUuids(trusted: readonly SignalTrustEntry[]): string[] {
+  return trusted
+    .filter((entry) => entry.agent === true && typeof entry.uuid === "string")
+    .map((entry) => entry.uuid as string);
 }

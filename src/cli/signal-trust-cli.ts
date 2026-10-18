@@ -6,7 +6,12 @@ import { resolveSignalAccount } from "../signal/accounts.js";
 import { readSignalTrustAttempts } from "../signal/trust/attempts.js";
 import { isSignalTrustGateEnforced, SIGNAL_TRUST_GATE_ENV } from "../signal/trust/gate.js";
 import { canonicalizeTrustInput, type SignalTrustEntry } from "../signal/trust/identity.js";
-import { readSignalTrustStoreForCli, updateSignalTrustStore } from "../signal/trust/store.js";
+import {
+  listSignalAgentUuids,
+  readSignalTrustStoreForCli,
+  setSignalTrustAgentMark,
+  updateSignalTrustStore,
+} from "../signal/trust/store.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { registerSignalLinkCli } from "./signal-link-cli.js";
@@ -29,9 +34,19 @@ function formatEntry(entry: SignalTrustEntry): string {
   return [entry.number, entry.uuid ? `uuid:${entry.uuid}` : undefined].filter(Boolean).join(" ");
 }
 
+function parseAgentUuidOrThrow(raw: string): string {
+  const parsed = parseIdOrThrow(raw);
+  if (parsed.kind !== "uuid") {
+    throw new Error("Agent marks are keyed by sender uuid (uuid:<id>), not phone number.");
+  }
+  return parsed.value;
+}
+
 /**
  * Operator-only trust store writer. The trust store is never written by chat commands, agent
- * tools, pairing approval, or gateway RPC; this CLI and hand edits are the only writers.
+ * tools or pairing approval. This CLI and hand edits are the writers; the only gateway method
+ * that writes it is the operator.admin `signal.trust.markAgent|unmarkAgent` pair, which toggles
+ * the agent flag on an existing entry (agent peers ARCH §2.1) and never adds or removes trust.
  */
 export function registerSignalTrustCli(program: Command) {
   const signal = program.command("signal").description("Signal channel operator tools");
@@ -117,6 +132,40 @@ export function registerSignalTrustCli(program: Command) {
       );
     });
 
+  // Agent peers ARCH §2.1: operator-only agent marks on existing trust entries.
+  for (const [name, agent] of [
+    ["mark-agent", true],
+    ["unmark-agent", false],
+  ] as const) {
+    trust
+      .command(name)
+      .description(
+        agent
+          ? "Mark a trusted sender as an agent: its group messages run a turn only when they mention us"
+          : "Clear the agent mark from a trusted sender",
+      )
+      .argument("<uuid>", "Sender uuid (optionally uuid:<id>)")
+      .option("--account <accountId>", "Signal account id", "default")
+      .action(async (id: string, opts) => {
+        const accountId = resolveAccountOption(opts);
+        const uuid = parseAgentUuidOrThrow(id);
+        const result = await setSignalTrustAgentMark({ accountId, uuid, agent });
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        const label = agent ? "Marked as agent" : "Cleared agent mark";
+        defaultRuntime.log(
+          result.changed
+            ? `${theme.success(label)} uuid:${uuid} ${theme.muted(`(account=${accountId}; effective on next inbound event)`)}`
+            : theme.muted(
+                agent
+                  ? `Already marked as agent: uuid:${uuid}`
+                  : `Not marked as agent: uuid:${uuid}`,
+              ),
+        );
+      });
+  }
+
   trust
     .command("list")
     .description("List trusted senders")
@@ -144,11 +193,13 @@ export function registerSignalTrustCli(program: Command) {
             { key: "Number", header: "Number", minWidth: 14 },
             { key: "Uuid", header: "Uuid", minWidth: 36, flex: true },
             { key: "Added", header: "Added", minWidth: 12 },
+            { key: "Agent", header: "Agent", minWidth: 5 },
           ],
           rows: snapshot.trusted.map((entry) => ({
             Number: entry.number ?? "",
             Uuid: entry.uuid ?? "",
             Added: entry.addedAt ?? "",
+            Agent: entry.agent === true ? "yes" : "",
           })),
         }).trimEnd(),
       );
@@ -267,5 +318,15 @@ export function registerSignalTrustCli(program: Command) {
           ? `store state: valid, ${snapshot.trusted.length} trusted sender(s)`
           : `store state: INVALID (${snapshot.error}) - all senders denied while enforcing`,
       );
+      // Agent peers ARCH §2.4.
+      const agents = snapshot.ok ? listSignalAgentUuids(snapshot.trusted) : [];
+      if (agents.length === 0) {
+        defaultRuntime.log("marked agents: none");
+      } else {
+        defaultRuntime.log(`marked agents: ${agents.length}`);
+        for (const uuid of agents) {
+          defaultRuntime.log(`  uuid:${uuid}`);
+        }
+      }
     });
 }

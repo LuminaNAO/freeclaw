@@ -25,6 +25,7 @@ import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
 import { signalLinkHandlers } from "./server-methods/signal-link.js";
+import { signalTrustHandlers } from "./server-methods/signal-trust.js";
 import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
@@ -99,6 +100,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...browserHandlers,
   ...signalLinkHandlers,
   ...focusHandlers,
+  ...signalTrustHandlers,
 };
 
 export async function handleGatewayRequest(

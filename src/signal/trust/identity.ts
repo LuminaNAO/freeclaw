@@ -8,6 +8,12 @@ export type SignalTrustEntry = {
   number?: string;
   uuid?: string;
   addedAt?: string;
+  /**
+   * Agent peers ARCH §2.1: operator-set marker that this identity is another agent. Only ever
+   * `true` when present; set and cleared by `openclaw signal trust mark-agent|unmark-agent`
+   * (or the matching gateway method). Never inferred.
+   */
+  agent?: true;
 };
 
 export type SignalTrustDenyReason =

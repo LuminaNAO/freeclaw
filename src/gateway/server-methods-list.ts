@@ -108,6 +108,9 @@ const BASE_METHODS = [
   "signal.link.start",
   "signal.link.status",
   "signal.link.cancel",
+  "signal.trust.markAgent",
+  "signal.trust.unmarkAgent",
+  "signal.trust.agents",
 ];
 
 export function listGatewayMethods(): string[] {
