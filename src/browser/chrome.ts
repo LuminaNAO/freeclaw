@@ -33,6 +33,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { type BrowserMemoryCap, buildBrowserLaunchCommand } from "./memory-cap.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
 
@@ -64,6 +65,8 @@ export type RunningChrome = {
   cdpPort: number;
   startedAt: number;
   proc: ChildProcessWithoutNullStreams;
+  /** How this browser's memory cap is enforced (ARCH §2.2). Absent means "off". */
+  memoryCap?: BrowserMemoryCap;
 };
 
 function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
@@ -141,7 +144,7 @@ export async function getChromeWebSocketUrl(
     return cdpUrl;
   }
   const version = await fetchChromeVersion(cdpUrl, timeoutMs);
-  const wsUrl = String(version?.webSocketDebuggerUrl ?? "").trim();
+  const wsUrl = (version?.webSocketDebuggerUrl ?? "").trim();
   if (!wsUrl) {
     return null;
   }
@@ -260,6 +263,8 @@ export async function launchOpenClawChrome(
     (profile.color ?? DEFAULT_OPENCLAW_BROWSER_COLOR).toUpperCase(),
   );
 
+  let memoryCap: BrowserMemoryCap = { mode: "off", limitMb: 0 };
+
   // First launch to create preference files if missing, then decorate and relaunch.
   const spawnOnce = () => {
     const args: string[] = [
@@ -297,7 +302,15 @@ export async function launchOpenClawChrome(
     // Always open a blank tab to ensure a target exists.
     args.push("about:blank");
 
-    return spawn(exe.path, args, {
+    // ARCH §2.1-§2.2: run the whole browser inside a memory limit when one is configured.
+    const launch = buildBrowserLaunchCommand({
+      executablePath: exe.path,
+      args,
+      memoryLimitMb: resolved.memoryLimitMb,
+    });
+    memoryCap = launch.memoryCap;
+
+    return spawn(launch.command, launch.args, {
       stdio: "pipe",
       env: {
         ...process.env,
@@ -400,8 +413,12 @@ export async function launchOpenClawChrome(
   stderrChunks.length = 0;
 
   const pid = proc.pid ?? -1;
+  const capLabel =
+    memoryCap.mode === "off"
+      ? "memory cap off"
+      : `memory cap ${memoryCap.limitMb} MiB ${memoryCap.mode === "kernel" ? "kernel-enforced" : "soft (watchdog only)"}`;
   log.info(
-    `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
+    `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid}, ${capLabel})`,
   );
 
   return {
@@ -411,6 +428,7 @@ export async function launchOpenClawChrome(
     cdpPort: profile.cdpPort,
     startedAt,
     proc,
+    memoryCap,
   };
 }
 
