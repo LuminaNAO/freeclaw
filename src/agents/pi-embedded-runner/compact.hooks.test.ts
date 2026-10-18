@@ -772,6 +772,32 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("heartbeat trigger keeps the caller's model even when compaction.model is set", async () => {
+    const config = {
+      agents: { defaults: { compaction: { model: "anthropic/claude-cheap" } } },
+    } as never;
+
+    await compactEmbeddedPiSessionDirect(
+      directCompactionArgs({ provider: "openai", model: "gpt-own", config, trigger: "heartbeat" }),
+    );
+    expect(resolveModelMock).toHaveBeenLastCalledWith(
+      "openai",
+      "gpt-own",
+      expect.anything(),
+      config,
+    );
+
+    await compactEmbeddedPiSessionDirect(
+      directCompactionArgs({ provider: "openai", model: "gpt-own", config, trigger: "manual" }),
+    );
+    expect(resolveModelMock).toHaveBeenLastCalledWith(
+      "anthropic",
+      "claude-cheap",
+      expect.anything(),
+      config,
+    );
+  });
 });
 
 describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
@@ -895,6 +921,13 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     } finally {
       cleanup();
     }
+  });
+
+  it("forces the context-engine compaction for the heartbeat trigger", async () => {
+    await compactEmbeddedPiSession(wrappedCompactionArgs({ trigger: "heartbeat" }));
+    expect(contextEngineCompactMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ force: true, customInstructions: TEST_CUSTOM_INSTRUCTIONS }),
+    );
   });
 
   it("catches and logs hook exceptions without aborting compaction", async () => {

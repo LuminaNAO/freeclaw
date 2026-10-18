@@ -138,7 +138,12 @@ export type CompactEmbeddedPiSessionParams = {
   customInstructions?: string;
   tokenBudget?: number;
   force?: boolean;
-  trigger?: "overflow" | "manual" | "prune-exhausted";
+  /**
+   * What initiated the compaction. "heartbeat" is the pre-heartbeat-turn compaction of the
+   * heartbeat session: like "manual" it is forced, and it always runs on the caller's model
+   * (never agents.defaults.compaction.model) so the session's cache and quality are kept.
+   */
+  trigger?: "overflow" | "manual" | "prune-exhausted" | "heartbeat";
   diagId?: string;
   attempt?: number;
   maxAttempts?: number;
@@ -388,8 +393,12 @@ export async function compactEmbeddedPiSessionDirect(
   });
   const prevCwd = process.cwd();
 
-  // Resolve compaction model: prefer config override, then fall back to caller-supplied model
-  const compactionModelOverride = params.config?.agents?.defaults?.compaction?.model?.trim();
+  // Resolve compaction model: prefer config override, then fall back to caller-supplied model.
+  // Heartbeat compaction never switches model (heartbeat-compaction ARCH §2.2).
+  const compactionModelOverride =
+    trigger === "heartbeat"
+      ? undefined
+      : params.config?.agents?.defaults?.compaction?.model?.trim();
   let provider: string;
   let modelId: string;
   // When switching provider via override, drop the primary auth profile to avoid
@@ -1137,7 +1146,7 @@ export async function compactEmbeddedPiSession(
           tokenBudget: ceCtxInfo.tokens,
           currentTokenCount: params.currentTokenCount,
           customInstructions: params.customInstructions,
-          force: params.trigger === "manual",
+          force: params.trigger === "manual" || params.trigger === "heartbeat",
           runtimeContext: params as Record<string, unknown>,
         });
         if (engineOwnsCompaction && result.ok && result.compacted) {

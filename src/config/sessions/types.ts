@@ -153,6 +153,8 @@ export type SessionEntry = {
   compactionCount?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
+  /** Timestamp (ms) of the last compaction run before a heartbeat turn (heartbeat session only). */
+  heartbeatCompactedAt?: number;
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   label?: string;
