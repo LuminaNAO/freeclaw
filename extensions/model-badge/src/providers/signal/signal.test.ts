@@ -187,6 +187,16 @@ describe("Signal provider", () => {
     );
   });
 
+  it("maps group memory's raw event id ('group:<id>') to the session-key target (ARCH §2c.11)", () => {
+    const p = provider(async () => S.ok(S.updateOk()));
+    const fromKey = p.targetForSessionKey("agent:main:signal:group:AbC=");
+    expect(p.groupRefForEventId!("group:AbC=")).toEqual(fromKey);
+    expect(p.groupRefForEventId!("GROUP:AbC=")).toEqual(fromKey);
+    expect(p.groupRefForEventId!("AbC=")).toEqual(fromKey);
+    expect(p.groupRefForEventId!("group:")).toBeNull();
+    expect(p.miskeyedEventIds!({ kind: "group", idLower: "abc=" })).toEqual(["group:abc="]);
+  });
+
   it("profile writes use updateProfile with the account and the avatar only", async () => {
     const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
     const p = provider(

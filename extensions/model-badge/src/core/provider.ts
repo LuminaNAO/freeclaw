@@ -64,6 +64,13 @@ export interface BadgeProvider {
   configError(): string | null;
 
   targetForSessionKey(sessionKey: string): TargetRef | null;
+  // ARCH §2c.11: the target a group-memory event's `groupId` names. Group memory carries
+  // the channel's raw id (Signal: "group:<base64id>"); this maps it to the same ref the
+  // session-key mapping gives. Optional: without it the id is only lowercased.
+  groupRefForEventId?(groupId: string): TargetRef | null;
+  // Ids the event once was keyed under before groupRefForEventId existed; scene entries
+  // stored under them are dropped on load (the next event or a rename re-adds the name).
+  miskeyedEventIds?(ref: TargetRef): string[];
   sessionKeyFor(ref: TargetRef): string | null;
   profile(): ProviderProfile | null;
 

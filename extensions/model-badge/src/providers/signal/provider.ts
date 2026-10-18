@@ -173,6 +173,17 @@ export function createSignalProvider(opts: {
       return { kind: "group", idLower: id.toLowerCase() };
     },
 
+    // ARCH §2c.11: group memory's event carries Signal's raw "group:<id>"; the target id
+    // is the bare id, lowercased, exactly as targetForSessionKey derives it.
+    groupRefForEventId(groupId) {
+      const id = groupId.trim().replace(/^group:/i, "");
+      return id ? { kind: "group", idLower: id.toLowerCase() } : null;
+    },
+
+    miskeyedEventIds(ref) {
+      return ref.kind === "group" ? [`group:${ref.idLower}`] : [];
+    },
+
     sessionKeyFor(ref) {
       if (ref.kind === "profile") {
         return config.profileSessionKey;

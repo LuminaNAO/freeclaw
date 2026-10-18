@@ -6,7 +6,7 @@
 // session is deleted.
 import { describe, expect, it } from "vitest";
 import { createTestPluginApi } from "../../test-utils/plugin-api.js";
-import register from "../index.js";
+import register, { registerModelBadge } from "../index.js";
 import { createActions } from "./actions.js";
 import { buildPrompt, FULL_BLEED, MOTIF_SCENES, type BaseArtGenerator } from "./core/baseart.js";
 import { normalizeConfig } from "./core/config.js";
@@ -766,5 +766,117 @@ describe("plugin wiring (ARCH §2c.11)", () => {
         }),
       ),
     ).resolves.toBeUndefined();
+  });
+});
+
+// Live finding (operator, 2026-10-18): group memory's event carries Signal's raw
+// "group:<base64id>", while targets, seeds and scenes are keyed by the bare lowercased id.
+// The real event shape must reach the writer through the registered hook.
+describe("the real group_memory_created event shape reaches the writer (ARCH §2c.11)", () => {
+  const realEvent = (id: string, name: string, reason: "created" | "renamed" = "created") => ({
+    agentId: "main",
+    channel: "signal",
+    groupId: `group:${id}`,
+    name,
+    dir: `/ws/memory/groups/signal/${encodeURIComponent(`group:${id}`)}`,
+    firstSeen: "2026-10-18T08:00:00.000Z",
+    reason,
+  });
+
+  async function wired(e: Engine) {
+    const hooks = new Map<string, (event: unknown) => unknown>();
+    let service: { start: (ctx: unknown) => Promise<void> } | undefined;
+    registerModelBadge(
+      createTestPluginApi({
+        id: "model-badge",
+        name: "Model Badge",
+        source: "test",
+        config: {},
+        runtime: {} as never,
+        registerService: ((s: typeof service) => void (service = s)) as never,
+        registerCommand: () => {},
+        registerTool: () => {},
+        on: ((name: string, fn: (event: unknown) => unknown) => void hooks.set(name, fn)) as never,
+      }),
+      {
+        buildRuntime: async () =>
+          ({
+            config: normalizeConfig({}, { gatewayStateDir: "/virtual/state" }).config,
+            engines: [e],
+            errors: [],
+            start: async () => {},
+            stop: async () => {},
+          }) as never,
+      },
+    );
+    await service!.start({ config: {}, stateDir: "/virtual/state", logger: console });
+    return (ev: unknown) => Promise.resolve(hooks.get("group_memory_created")!(ev));
+  }
+
+  it("feeds groupId 'group:<id>' through api.on: the writer is called and its scene is the prompt", async () => {
+    const { w, e, gen, writer } = await world({ targets: [IDS.a, IDS.b] });
+    const fire = await wired(e);
+    await fire(realEvent(IDS.a, "Garden Club"));
+    await w.settle();
+    await e.idle();
+    await w.settle();
+    expect(writer.calls.map((c) => c.name)).toEqual(["Garden Club"]);
+    expect(lastPrompt(w, gen, IDS.a)).toContain(`A scene of ${GOOD}`);
+    expect(e.targetSummary(w.tk(IDS.a))!.scene).toEqual({ source: "writer", text: GOOD });
+    // The name is stored under the target's own key, never the raw event id.
+    const stored = w.fs.getJson<{ targets: Record<string, { name?: string }> }>(
+      `${w.paths.stateDir}/scenes/scenes.json`,
+    );
+    expect(stored.targets[keyOf(IDS.a)]?.name).toBe("Garden Club");
+    expect(stored.targets[seedFor("signal", `group:${IDS.a.toLowerCase()}`)]).toBeUndefined();
+    // B was never named: still the motif scene.
+    expect(lastPrompt(w, gen, IDS.b)).toContain(motifScene(e, IDS.b));
+    // A rename through the same real shape writes again.
+    await fire(realEvent(IDS.a, "Allotment Crew", "renamed"));
+    await w.settle();
+    await e.idle();
+    expect(writer.calls.map((c) => c.name)).toEqual(["Garden Club", "Allotment Crew"]);
+    // Another agent's event is ignored.
+    await fire({ ...realEvent(IDS.b, "Book Circle"), agentId: "other" });
+    await w.settle();
+    await e.idle();
+    expect(writer.calls).toHaveLength(2);
+    await e.stop();
+  });
+
+  it("the bare id and the raw 'group:' id name the same target (any case)", async () => {
+    const { w, e, writer } = await world();
+    await named(w, e, `GROUP:${IDS.a.toUpperCase()}`, "Garden Club");
+    await named(w, e, IDS.a, "Garden Club");
+    expect(writer.calls).toHaveLength(1);
+    await e.stop();
+  });
+
+  it("scene entries written under the raw event id are dropped on load", async () => {
+    const bad = seedFor("signal", `group:${IDS.a.toLowerCase()}`);
+    const { w, e, writer } = await world({ targets: [] });
+    await e.stop();
+    w.fs.putJson(`${w.paths.stateDir}/scenes/scenes.json`, {
+      version: 1,
+      targets: { [bad]: { name: "Garden Club" }, [keyOf(IDS.b)]: { name: "Book Circle" } },
+    });
+    w.addTarget(IDS.a);
+    const e2 = await w.startEngine({
+      instanceId: "migrate",
+      imageGenerator: fakeImageGen(),
+      sceneWriter: writer,
+    });
+    await w.settle();
+    await e2.idle();
+    const stored = w.fs.getJson<{ targets: Record<string, unknown> }>(
+      `${w.paths.stateDir}/scenes/scenes.json`,
+    );
+    expect(stored.targets[bad]).toBeUndefined();
+    expect(stored.targets[keyOf(IDS.b)]).toEqual({ name: "Book Circle" });
+    // The stale name never reached the writer; the next event re-adds it.
+    expect(writer.calls).toHaveLength(0);
+    await named(w, e2, `group:${IDS.a}`, "Garden Club");
+    expect(writer.calls.map((c) => c.name)).toEqual(["Garden Club"]);
+    await e2.stop();
   });
 });

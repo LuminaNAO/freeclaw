@@ -360,10 +360,30 @@ export function createEngine(deps: EngineDeps) {
     await images.load();
     await adopted.load();
     adoptAttempts.clear();
-    if ((await scenes.load()) > 0) {
+    const merged = await scenes.load();
+    const dropped = dropMiskeyedScenes(Object.keys(provider.knownIds?.() ?? status.ids ?? {}));
+    if (merged > 0 || dropped) {
       await scenes.save();
     }
     scenesLoaded = true;
+  }
+
+  // ARCH §2c.11 migration: scene names stored under the raw event id (e.g. Signal's
+  // "group:<id>") before the event id was normalised are never read; drop them. Returns
+  // whether anything was removed (the caller saves).
+  function dropMiskeyedScenes(idsLower: Iterable<string>): boolean {
+    if (!provider.miskeyedEventIds) {
+      return false;
+    }
+    let dropped = false;
+    for (const idLower of idsLower) {
+      for (const bad of provider.miskeyedEventIds({ kind: "group", idLower })) {
+        if (scenes.remove(seedFor(provider.id, bad.toLowerCase()))) {
+          dropped = true;
+        }
+      }
+    }
+    return dropped;
   }
 
   // ---------------- inputs ----------------
@@ -1530,6 +1550,13 @@ export function createEngine(deps: EngineDeps) {
     targets = targetsFromStore();
     await refreshProviderTargets();
     targets = targetsFromStore();
+    if (
+      scenesLoaded &&
+      role === "writer" &&
+      dropMiskeyedScenes([...targets.values()].map((t) => t.ref.idLower))
+    ) {
+      await scenes.save();
+    }
 
     // Watcher health: the store's stat is unchanged since the watcher last looked, yet an
     // override differs from what it recorded. Only a watcher fault explains that.
@@ -1742,14 +1769,20 @@ export function createEngine(deps: EngineDeps) {
     },
 
     // ARCH §2c.11: group memory's new-group event (created or renamed) names a group.
-    // The name is kept per target; a new name means new writer inputs. `idLower` is the
-    // provider's group id.
-    async groupNamed(idLower: string, name: string) {
+    // The name is kept per target; a new name means new writer inputs. `groupId` is the
+    // event's id as group memory sends it (Signal: "group:<id>") or the bare target id;
+    // the provider normalises it to the target id the seed and scenes are keyed by.
+    async groupNamed(groupId: string, name: string) {
       const clean = name.replace(/[\r\n]+/g, " ").trim();
       if (!clean) {
         return { ok: false as const, message: "no name" };
       }
-      const ref: TargetRef = { kind: "group", idLower: idLower.toLowerCase() };
+      const ref: TargetRef | null = provider.groupRefForEventId
+        ? provider.groupRefForEventId(groupId)
+        : { kind: "group", idLower: groupId.trim().toLowerCase() };
+      if (!ref || ref.kind !== "group" || !ref.idLower) {
+        return { ok: false as const, message: "no group id" };
+      }
       if (!driven(ref)) {
         return { ok: false as const, message: notDrivenOr(targetKey(ref)) };
       }

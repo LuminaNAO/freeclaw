@@ -12,6 +12,15 @@ import { TOOL_NAMES, createBadgeTool } from "./src/tool.js";
 // the agent writes its image scene.
 
 export default function register(api: OpenClawPluginApi) {
+  registerModelBadge(api);
+}
+
+// Test seam: the runtime builder. The gateway always uses the real buildRuntime.
+export function registerModelBadge(
+  api: OpenClawPluginApi,
+  seams: { buildRuntime?: typeof buildRuntime } = {},
+) {
+  const build = seams.buildRuntime ?? buildRuntime;
   let runtime: Runtime | undefined;
   const engines = (): Engine[] => runtime?.engines ?? [];
 
@@ -66,6 +75,8 @@ export default function register(api: OpenClawPluginApi) {
 
   // ARCH §2c.11 trigger: group-memory ARCH §8's new-group event, created or renamed.
   // Only this agent's own groups; the name goes to the engine of that channel's provider.
+  // `groupId` is the channel's raw id (Signal: "group:<id>"); the engine's provider maps it
+  // to the target id (Engine.groupNamed).
   api.on("group_memory_created", async (event) => {
     const r = runtime;
     if (!r || event.agentId.toLowerCase() !== r.config.agentId.toLowerCase()) {
@@ -81,7 +92,7 @@ export default function register(api: OpenClawPluginApi) {
   api.registerService({
     id: "model-badge",
     start: async (ctx) => {
-      runtime = await buildRuntime({
+      runtime = await build({
         rawConfig: api.pluginConfig ?? {},
         gatewayConfig: ctx.config,
         gatewayStateDir: ctx.stateDir,
