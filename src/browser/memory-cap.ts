@@ -280,3 +280,51 @@ export async function measureBrowserTreeRssBytes(
 export function bytesToMb(bytes: number): number {
   return Math.round(bytes / (1024 * 1024));
 }
+
+/** Memory cap / usage of one browser profile, for `openclaw status` and `browser status` (ARCH §2.5). */
+export type BrowserMemoryStatus = {
+  /** "external": a browser freeclaw did not launch; never capped or touched (ARCH §2.6). */
+  scope: "managed" | "external";
+  capMode: BrowserMemoryCapMode | "none";
+  capMb: number | null;
+  kernelEnforced: boolean;
+  rssMb: number | null;
+  tabCount: number | null;
+};
+
+export function formatBrowserMemoryStatus(status: BrowserMemoryStatus): string {
+  if (status.scope === "external") {
+    return "external, not capped";
+  }
+  const tabs =
+    status.tabCount === null
+      ? "tabs ?"
+      : `${status.tabCount} tab${status.tabCount === 1 ? "" : "s"}`;
+  const rss = status.rssMb === null ? "rss ?" : `rss ${status.rssMb} MiB`;
+  if (status.capMode === "off" || status.capMode === "none" || status.capMb === null) {
+    return `${rss} · no cap · ${tabs}`;
+  }
+  const enforcement = status.kernelEnforced ? "kernel-enforced" : "soft (watchdog only)";
+  return `${rss} / ${status.capMb} MiB cap (${enforcement}) · ${tabs}`;
+}
+
+/**
+ * One-line summary of every profile's memory status for `openclaw status` (ARCH §2.5).
+ * Running managed browsers show RSS / cap / tabs / enforcement; running external browsers show
+ * "external, not capped"; when nothing runs, the cap that the next launch would get is shown.
+ */
+export function formatBrowserMemoryReport(report: {
+  memoryLimitMb: number;
+  profiles: Array<BrowserMemoryStatus & { name: string; running: boolean }>;
+}): string {
+  const running = report.profiles.filter((p) => p.running);
+  if (running.length === 0) {
+    const managed = report.profiles.find((p) => p.scope === "managed");
+    if (!managed || managed.capMode === "off" || managed.capMode === "none") {
+      return "not running · no cap";
+    }
+    const enforcement = managed.kernelEnforced ? "kernel-enforced" : "soft (watchdog only)";
+    return `not running · cap ${managed.capMb ?? report.memoryLimitMb} MiB (${enforcement})`;
+  }
+  return running.map((p) => `${p.name}: ${formatBrowserMemoryStatus(p)}`).join(" · ");
+}

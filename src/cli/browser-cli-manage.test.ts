@@ -91,6 +91,74 @@ describe("browser manage output", () => {
     expect(output).not.toContain("cdpUrl:");
   });
 
+  it("shows browser RSS, cap, tab count and enforcement in status (ARCH §2.5)", async () => {
+    mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
+      req.path === "/"
+        ? {
+            enabled: true,
+            profile: "openclaw",
+            driver: "openclaw",
+            transport: "cdp",
+            running: true,
+            pid: 4321,
+            cdpPort: 18800,
+            cdpUrl: "http://127.0.0.1:18800",
+            chosenBrowser: "chromium",
+            userDataDir: null,
+            color: "#FF4500",
+            headless: true,
+            attachOnly: false,
+            memory: {
+              scope: "managed",
+              capMode: "kernel",
+              capMb: 4096,
+              kernelEnforced: true,
+              rssMb: 1200,
+              tabCount: 4,
+            },
+          }
+        : {},
+    );
+    const program = createProgram();
+    await program.parseAsync(["browser", "status"], { from: "user" });
+    const output = mocks.runtimeLog.mock.calls.at(-1)?.[0] as string;
+    expect(output).toContain("memory: rss 1200 MiB / 4096 MiB cap (kernel-enforced) · 4 tabs");
+  });
+
+  it("shows external browsers as not capped in status (ARCH §2.6)", async () => {
+    mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
+      req.path === "/"
+        ? {
+            enabled: true,
+            profile: "user",
+            driver: "existing-session",
+            transport: "chrome-mcp",
+            running: true,
+            pid: null,
+            cdpPort: null,
+            cdpUrl: null,
+            chosenBrowser: null,
+            userDataDir: null,
+            color: "#00AA00",
+            headless: false,
+            attachOnly: true,
+            memory: {
+              scope: "external",
+              capMode: "none",
+              capMb: null,
+              kernelEnforced: false,
+              rssMb: null,
+              tabCount: null,
+            },
+          }
+        : {},
+    );
+    const program = createProgram();
+    await program.parseAsync(["browser", "--browser-profile", "user", "status"], { from: "user" });
+    const output = mocks.runtimeLog.mock.calls.at(-1)?.[0] as string;
+    expect(output).toContain("memory: external, not capped");
+  });
+
   it("shows chrome-mcp transport in browser profiles output", async () => {
     mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
       req.path === "/profiles"

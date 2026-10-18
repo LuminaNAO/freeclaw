@@ -1,3 +1,5 @@
+import type { BrowserMemoryReport } from "../browser/client.js";
+import { formatBrowserMemoryReport } from "../browser/memory-cap.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { resolveGatewayPort } from "../config/config.js";
@@ -37,6 +39,37 @@ import {
   formatUpdateOneLiner,
   resolveUpdateAvailability,
 } from "./status.update.js";
+
+function isBrowserMemoryReport(value: unknown): value is BrowserMemoryReport {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    Array.isArray((value as { profiles?: unknown }).profiles) &&
+    typeof (value as { memoryLimitMb?: unknown }).memoryLimitMb === "number"
+  );
+}
+
+/** Browser RSS, cap, tab count and cap enforcement from the gateway (ARCH §2.5). */
+async function loadBrowserMemoryReport(params: {
+  cfg: Parameters<typeof callGateway>[0]["config"];
+  gatewayReachable: boolean;
+  timeoutMs?: number;
+}): Promise<BrowserMemoryReport | null> {
+  if (!params.gatewayReachable || params.cfg?.browser?.enabled === false) {
+    return null;
+  }
+  try {
+    const result = await callGateway<unknown>({
+      method: "browser.request",
+      params: { method: "GET", path: "/memory", timeoutMs: 3000 },
+      timeoutMs: Math.min(params.timeoutMs ?? 5000, 5000),
+      config: params.cfg,
+    });
+    return isBrowserMemoryReport(result) ? result : null;
+  } catch {
+    return null;
+  }
+}
 
 function resolvePairingRecoveryContext(params: {
   error?: string | null;
@@ -168,6 +201,12 @@ export async function statusCommand(
         }).catch(() => null)
       : null;
 
+  const browserMemory = await loadBrowserMemoryReport({
+    cfg,
+    gatewayReachable,
+    timeoutMs: opts.timeoutMs,
+  });
+
   const configChannel = normalizeUpdateChannel(cfg.update?.channel);
   const channelInfo = resolveUpdateChannelDisplay({
     configChannel,
@@ -191,6 +230,7 @@ export async function statusCommand(
           updateChannelSource: channelInfo.source,
           memory,
           memoryPlugin,
+          browserMemory,
           gateway: {
             mode: gatewayMode,
             url: gatewayConnection.url,
@@ -434,6 +474,9 @@ export async function statusCommand(
     { Item: "Node service", Value: nodeDaemonValue },
     { Item: "Agents", Value: agentsValue },
     { Item: "Memory", Value: memoryValue },
+    ...(browserMemory
+      ? [{ Item: "Browser", Value: formatBrowserMemoryReport(browserMemory) }]
+      : []),
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
     { Item: "Heartbeat", Value: heartbeatValue },

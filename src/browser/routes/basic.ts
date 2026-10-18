@@ -1,9 +1,16 @@
 import { getChromeMcpPid } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
+import { isChromeReachable } from "../chrome.js";
+import { resolveProfile } from "../config.js";
 import { toBrowserErrorResponse } from "../errors.js";
+import { resolveBrowserMemoryStatus } from "../memory-status.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import {
+  type BrowserRouteContext,
+  listKnownProfileNames,
+  type ProfileContext,
+} from "../server-context.js";
 import { resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
@@ -47,7 +54,58 @@ async function withProfilesServiceMutation(params: {
   }
 }
 
+async function countPageTabs(profileCtx: ProfileContext): Promise<number | null> {
+  try {
+    const tabs = await profileCtx.listTabs();
+    return tabs.filter((tab) => (tab.type ?? "page") === "page").length;
+  } catch {
+    return null;
+  }
+}
+
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+  // Memory cap / usage for every profile (ARCH §2.5-§2.6). Never probes external browsers:
+  // existing-session, extension relay and remote profiles are reported as external, not capped.
+  app.get("/memory", async (_req, res) => {
+    let current: ReturnType<typeof ctx.state>;
+    try {
+      current = ctx.state();
+    } catch {
+      return jsonError(res, 503, "browser server not started");
+    }
+    try {
+      const profiles = [];
+      for (const name of listKnownProfileNames(current)) {
+        const profileState = current.profiles.get(name);
+        const profile = resolveProfile(current.resolved, name) ?? profileState?.profile;
+        if (!profile) {
+          continue;
+        }
+        const capabilities = getBrowserProfileCapabilities(profile);
+        const managed = capabilities.mode === "local-managed" && !profile.attachOnly;
+        let running = Boolean(profileState?.running);
+        let externallyRunning = false;
+        if (managed && !running) {
+          externallyRunning = await isChromeReachable(profile.cdpUrl, 200).catch(() => false);
+          running = externallyRunning;
+        }
+        const tabCount =
+          managed && profileState?.running ? await countPageTabs(ctx.forProfile(name)) : null;
+        const memory = await resolveBrowserMemoryStatus({
+          state: current,
+          profile,
+          profileState,
+          tabCount,
+          externallyRunning,
+        });
+        profiles.push({ name, driver: profile.driver, running, ...memory });
+      }
+      res.json({ memoryLimitMb: current.resolved.memoryLimitMb, profiles });
+    } catch (err) {
+      handleBrowserRouteError(res, err);
+    }
+  });
+
   // List all profiles with their status
   app.get("/profiles", async (_req, res) => {
     try {
@@ -81,6 +139,14 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
 
       const profileState = current.profiles.get(profileCtx.profile.name);
       const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+      const ownsBrowser = Boolean(profileState?.running);
+      const memory = await resolveBrowserMemoryStatus({
+        state: current,
+        profile: profileCtx.profile,
+        profileState,
+        tabCount: ownsBrowser && cdpReady ? await countPageTabs(profileCtx) : null,
+        externallyRunning: !ownsBrowser && cdpHttp,
+      });
       let detectedBrowser: string | null = null;
       let detectedExecutablePath: string | null = null;
       let detectError: string | null = null;
@@ -118,6 +184,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         noSandbox: current.resolved.noSandbox,
         executablePath: current.resolved.executablePath ?? null,
         attachOnly: profileCtx.profile.attachOnly,
+        memory,
       });
     } catch (err) {
       const mapped = toBrowserErrorResponse(err);

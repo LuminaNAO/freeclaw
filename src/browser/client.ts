@@ -1,6 +1,20 @@
 import { fetchBrowserJson } from "./client-fetch.js";
+import type { BrowserMemoryStatus } from "./memory-cap.js";
+
+export type { BrowserMemoryStatus } from "./memory-cap.js";
 
 export type BrowserTransport = "cdp" | "chrome-mcp";
+
+export type BrowserMemoryProfileStatus = BrowserMemoryStatus & {
+  name: string;
+  driver: "openclaw" | "extension" | "existing-session";
+  running: boolean;
+};
+
+export type BrowserMemoryReport = {
+  memoryLimitMb: number;
+  profiles: BrowserMemoryProfileStatus[];
+};
 
 export type BrowserStatus = {
   enabled: boolean;
@@ -23,6 +37,8 @@ export type BrowserStatus = {
   noSandbox?: boolean;
   executablePath?: string | null;
   attachOnly: boolean;
+  /** Browser RSS, cap, tab count and cap enforcement (ARCH §2.5). */
+  memory?: BrowserMemoryStatus;
 };
 
 export type ProfileStatus = {

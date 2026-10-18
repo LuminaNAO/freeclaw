@@ -8,6 +8,7 @@ import type {
   BrowserTab,
   ProfileStatus,
 } from "../browser/client.js";
+import { formatBrowserMemoryStatus } from "../browser/memory-cap.js";
 import { danger, info } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -159,6 +160,7 @@ export function registerBrowserManageCommands(
             `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
             `detectedPath: ${detectedDisplay}`,
             `profileColor: ${status.color}`,
+            ...(status.memory ? [`memory: ${formatBrowserMemoryStatus(status.memory)}`] : []),
             ...(status.detectError ? [`detectError: ${status.detectError}`] : []),
           ].join("\n"),
         );

@@ -533,6 +533,68 @@ describe("statusCommand", () => {
     expect(payload.gateway.error).toContain("SecretRef");
   });
 
+  it("shows browser RSS, cap, tabs and enforcement when the gateway is reachable (ARCH §2.5)", async () => {
+    const reachable = {
+      ok: true,
+      connectLatencyMs: 10,
+      error: null,
+      health: {},
+      status: {},
+      presence: [],
+    };
+    mockProbeGatewayResult(reachable);
+    const report = {
+      memoryLimitMb: 4096,
+      profiles: [
+        {
+          name: "openclaw",
+          driver: "openclaw",
+          running: true,
+          scope: "managed",
+          capMode: "kernel",
+          capMb: 4096,
+          kernelEnforced: true,
+          rssMb: 812,
+          tabCount: 2,
+        },
+        {
+          name: "user",
+          driver: "existing-session",
+          running: true,
+          scope: "external",
+          capMode: "none",
+          capMb: null,
+          kernelEnforced: false,
+          rssMb: null,
+          tabCount: null,
+        },
+      ],
+    };
+    mocks.callGateway.mockImplementation(async (opts: { method?: string; params?: unknown }) =>
+      opts.method === "browser.request" ? report : {},
+    );
+    try {
+      const joined = await runStatusAndGetJoinedLogs();
+      expect(joined).toContain("Browser");
+      expect(joined).toContain("812 MiB / 4096 MiB cap (kernel-enforced)");
+      expect(joined).toContain("external, not capped");
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "browser.request",
+          params: expect.objectContaining({ method: "GET", path: "/memory" }),
+        }),
+      );
+
+      mockProbeGatewayResult(reachable);
+      await statusCommand({ json: true }, runtime as never);
+      const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+      expect(payload.browserMemory).toEqual(report);
+    } finally {
+      mocks.callGateway.mockReset();
+      mocks.callGateway.mockResolvedValue({});
+    }
+  });
+
   it("surfaces channel runtime errors from the gateway", async () => {
     mockProbeGatewayResult({
       ok: true,
