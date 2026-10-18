@@ -124,6 +124,27 @@ Notes:
 - `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do
   not set `cdpUrl` for that driver.
 
+## Memory cap and tab hygiene
+
+Browsers OpenClaw launches (the managed `openclaw` profile and other local managed profiles) are bounded:
+
+- **Cap.** `browser.memoryLimitMb` (default `4096`) limits the whole browser, all processes included.
+  On Linux with a systemd user manager the browser is launched via
+  `systemd-run --user --scope -p MemoryMax=<n>M -p MemorySwapMax=0 --`, so the kernel enforces it.
+  Elsewhere, or without `systemd-run`, there is no kernel cap and status reports the cap as soft.
+  `0` disables the cap and the watchdog.
+- **Tab hygiene.** Tabs the agent opens are closed when the agent turn that opened them ends, unless
+  it passed `keep: true` to `action=open`. At most `browser.maxTabs` (default `8`) pages stay open;
+  opening one more closes the oldest page not marked `keep`.
+- **Watchdog.** Every 60 s, if the browser's RSS is above 90% of the cap, idle tabs are closed oldest
+  first (never the tab an active tool call is using) until it is under 75%. If it is still above the
+  cap after that, the browser restarts. The profile stays on disk, so cookies and logins survive.
+  Each action writes one log line.
+- **Visibility.** `openclaw status` and `openclaw browser status` show browser RSS, the cap, the open
+  tab count, and whether the cap is kernel-enforced.
+- **Scope.** Only browsers OpenClaw launches. Attached browsers (`user`, `chrome-relay`, remote CDP,
+  or a separate browser service) are never touched; status reports them as "external, not capped".
+
 ## Use Brave (or another Chromium-based browser)
 
 If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),

@@ -150,27 +150,35 @@ export async function runBrowserMemoryWatchdogOnce(
     if (!running || getBrowserProfileCapabilities(profileState.profile).mode !== "local-managed") {
       continue;
     }
-    const ops = deps.forProfile(name);
-    const cdpUrl = profileState.profile.cdpUrl;
-    const result = await runBrowserMemoryWatchdogCheck(
-      {
-        profileName: name,
-        limitMb,
-        measureRssBytes: () => measure(running.pid),
-        listPageTabs: async () =>
-          (await ops.listTabs()).filter((tab) => (tab.type ?? "page") === "page"),
-        tabMeta: profileState.tabMeta,
-        isInUse: (targetId) => isTabInUse(cdpUrl, targetId),
-        closeTab: (targetId) => ops.closeTab(targetId),
-        restart: async () => {
-          await ops.stopRunningBrowser();
-          profileState.tabMeta?.clear();
-          profileState.lastTargetId = null;
-          await ops.ensureBrowserAvailable();
+    let result: BrowserMemoryWatchdogResult;
+    try {
+      const ops = deps.forProfile(name);
+      const cdpUrl = profileState.profile.cdpUrl;
+      result = await runBrowserMemoryWatchdogCheck(
+        {
+          profileName: name,
+          limitMb,
+          measureRssBytes: () => measure(running.pid),
+          listPageTabs: async () =>
+            (await ops.listTabs()).filter((tab) => (tab.type ?? "page") === "page"),
+          tabMeta: profileState.tabMeta,
+          isInUse: (targetId) => isTabInUse(cdpUrl, targetId),
+          closeTab: (targetId) => ops.closeTab(targetId),
+          restart: async () => {
+            await ops.stopRunningBrowser();
+            profileState.tabMeta?.clear();
+            profileState.lastTargetId = null;
+            await ops.ensureBrowserAvailable();
+          },
         },
-      },
-      { logger: deps.logger, settleMs: deps.settleMs },
-    );
+        { logger: deps.logger, settleMs: deps.settleMs },
+      );
+    } catch (err) {
+      (deps.logger ?? log).warn(
+        `browser memory watchdog: profile "${name}" check failed: ${String(err)}`,
+      );
+      continue;
+    }
     profileState.memorySample = { rssBytes: result.rssBytes, sampledAt: Date.now() };
     results.set(name, result);
   }

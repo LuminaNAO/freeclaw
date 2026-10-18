@@ -2364,6 +2364,8 @@ See [Plugins](/tools/plugin).
     // noSandbox: false,
     // extraArgs: [],
     // relayBindHost: "0.0.0.0", // only when the extension relay must be reachable across namespaces (for example WSL2)
+    // memoryLimitMb: 4096, // whole-browser memory cap; 0 = no cap
+    // maxTabs: 8,
     // executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     // attachOnly: false,
   },
@@ -2381,6 +2383,8 @@ See [Plugins](/tools/plugin).
 - `extraArgs` appends extra launch flags to local Chromium startup (for example
   `--disable-gpu`, window sizing, or debug flags).
 - `relayBindHost` changes where the Chrome extension relay listens. Leave unset for loopback-only access; set an explicit non-loopback bind address such as `0.0.0.0` only when the relay must cross a namespace boundary (for example WSL2) and the host network is already trusted.
+- `memoryLimitMb` (default `4096`) caps the memory of every browser OpenClaw launches, across all its processes. On Linux with a systemd user manager the browser runs in a `systemd-run --user --scope -p MemoryMax=...` scope (kernel-enforced); elsewhere only the watchdog enforces it. `0` disables the cap and the watchdog. See [Browser memory cap](/tools/browser#memory-cap-and-tab-hygiene).
+- `maxTabs` (default `8`) caps open pages in a launched browser; opening one more closes the oldest page not opened with `keep: true`.
 
 ---
 
