@@ -457,6 +457,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.imageMaxDimensionPx": "Image Max Dimension (px)",
   "agents.defaults.timeoutSeconds": "Run Time Limit (seconds)",
   "agents.defaults.idleTimeoutSeconds": "Stall Timeout (seconds)",
+  "agents.defaults.reasoningDefault": "Reasoning Display Default",
+  "agents.list[].reasoningDefault": "Agent Reasoning Display Default",
   "agents.defaults.humanDelay.mode": "Human Delay Mode",
   "agents.defaults.humanDelay.minMs": "Human Delay Min (ms)",
   "agents.defaults.humanDelay.maxMs": "Human Delay Max (ms)",

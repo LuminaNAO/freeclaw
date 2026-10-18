@@ -70,6 +70,8 @@ export type AgentConfig = {
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
+  /** Per-agent reasoning display default (overrides agents.defaults.reasoningDefault). */
+  reasoningDefault?: AgentDefaultsConfig["reasoningDefault"];
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;

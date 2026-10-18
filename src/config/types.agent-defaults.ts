@@ -196,6 +196,11 @@ export type AgentDefaultsConfig = {
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+  /**
+   * Default reasoning display level when no /reasoning directive or session level is set.
+   * Unset: off on messaging channels; model-catalog default on non-channel surfaces (CLI, TUI, gateway agent).
+   */
+  reasoningDefault?: "on" | "off" | "stream";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
