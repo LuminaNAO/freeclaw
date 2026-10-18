@@ -12,6 +12,8 @@ import {
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
+  DEFAULT_BROWSER_MAX_TABS,
+  DEFAULT_BROWSER_MEMORY_LIMIT_MB,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
 import { CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
@@ -37,6 +39,10 @@ export type ResolvedBrowserConfig = {
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
   relayBindHost?: string;
+  /** Memory cap (MiB) for each launched browser tree; 0 = no cap and no watchdog. */
+  memoryLimitMb: number;
+  /** Maximum open pages per launched browser. */
+  maxTabs: number;
 };
 
 export type ResolvedBrowserProfile = {
@@ -65,6 +71,22 @@ function normalizeHexColor(raw: string | undefined) {
 function normalizeTimeoutMs(raw: number | undefined, fallback: number) {
   const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
   return value < 0 ? fallback : value;
+}
+
+function normalizeMemoryLimitMb(raw: number | undefined): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_BROWSER_MEMORY_LIMIT_MB;
+  }
+  const value = Math.floor(raw);
+  return value < 0 ? DEFAULT_BROWSER_MEMORY_LIMIT_MB : value;
+}
+
+function normalizeMaxTabs(raw: number | undefined): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_BROWSER_MAX_TABS;
+  }
+  const value = Math.floor(raw);
+  return value < 1 ? DEFAULT_BROWSER_MAX_TABS : value;
 }
 
 function resolveCdpPortRangeStart(
@@ -313,6 +335,8 @@ export function resolveBrowserConfig(
     : [];
   const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
   const relayBindHost = cfg?.relayBindHost?.trim() || undefined;
+  const memoryLimitMb = normalizeMemoryLimitMb(cfg?.memoryLimitMb);
+  const maxTabs = normalizeMaxTabs(cfg?.maxTabs);
 
   return {
     enabled,
@@ -335,6 +359,8 @@ export function resolveBrowserConfig(
     ssrfPolicy,
     extraArgs,
     relayBindHost,
+    memoryLimitMb,
+    maxTabs,
   };
 }
 

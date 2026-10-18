@@ -185,6 +185,16 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("accepts browser.memoryLimitMb (0 = no cap) and browser.maxTabs", () => {
+    expect(validateConfigObject({ browser: { memoryLimitMb: 4096, maxTabs: 8 } }).ok).toBe(true);
+    expect(validateConfigObject({ browser: { memoryLimitMb: 0 } }).ok).toBe(true);
+  });
+
+  it("rejects negative browser.memoryLimitMb and non-positive browser.maxTabs", () => {
+    expect(validateConfigObject({ browser: { memoryLimitMb: -1 } }).ok).toBe(false);
+    expect(validateConfigObject({ browser: { maxTabs: 0 } }).ok).toBe(false);
+  });
+
   it("accepts signal accountUuid for loop protection", () => {
     const res = validateConfigObject({
       channels: {

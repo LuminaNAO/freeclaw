@@ -50,6 +50,8 @@ function makeState(): BrowserServerState {
         },
       },
       extraArgs: [],
+      memoryLimitMb: 4096,
+      maxTabs: 8,
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     },
     profiles: new Map(),

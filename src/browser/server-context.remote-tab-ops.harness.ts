@@ -24,6 +24,8 @@ export function makeState(
       remoteCdpHandshakeTimeoutMs: 3000,
       evaluateEnabled: false,
       extraArgs: [],
+      memoryLimitMb: 4096,
+      maxTabs: 8,
       color: "#FF4500",
       headless: true,
       noSandbox: false,

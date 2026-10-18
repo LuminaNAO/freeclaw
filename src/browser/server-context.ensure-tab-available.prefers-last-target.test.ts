@@ -21,6 +21,8 @@ function makeBrowserState(): BrowserServerState {
       remoteCdpTimeoutMs: 1500,
       remoteCdpHandshakeTimeoutMs: 3000,
       extraArgs: [],
+      memoryLimitMb: 4096,
+      maxTabs: 8,
       color: "#FF4500",
       headless: true,
       noSandbox: false,

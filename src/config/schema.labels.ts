@@ -120,6 +120,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.cdpPortRangeStart": "Browser CDP Port Range Start",
   "browser.defaultProfile": "Browser Default Profile",
   "browser.relayBindHost": "Browser Relay Bind Address",
+  "browser.memoryLimitMb": "Browser Memory Limit (MiB)",
+  "browser.maxTabs": "Browser Max Open Tabs",
   "browser.profiles": "Browser Profiles",
   "browser.profiles.*.cdpPort": "Browser Profile CDP Port",
   "browser.profiles.*.cdpUrl": "Browser Profile CDP URL",

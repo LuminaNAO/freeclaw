@@ -19,6 +19,8 @@ function buildResolvedConfig(): ResolvedBrowserConfig {
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
     extraArgs: [],
+    memoryLimitMb: 4096,
+    maxTabs: 8,
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath: undefined,
     headless: true,

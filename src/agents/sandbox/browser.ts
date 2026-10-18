@@ -3,6 +3,8 @@ import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
 import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
+  DEFAULT_BROWSER_MAX_TABS,
+  DEFAULT_BROWSER_MEMORY_LIMIT_MB,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "../../browser/constants.js";
@@ -87,6 +89,8 @@ function buildSandboxBrowserResolvedConfig(params: {
     attachOnly: true,
     defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
     extraArgs: [],
+    memoryLimitMb: DEFAULT_BROWSER_MEMORY_LIMIT_MB,
+    maxTabs: DEFAULT_BROWSER_MAX_TABS,
     profiles: {
       [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
         cdpPort: params.cdpPort,

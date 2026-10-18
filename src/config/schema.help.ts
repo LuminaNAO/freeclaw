@@ -254,6 +254,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
   "browser.relayBindHost":
     "Bind IP address for the Chrome extension relay listener. Leave unset for loopback-only access, or set an explicit non-loopback IP such as 0.0.0.0 only when the relay must be reachable across network namespaces (for example WSL2) and the surrounding network is already trusted.",
+  "browser.memoryLimitMb":
+    "Memory limit in MiB for each browser freeclaw launches, covering the whole process tree (default 4096). On Linux with a systemd user manager it is kernel-enforced via a systemd-run scope; elsewhere only the watchdog enforces it (soft cap). Set 0 to disable the cap and the watchdog.",
+  "browser.maxTabs":
+    "Maximum open pages in a browser freeclaw launches (default 8). Opening one more closes the oldest page the agent did not open with keep: true.",
   "browser.profiles":
     "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
   "browser.profiles.*.cdpPort":

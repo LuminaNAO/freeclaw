@@ -72,4 +72,15 @@ export type BrowserConfig = {
    * the relay must be reachable from a different network namespace.
    */
   relayBindHost?: string;
+  /**
+   * Memory limit (MiB) for each browser freeclaw launches, covering all of its processes.
+   * On Linux with a systemd user manager the kernel enforces it; elsewhere a watchdog does.
+   * Default: 4096. Set 0 to disable the cap and the watchdog.
+   */
+  memoryLimitMb?: number;
+  /**
+   * Maximum open pages in a browser freeclaw launches. Opening one more closes the oldest
+   * page the agent did not mark keep. Default: 8.
+   */
+  maxTabs?: number;
 };

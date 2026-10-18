@@ -401,6 +401,8 @@ export const OpenClawSchema = z
           .optional(),
         extraArgs: z.array(z.string()).optional(),
         relayBindHost: z.union([z.string().ipv4(), z.string().ipv6()]).optional(),
+        memoryLimitMb: z.number().int().min(0).optional(),
+        maxTabs: z.number().int().min(1).optional(),
       })
       .strict()
       .optional(),

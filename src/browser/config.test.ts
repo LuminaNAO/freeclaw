@@ -196,6 +196,25 @@ describe("browser config", () => {
     expect(profile?.cdpIsLoopback).toBe(true);
   });
 
+  it("defaults the memory cap to 4 GiB and maxTabs to 8 (ARCH §2.1, §2.3)", () => {
+    const resolved = resolveBrowserConfig(undefined);
+    expect(resolved.memoryLimitMb).toBe(4096);
+    expect(resolved.maxTabs).toBe(8);
+  });
+
+  it("accepts memoryLimitMb 0 as no cap and custom maxTabs", () => {
+    const resolved = resolveBrowserConfig({ memoryLimitMb: 0, maxTabs: 3 });
+    expect(resolved.memoryLimitMb).toBe(0);
+    expect(resolved.maxTabs).toBe(3);
+  });
+
+  it("falls back to defaults for invalid memoryLimitMb / maxTabs", () => {
+    const resolved = resolveBrowserConfig({ memoryLimitMb: -5, maxTabs: 0 });
+    expect(resolved.memoryLimitMb).toBe(4096);
+    expect(resolved.maxTabs).toBe(8);
+    expect(resolveBrowserConfig({ memoryLimitMb: 2048.7 }).memoryLimitMb).toBe(2048);
+  });
+
   it("trims relayBindHost when configured", () => {
     const resolved = resolveBrowserConfig({
       relayBindHost: " 0.0.0.0 ",
