@@ -340,7 +340,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       model: raw.qwen3?.model?.trim() || "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
       instruct:
         raw.qwen3?.instruct?.trim() ||
-        "A beautiful, elegant female voice with warmth and sensuality. Rich timbre, smooth delivery, intimate and sultry but refined. Slightly lower register with a velvety texture.",
+        "A beautiful, elegant female voice with warmth. Rich timbre, smooth and expressive delivery, slightly lower register with a velvety texture.",
       language: raw.qwen3?.language?.trim() || "English",
       device: raw.qwen3?.device?.trim() || "cuda:0",
       maxNewTokens: raw.qwen3?.maxNewTokens ?? 2048,
