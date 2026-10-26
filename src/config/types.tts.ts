@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge" | "qwen3";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "qwen3" | "kokoro";
 
 export type TtsMode = "final" | "all";
 
@@ -97,6 +97,23 @@ export type TtsConfig = {
     /** Local Python entrypoint for Qwen3-TTS generation. */
     scriptPath?: string;
     /** API request timeout (ms). */
+    timeoutMs?: number;
+  };
+  /** Kokoro-82M local configuration (CPU-friendly, fully on-device, no API key). */
+  kokoro?: {
+    /** Enable Kokoro local inference. */
+    enabled?: boolean;
+    /** Local Python entrypoint for Kokoro generation (env fallback: KOKORO_TTS_SCRIPT). */
+    scriptPath?: string;
+    /** Python interpreter (env fallback: KOKORO_TTS_PYTHON, then PYTHON, then python3). */
+    python?: string;
+    /** Kokoro voice id (default: af_heart). */
+    voice?: string;
+    /** Kokoro language code (default: "a" = American English; "b" = British English). */
+    lang?: string;
+    /** Speech speed (0.5-2.0, default 1.0). */
+    speed?: number;
+    /** Script timeout (ms, default 60000). */
     timeoutMs?: number;
   };
   /** Optional path for local TTS user preferences JSON. */

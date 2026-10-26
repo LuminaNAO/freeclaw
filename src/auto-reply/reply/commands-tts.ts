@@ -5,6 +5,7 @@ import {
   getTtsProvider,
   isSummarizationEnabled,
   isTtsEnabled,
+  isSupportedTtsProvider,
   isTtsProviderConfigured,
   resolveTtsConfig,
   resolveTtsPrefsPath,
@@ -53,13 +54,14 @@ function ttsUsage(): ReplyPayload {
       `• /tts summary [on|off] — View/change auto-summary\n` +
       `• /tts audio <text> — Generate audio from text\n\n` +
       `**Providers:**\n` +
-      `• qwen3 — Local Qwen3 TTS (requires script path)\n\n` +
+      `• qwen3 — Local Qwen3 TTS (GPU, requires script path)\n` +
+      `• kokoro — Local Kokoro TTS (CPU-friendly, requires script path)\n\n` +
       `**Text Limit (default: 1500, max: 4096):**\n` +
       `When text exceeds the limit:\n` +
       `• Summary ON: AI summarizes, then generates audio\n` +
       `• Summary OFF: Truncates text, then generates audio\n\n` +
       `**Examples:**\n` +
-      `/tts provider qwen3\n` +
+      `/tts provider kokoro\n` +
       `/tts limit 2000\n` +
       `/tts audio Hello, this is a test!`,
   };
@@ -157,6 +159,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     const currentProvider = getTtsProvider(config, prefsPath);
     if (!args.trim()) {
       const hasQwen3 = isTtsProviderConfigured(config, "qwen3");
+      const hasKokoro = isTtsProviderConfigured(config, "kokoro");
       return {
         shouldContinue: false,
         reply: {
@@ -164,13 +167,14 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
             `🎙️ TTS provider\n` +
             `Primary: ${currentProvider}\n` +
             `Qwen3 local: ${hasQwen3 ? "✅" : "❌"}\n` +
-            `Usage: /tts provider qwen3`,
+            `Kokoro local: ${hasKokoro ? "✅" : "❌"}\n` +
+            `Usage: /tts provider qwen3|kokoro`,
         },
       };
     }
 
     const requested = args.trim().toLowerCase();
-    if (requested !== "qwen3") {
+    if (!isSupportedTtsProvider(requested)) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 

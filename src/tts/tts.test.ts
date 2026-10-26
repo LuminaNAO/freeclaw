@@ -639,7 +639,7 @@ describe("tts", () => {
     it("rejects legacy providers", () => {
       const prefsPath = path.join(os.tmpdir(), `tts-prefs-${Date.now()}.json`);
       expect(() => setTtsProvider(prefsPath, "edge")).toThrow(
-        "Only qwen3 is supported as a TTS provider",
+        "Only qwen3 or kokoro are supported as TTS providers",
       );
     });
   });

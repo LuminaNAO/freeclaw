@@ -1,6 +1,7 @@
 import { loadConfig } from "../../config/config.js";
 import {
   getTtsProvider,
+  isSupportedTtsProvider,
   isTtsEnabled,
   isTtsProviderConfigured,
   resolveTtsAutoMode,
@@ -8,7 +9,9 @@ import {
   resolveTtsPrefsPath,
   setTtsEnabled,
   setTtsProvider,
+  resolveTtsProviderOrder,
   textToSpeech,
+  TTS_PROVIDERS,
 } from "../../tts/tts.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
@@ -22,14 +25,18 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const prefsPath = resolveTtsPrefsPath(config);
       const provider = getTtsProvider(config, prefsPath);
       const autoMode = resolveTtsAutoMode({ config, prefsPath });
+      const fallbackProviders = resolveTtsProviderOrder(provider)
+        .slice(1)
+        .filter((id) => isTtsProviderConfigured(config, id));
       respond(true, {
         enabled: isTtsEnabled(config, prefsPath),
         auto: autoMode,
         provider,
-        fallbackProvider: null,
-        fallbackProviders: [],
+        fallbackProvider: fallbackProviders[0] ?? null,
+        fallbackProviders,
         prefsPath,
         qwen3Configured: isTtsProviderConfigured(config, "qwen3"),
+        kokoroConfigured: isTtsProviderConfigured(config, "kokoro"),
       });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
@@ -91,11 +98,14 @@ export const ttsHandlers: GatewayRequestHandlers = {
   },
   "tts.setProvider": async ({ params, respond }) => {
     const provider = typeof params.provider === "string" ? params.provider.trim() : "";
-    if (provider !== "qwen3") {
+    if (!isSupportedTtsProvider(provider)) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Invalid provider. Use qwen3."),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Invalid provider. Use ${TTS_PROVIDERS.join(" or ")}.`,
+        ),
       );
       return;
     }
@@ -121,6 +131,12 @@ export const ttsHandlers: GatewayRequestHandlers = {
             name: "Qwen3 TTS",
             configured: isTtsProviderConfigured(config, "qwen3"),
             models: [config.qwen3.model],
+          },
+          {
+            id: "kokoro",
+            name: "Kokoro TTS",
+            configured: isTtsProviderConfigured(config, "kokoro"),
+            models: ["Kokoro-82M"],
           },
         ],
         active: getTtsProvider(config, prefsPath),

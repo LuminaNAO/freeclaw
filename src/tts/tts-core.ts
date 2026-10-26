@@ -157,7 +157,7 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "qwen3") {
+            if (rawValue === "qwen3" || rawValue === "kokoro") {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -718,6 +718,88 @@ export async function edgeTTS(params: {
   await tts.ttsPromise(text, outputPath);
 }
 
+/**
+ * Run a local TTS script that writes a WAV file to `outputPath`.
+ * Shared by the qwen3 and kokoro providers: spawn, collect stderr, enforce the
+ * timeout (SIGTERM, then SIGKILL after a short grace period) and validate output.
+ */
+export async function runLocalTtsScript(params: {
+  label: string;
+  python: string;
+  scriptPath: string;
+  args: string[];
+  outputPath: string;
+  timeoutMs: number;
+}): Promise<void> {
+  const { label, python, scriptPath, args, outputPath, timeoutMs } = params;
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(python, [scriptPath, ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stderr = "";
+    child.stdout?.on("data", () => {
+      // drain stdout so the child never blocks on a full pipe
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+      if (stderr.length > 8192) {
+        stderr = stderr.slice(-4096);
+      }
+    });
+
+    let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    const finish = (err?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    };
+
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }, 2000);
+      killTimer.unref();
+      finish(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    child.on("close", (code, signal) => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
+      if (settled) {
+        return;
+      }
+      if (code !== 0) {
+        const detail = stderr.trim().slice(-500);
+        const status = code === null ? `signal ${signal ?? "unknown"}` : `exit ${code}`;
+        finish(new Error(`${label} failed (${status}): ${detail}`));
+      } else if (!existsSync(outputPath)) {
+        finish(new Error(`${label} did not create output file: ${outputPath}`));
+      } else if (statSync(outputPath).size <= 0) {
+        finish(new Error(`${label} created an empty output file: ${outputPath}`));
+      } else {
+        finish();
+      }
+    });
+
+    child.on("error", (err) => {
+      finish(err);
+    });
+  });
+}
+
 export async function qwen3TTS(params: {
   text: string;
   outputPath: string;
@@ -731,66 +813,62 @@ export async function qwen3TTS(params: {
     throw new Error("Qwen3-TTS script not configured (set qwen3.scriptPath or QWEN3_TTS_SCRIPT)");
   }
 
-  return new Promise<void>((resolve, reject) => {
-    const args = [
-      "--text",
-      text,
-      "--output",
-      outputPath,
-      "--instruct",
-      config.instruct ?? "",
-      "--language",
-      config.language ?? "English",
-      "--device",
-      config.device ?? "cuda:0",
-      "--model",
-      config.model ?? "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-      "--max-new-tokens",
-      String(config.maxNewTokens ?? 2048),
-    ];
+  const args = [
+    "--text",
+    text,
+    "--output",
+    outputPath,
+    "--instruct",
+    config.instruct ?? "",
+    "--language",
+    config.language ?? "English",
+    "--device",
+    config.device ?? "cuda:0",
+    "--model",
+    config.model ?? "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "--max-new-tokens",
+    String(config.maxNewTokens ?? 2048),
+  ];
 
-    const pythonPath =
-      process.env.QWEN3_TTS_PYTHON?.trim() || process.env.PYTHON?.trim() || "python3";
-    const child = spawn(pythonPath, [scriptPath, ...args], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+  const python = process.env.QWEN3_TTS_PYTHON?.trim() || process.env.PYTHON?.trim() || "python3";
+  await runLocalTtsScript({
+    label: "Qwen3-TTS",
+    python,
+    scriptPath,
+    args,
+    outputPath,
+    timeoutMs,
+  });
+}
 
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-      reject(new Error(`Qwen3-TTS timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        return;
-      }
-      if (code !== 0) {
-        reject(new Error(`Qwen3-TTS failed (exit ${code}): ${stderr.trim().slice(-500)}`));
-      } else if (!existsSync(outputPath)) {
-        reject(new Error(`Qwen3-TTS did not create output file: ${outputPath}`));
-      } else if (statSync(outputPath).size <= 0) {
-        reject(new Error(`Qwen3-TTS created an empty output file: ${outputPath}`));
-      } else {
-        resolve();
-      }
-    });
-
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
+export async function kokoroTTS(params: {
+  text: string;
+  outputPath: string;
+  config: ResolvedTtsConfig["kokoro"];
+  timeoutMs: number;
+}): Promise<void> {
+  const { text, outputPath, config, timeoutMs } = params;
+  if (!config.scriptPath) {
+    throw new Error("scriptPath not configured");
+  }
+  const args = [
+    "--text",
+    text,
+    "--output",
+    outputPath,
+    "--voice",
+    config.voice,
+    "--lang",
+    config.lang,
+    "--speed",
+    String(config.speed),
+  ];
+  await runLocalTtsScript({
+    label: "Kokoro-TTS",
+    python: config.python,
+    scriptPath: config.scriptPath,
+    args,
+    outputPath,
+    timeoutMs,
   });
 }

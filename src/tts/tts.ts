@@ -39,6 +39,7 @@ import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   resolveOpenAITtsInstructions,
+  kokoroTTS,
   openaiTTS,
   parseTtsDirectives,
   qwen3TTS,
@@ -60,6 +61,10 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_KOKORO_VOICE = "af_heart";
+const DEFAULT_KOKORO_LANG = "a";
+const DEFAULT_KOKORO_SPEED = 1.0;
+const DEFAULT_KOKORO_TIMEOUT_MS = 60_000;
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -145,6 +150,15 @@ export type ResolvedTtsConfig = {
     maxNewTokens: number;
     scriptPath?: string;
     timeoutMs?: number;
+  };
+  kokoro: {
+    enabled: boolean;
+    scriptPath?: string;
+    python: string;
+    voice: string;
+    lang: string;
+    speed: number;
+    timeoutMs: number;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -348,6 +362,20 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
         raw.qwen3?.scriptPath?.trim() || process.env.QWEN3_TTS_SCRIPT?.trim() || undefined,
       timeoutMs: raw.qwen3?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     },
+    kokoro: {
+      enabled: raw.kokoro?.enabled ?? false,
+      scriptPath:
+        raw.kokoro?.scriptPath?.trim() || process.env.KOKORO_TTS_SCRIPT?.trim() || undefined,
+      python:
+        raw.kokoro?.python?.trim() ||
+        process.env.KOKORO_TTS_PYTHON?.trim() ||
+        process.env.PYTHON?.trim() ||
+        "python3",
+      voice: raw.kokoro?.voice?.trim() || DEFAULT_KOKORO_VOICE,
+      lang: raw.kokoro?.lang?.trim() || DEFAULT_KOKORO_LANG,
+      speed: raw.kokoro?.speed ?? DEFAULT_KOKORO_SPEED,
+      timeoutMs: raw.kokoro?.timeoutMs ?? DEFAULT_KOKORO_TIMEOUT_MS,
+    },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -471,12 +499,20 @@ export function setTtsEnabled(prefsPath: string, enabled: boolean): void {
   setTtsAutoMode(prefsPath, enabled ? "always" : "off");
 }
 
+export const TTS_PROVIDERS = ["qwen3", "kokoro"] as const;
+
+export type LocalTtsProvider = (typeof TTS_PROVIDERS)[number];
+
+export function isSupportedTtsProvider(value: unknown): value is LocalTtsProvider {
+  return typeof value === "string" && (TTS_PROVIDERS as readonly string[]).includes(value);
+}
+
 export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): TtsProvider {
   const prefs = readPrefs(prefsPath);
-  if (prefs.tts?.provider === "qwen3") {
+  if (isSupportedTtsProvider(prefs.tts?.provider)) {
     return prefs.tts.provider;
   }
-  if (config.providerSource === "config" && config.provider === "qwen3") {
+  if (config.providerSource === "config" && isSupportedTtsProvider(config.provider)) {
     return config.provider;
   }
 
@@ -484,8 +520,8 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
 }
 
 export function setTtsProvider(prefsPath: string, provider: TtsProvider): void {
-  if (provider !== "qwen3") {
-    throw new Error("Only qwen3 is supported as a TTS provider");
+  if (!isSupportedTtsProvider(provider)) {
+    throw new Error(`Only ${TTS_PROVIDERS.join(" or ")} are supported as TTS providers`);
   }
   updatePrefs(prefsPath, (prefs) => {
     prefs.tts = { ...prefs.tts, provider };
@@ -553,15 +589,23 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["qwen3"] as const;
-
-export function resolveTtsProviderOrder(_primary: TtsProvider): TtsProvider[] {
-  return [...TTS_PROVIDERS];
+/**
+ * Primary provider first, then the remaining local providers as fallbacks.
+ * Unsupported (legacy cloud) providers never appear in the order.
+ */
+export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
+  if (!isSupportedTtsProvider(primary)) {
+    return [...TTS_PROVIDERS];
+  }
+  return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
 }
 
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "qwen3") {
     return config.qwen3.enabled && Boolean(config.qwen3.scriptPath);
+  }
+  if (provider === "kokoro") {
+    return config.kokoro.enabled && Boolean(config.kokoro.scriptPath);
   }
   return false;
 }
@@ -618,6 +662,73 @@ async function convertWavToDefaultAudio(params: {
     ],
     { timeoutMs: Math.max(1000, Math.min(params.timeoutMs, 120_000)) },
   );
+}
+
+function resolveLocalProviderSkipReason(
+  config: ResolvedTtsConfig,
+  provider: "qwen3" | "kokoro",
+): string | undefined {
+  const providerConfig = config[provider];
+  if (!providerConfig.enabled) {
+    return "disabled";
+  }
+  if (!providerConfig.scriptPath) {
+    return "scriptPath not configured";
+  }
+  return undefined;
+}
+
+/**
+ * Run a local TTS script to a temporary WAV, then convert it to opus (voice-compatible
+ * channels) or mp3. The temp dir is scheduled for cleanup on success and removed on failure.
+ */
+async function synthesizeWithLocalScript(params: {
+  provider: "qwen3" | "kokoro";
+  text: string;
+  config: ResolvedTtsConfig;
+  voiceCompatible: boolean;
+}): Promise<{ audioPath: string; outputFormat: string }> {
+  const { provider, text, config } = params;
+  const tempRoot = resolvePreferredOpenClawTmpDir();
+  mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+  const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+  const wavPath = path.join(tempDir, `voice-${Date.now()}.wav`);
+  const timeoutMs =
+    provider === "qwen3" ? (config.qwen3.timeoutMs ?? DEFAULT_TIMEOUT_MS) : config.kokoro.timeoutMs;
+
+  try {
+    if (provider === "qwen3") {
+      await qwen3TTS({ text, outputPath: wavPath, config: config.qwen3, timeoutMs });
+    } else {
+      await kokoroTTS({ text, outputPath: wavPath, config: config.kokoro, timeoutMs });
+    }
+
+    let audioPath: string;
+    let outputFormat: string;
+    if (params.voiceCompatible) {
+      audioPath = path.join(tempDir, `voice-${Date.now()}.opus`);
+      await convertWavToVoiceCompatibleAudio({
+        inputPath: wavPath,
+        outputPath: audioPath,
+        timeoutMs,
+      });
+      outputFormat = "opus";
+    } else {
+      audioPath = path.join(tempDir, `voice-${Date.now()}.mp3`);
+      await convertWavToDefaultAudio({ inputPath: wavPath, outputPath: audioPath, timeoutMs });
+      outputFormat = "mp3";
+    }
+
+    scheduleCleanup(tempDir);
+    return { audioPath, outputFormat };
+  } catch (err) {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+    throw err;
+  }
 }
 
 function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
@@ -760,72 +871,27 @@ export async function textToSpeech(params: {
         };
       }
 
-      // Qwen3-TTS: fully local, no API key needed
-      if (provider === "qwen3") {
-        if (!config.qwen3.enabled) {
-          errors.push("qwen3: disabled");
+      // Local script providers (qwen3, kokoro): fully on-device, no API key needed.
+      if (provider === "qwen3" || provider === "kokoro") {
+        const skipReason = resolveLocalProviderSkipReason(config, provider);
+        if (skipReason) {
+          errors.push(`${provider}: ${skipReason}`);
           continue;
         }
-        const qwen3ScriptPath = config.qwen3.scriptPath;
-        if (!qwen3ScriptPath) {
-          errors.push("qwen3: scriptPath not configured");
-          continue;
-        }
-
-        const tempRoot = resolvePreferredOpenClawTmpDir();
-        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
-        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-        const wavPath = path.join(tempDir, `voice-${Date.now()}.wav`);
-        let audioPath = wavPath;
-        let outputFormat = "wav";
-        const qwenTimeoutMs = config.qwen3.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-        try {
-          await qwen3TTS({
-            text: params.text,
-            outputPath: wavPath,
-            config: config.qwen3,
-            timeoutMs: qwenTimeoutMs,
-          });
-
-          if (output.voiceCompatible) {
-            const opusPath = path.join(tempDir, `voice-${Date.now()}.opus`);
-            await convertWavToVoiceCompatibleAudio({
-              inputPath: wavPath,
-              outputPath: opusPath,
-              timeoutMs: qwenTimeoutMs,
-            });
-            audioPath = opusPath;
-            outputFormat = "opus";
-          } else {
-            const mp3Path = path.join(tempDir, `voice-${Date.now()}.mp3`);
-            await convertWavToDefaultAudio({
-              inputPath: wavPath,
-              outputPath: mp3Path,
-              timeoutMs: qwenTimeoutMs,
-            });
-            audioPath = mp3Path;
-            outputFormat = "mp3";
-          }
-
-          scheduleCleanup(tempDir);
-
-          return {
-            success: true,
-            audioPath,
-            latencyMs: Date.now() - providerStart,
-            provider,
-            outputFormat,
-            voiceCompatible: output.voiceCompatible,
-          };
-        } catch (err) {
-          try {
-            rmSync(tempDir, { recursive: true, force: true });
-          } catch {
-            // ignore cleanup errors
-          }
-          throw err;
-        }
+        const local = await synthesizeWithLocalScript({
+          provider,
+          text: params.text,
+          config,
+          voiceCompatible: output.voiceCompatible,
+        });
+        return {
+          success: true,
+          audioPath: local.audioPath,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: local.outputFormat,
+          voiceCompatible: output.voiceCompatible,
+        };
       }
 
       const apiKey = resolveTtsApiKey(config, provider);
@@ -924,8 +990,8 @@ export async function textToSpeechTelephony(params: {
         errors.push("edge: unsupported for telephony");
         continue;
       }
-      if (provider === "qwen3") {
-        errors.push("qwen3: unsupported for telephony");
+      if (provider === "qwen3" || provider === "kokoro") {
+        errors.push(`${provider}: unsupported for telephony`);
         continue;
       }
 
