@@ -2058,6 +2058,56 @@ describe("handleCommands /tts", () => {
     });
   });
 
+  it("allows kokoro as a TTS provider", async () => {
+    const prefsPath = path.join(testWorkspaceDir, "tts-kokoro.json");
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: { tts: { prefsPath } },
+    } as OpenClawConfig;
+
+    const result = await handleCommands(buildParams("/tts provider kokoro", cfg));
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("TTS provider set to kokoro");
+    await expect(readJsonFile<{ tts?: { provider?: string } }>(prefsPath)).resolves.toMatchObject({
+      tts: { provider: "kokoro" },
+    });
+  });
+
+  it("lists both local providers for bare /tts provider", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: {
+        tts: {
+          prefsPath: path.join(testWorkspaceDir, "tts-provider-list.json"),
+          kokoro: { enabled: true, scriptPath: "/opt/kokoro/kokoro_tts.py" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await handleCommands(buildParams("/tts provider", cfg));
+
+    expect(result.reply?.text).toContain("Qwen3 local: ❌");
+    expect(result.reply?.text).toContain("Kokoro local: ✅");
+    expect(result.reply?.text).toContain("/tts provider qwen3|kokoro");
+  });
+
+  it.each(["openai", "elevenlabs"])("rejects the %s TTS provider", async (legacy) => {
+    const prefsPath = path.join(testWorkspaceDir, `tts-legacy-${legacy}.json`);
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: { tts: { prefsPath } },
+    } as OpenClawConfig;
+
+    const result = await handleCommands(buildParams(`/tts provider ${legacy}`, cfg));
+
+    expect(result.reply?.text).toContain("kokoro");
+    await expect(fs.access(prefsPath)).rejects.toThrow();
+  });
+
   it("rejects legacy TTS providers", async () => {
     const prefsPath = path.join(testWorkspaceDir, "tts-legacy-provider.json");
     const cfg = {

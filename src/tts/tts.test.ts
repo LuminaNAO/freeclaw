@@ -392,7 +392,7 @@ describe("tts", () => {
       expect(result.warnings).toContain('unsupported provider "elevenlabs"');
     });
 
-    it("accepts qwen3 as the only provider override", () => {
+    it("accepts qwen3 as a provider override", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input = "Hello [[tts:provider=qwen3]] world";
       const result = parseTtsDirectives(input, policy);
