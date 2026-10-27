@@ -80,9 +80,9 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expectInboundContextContract(capture.ctx!);
     const contextWithBody = capture.ctx!;
     // Sender should appear as prefix in group messages (no redundant [from:] suffix)
-    expect(String(contextWithBody.Body ?? "")).toContain("Alice");
-    expect(String(contextWithBody.Body ?? "")).toMatch(/Alice.*:/);
-    expect(String(contextWithBody.Body ?? "")).not.toContain("[from:");
+    expect(contextWithBody.Body ?? "").toContain("Alice");
+    expect(contextWithBody.Body ?? "").toMatch(/Alice.*:/);
+    expect(contextWithBody.Body ?? "").not.toContain("[from:");
   });
 
   it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {
@@ -239,6 +239,36 @@ describe("signal createSignalEventHandler inbound contract", () => {
     expect(capture.ctx?.MediaPaths).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
     expect(capture.ctx?.MediaUrls).toEqual(["/tmp/a1.dat", "/tmp/a2.dat"]);
     expect(capture.ctx?.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
+  });
+
+  it("keeps the <media:audio> placeholder body for an inbound voice note (voice ARCH §2.2)", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        ignoreAttachments: false,
+        fetchAttachment: async () => ({
+          path: "/tmp/voice-in.ogg",
+          contentType: "audio/ogg; codecs=opus",
+        }),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "",
+          attachments: [{ id: "v1", contentType: "audio/ogg; codecs=opus" }],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.Body).toContain("<media:audio>");
+    expect(capture.ctx?.MediaPath).toBe("/tmp/voice-in.ogg");
   });
 
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {

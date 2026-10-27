@@ -18,6 +18,12 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
+  /**
+   * Mark an audio attachment as a Signal voice note (voice ARCH §2.3). Sent as the signal-cli
+   * JSON-RPC `send` param `voiceNote` (the `--voice-note` flag, signal-cli >= 0.14.2). Ignored
+   * when the attachment is not audio.
+   */
+  voiceNote?: boolean;
 };
 
 export type SignalSendResult = {
@@ -117,7 +123,6 @@ export async function sendMessageSignal(
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const target = parseTarget(to);
   let message = text ?? "";
-  let messageFromPlaceholder = false;
   let textStyles: SignalTextStyleRange[] = [];
   const textMode = opts.textMode ?? "markdown";
   const maxBytes = (() => {
@@ -134,20 +139,19 @@ export async function sendMessageSignal(
   })();
 
   let attachments: string[] | undefined;
+  let voiceNote = false;
   if (opts.mediaUrl?.trim()) {
     const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
       localRoots: opts.mediaLocalRoots,
     });
     attachments = [resolved.path];
-    const kind = kindFromMime(resolved.contentType ?? undefined);
-    if (!message && kind) {
-      // Avoid sending an empty body when only attachments exist.
-      message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
-      messageFromPlaceholder = true;
-    }
+    // voice ARCH §2.2: an attachment-only message goes out with an empty body; Signal accepts
+    // it, and a `<media:kind>` placeholder would be shown to the reader as literal text.
+    voiceNote =
+      opts.voiceNote === true && kindFromMime(resolved.contentType ?? undefined) === "audio";
   }
 
-  if (message.trim() && !messageFromPlaceholder) {
+  if (message.trim()) {
     if (textMode === "plain") {
       textStyles = opts.textStyles ?? [];
     } else {
@@ -177,6 +181,9 @@ export async function sendMessageSignal(
   }
   if (attachments && attachments.length > 0) {
     params.attachments = attachments;
+  }
+  if (voiceNote) {
+    params.voiceNote = true;
   }
 
   const targetParams = buildTargetParams(target, {
