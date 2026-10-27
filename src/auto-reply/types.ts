@@ -82,6 +82,11 @@ export type ReplyPayload = {
   replyToCurrent?: boolean;
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  /**
+   * `text` is the spoken transcript of the attached audio (voice ARCH §2.4), not a tool summary:
+   * delivery keeps it as the media body even where tool summary text is suppressed.
+   */
+  textIsTranscript?: boolean;
   isError?: boolean;
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */

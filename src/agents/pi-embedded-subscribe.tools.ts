@@ -240,6 +240,35 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
   return [];
 }
 
+/**
+ * Media delivery hints a tool result carries alongside its `MEDIA:` paths: the
+ * `[[audio_as_voice]]` tag and, for generated speech, the spoken transcript
+ * (`details.transcript`, voice ARCH §2.4).
+ */
+export function extractToolResultMediaHints(result: unknown): {
+  audioAsVoice: boolean;
+  transcript?: string;
+} {
+  if (!result || typeof result !== "object") {
+    return { audioAsVoice: false };
+  }
+  const record = result as Record<string, unknown>;
+  let audioAsVoice = false;
+  for (const text of collectTextContentBlocks(record.content)) {
+    if (splitMediaFromOutput(text).audioAsVoice) {
+      audioAsVoice = true;
+      break;
+    }
+  }
+  const details =
+    record.details && typeof record.details === "object" && !Array.isArray(record.details)
+      ? (record.details as Record<string, unknown>)
+      : undefined;
+  const transcript =
+    typeof details?.transcript === "string" ? details.transcript.trim() || undefined : undefined;
+  return { audioAsVoice, ...(transcript ? { transcript } : {}) };
+}
+
 export function isToolResultError(result: unknown): boolean {
   if (!result || typeof result !== "object") {
     return false;

@@ -15,10 +15,12 @@ import type {
 import {
   extractMessagingToolSend,
   extractToolErrorMessage,
+  extractToolResultMediaHints,
   extractToolResultMediaPaths,
   extractToolResultText,
   filterToolResultMediaUrls,
   isToolResultError,
+  isToolResultMediaTrusted,
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
@@ -288,8 +290,18 @@ async function emitToolResultOutput(params: {
   if (mediaPaths.length === 0) {
     return;
   }
+  // voice ARCH §2.4: generated speech carries its transcript as the media body, and the
+  // `[[audio_as_voice]]` tag survives into the payload so channels can send a voice note.
+  // Only trusted (core) tools may set the media body; others keep media-only delivery.
+  const hints = isToolResultMediaTrusted(toolName)
+    ? extractToolResultMediaHints(result)
+    : { audioAsVoice: false };
   try {
-    void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+    void ctx.params.onToolResult({
+      mediaUrls: mediaPaths,
+      ...(hints.transcript ? { text: hints.transcript, textIsTranscript: true } : {}),
+      ...(hints.audioAsVoice ? { audioAsVoice: true } : {}),
+    });
   } catch {
     // ignore delivery failures
   }

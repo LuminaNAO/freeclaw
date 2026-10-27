@@ -51,6 +51,7 @@ const ttsMocks = vi.hoisted(() => {
       const params = paramsUnknown as {
         payload: ReplyPayload;
         kind: "tool" | "block" | "final";
+        textDelivered?: boolean;
       };
       if (
         state.synthesizeFinalAudio &&
@@ -60,6 +61,8 @@ const ttsMocks = vi.hoisted(() => {
       ) {
         return {
           ...params.payload,
+          // Like the real implementation: already-delivered text becomes the spoken transcript.
+          ...(params.textDelivered ? { textIsTranscript: true } : {}),
           mediaUrl: "https://example.com/tts-synth.opus",
           audioAsVoice: true,
         };
@@ -485,6 +488,68 @@ describe("dispatchReplyFromConfig", () => {
     const routed = mocks.routeReply.mock.calls[0]?.[0] as { payload?: ReplyPayload } | undefined;
     expect(routed?.payload?.mediaUrls).toEqual(["https://example.com/tts-routed.opus"]);
     expect(routed?.payload?.text).toBeUndefined();
+  });
+
+  it("keeps a tts transcript as the media body when tool summaries are suppressed (voice ARCH §2.1)", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "signal", Surface: "signal", ChatType: "group" });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({
+        text: "Spoken words",
+        textIsTranscript: true,
+        mediaUrls: ["/tmp/voice.opus"],
+        audioAsVoice: true,
+      });
+      await opts?.onToolResult?.({ text: "tool summary", mediaUrls: ["/tmp/shot.png"] });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const sent = (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock.calls.map(
+      (call) => call[0] as ReplyPayload,
+    );
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toMatchObject({
+      text: "Spoken words",
+      mediaUrls: ["/tmp/voice.opus"],
+      audioAsVoice: true,
+    });
+    expect(sent[1]?.text).toBeUndefined();
+  });
+
+  it("sends block-streamed TTS audio with the block text as its transcript (voice ARCH §2.1)", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "signal", Surface: "signal" });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onBlockReply?.({ text: "Streamed answer." });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as ReplyPayload | undefined;
+    expect(finalPayload).toMatchObject({
+      text: "Streamed answer.",
+      textIsTranscript: true,
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+    });
   });
 
   it("provides onToolResult in DM sessions", async () => {
@@ -1384,7 +1449,10 @@ describe("dispatchReplyFromConfig", () => {
     const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
-    expect(finalPayload?.text).toBeUndefined();
+    // voice ARCH §2.1: the audio carries its transcript as the body.
+    expect(finalPayload?.text).toBe("Hello from ACP streaming.");
+    expect(finalPayload?.textIsTranscript).toBe(true);
+    expect(finalPayload?.audioAsVoice).toBe(true);
   });
 
   it("routes ACP block output to originating channel without parent dispatcher duplicates", async () => {

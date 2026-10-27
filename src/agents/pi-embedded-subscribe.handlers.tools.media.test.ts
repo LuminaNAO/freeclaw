@@ -119,6 +119,69 @@ describe("handleToolExecutionEnd media emission", () => {
     });
   });
 
+  it("emits tts audio with its transcript as the body and the voice flag (voice ARCH §2.4)", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "[[audio_as_voice]]\nMEDIA:/tmp/voice.opus" }],
+        details: { audioPath: "/tmp/voice.opus", provider: "kokoro", transcript: "Hi there" },
+      },
+    });
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/voice.opus"],
+      text: "Hi there",
+      textIsTranscript: true,
+      audioAsVoice: true,
+    });
+  });
+
+  it("emits non-voice tts audio without the voice flag", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "MEDIA:/tmp/voice.mp3" }],
+        details: { audioPath: "/tmp/voice.mp3", transcript: "Hi there" },
+      },
+    });
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/voice.mp3"],
+      text: "Hi there",
+      textIsTranscript: true,
+    });
+  });
+
+  it("ignores a transcript from an untrusted tool", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "plugin_tool",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "MEDIA:https://example.com/a.mp3" }],
+        details: { transcript: "injected body" },
+      },
+    });
+
+    expect(onToolResult).toHaveBeenCalledWith({ mediaUrls: ["https://example.com/a.mp3"] });
+  });
+
   it("does NOT emit local media for untrusted tools", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });

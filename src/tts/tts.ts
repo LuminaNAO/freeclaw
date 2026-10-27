@@ -558,8 +558,11 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
-/** Channels that require opus audio and support voice-bubble playback */
-const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
+/**
+ * Channels that require opus audio and support voice-bubble playback. Signal joins the set
+ * (voice ARCH §2.3): Opus in Ogg, mono, sent with signal-cli's voice-note flag.
+ */
+const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "signal"]);
 
 function resolveOutputFormat(channelId?: string | null) {
   if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
@@ -1063,6 +1066,11 @@ export async function maybeApplyTtsToPayload(params: {
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
+  /**
+   * The payload text was already delivered on its own (e.g. as streamed blocks), so the audio
+   * goes out alone with the spoken text as its caption (voice ARCH §2.1).
+   */
+  textDelivered?: boolean;
 }): Promise<ReplyPayload> {
   const config = resolveTtsConfig(params.cfg);
   const prefsPath = resolveTtsPrefsPath(config);
@@ -1181,8 +1189,12 @@ export async function maybeApplyTtsToPayload(params: {
     const channelId = resolveChannelId(params.channel);
     const shouldVoice =
       channelId !== null && VOICE_BUBBLE_CHANNELS.has(channelId) && result.voiceCompatible === true;
-    const finalPayload = {
+    // voice ARCH §2.1/§2.4: the audio carries what it actually says (after summarisation) as its
+    // body, unless the agent's own reply text is delivered with it; then the agent text wins.
+    const agentText = params.textDelivered ? "" : (nextPayload.text?.trim() ?? "");
+    const finalPayload: ReplyPayload = {
       ...nextPayload,
+      ...(agentText ? {} : { text: textForAudio, textIsTranscript: true }),
       mediaUrl: result.audioPath,
       audioAsVoice: shouldVoice || params.payload.audioAsVoice,
     };

@@ -446,6 +446,10 @@ export async function dispatchReplyFromConfig(params: {
         if (!hasMedia) {
           return null;
         }
+        // voice ARCH §2.1: a spoken transcript is the audio's body, not a tool summary.
+        if (payload.textIsTranscript) {
+          return payload;
+        }
         return { ...payload, text: undefined };
       };
       const typing = resolveRunTypingPolicy({
@@ -608,11 +612,16 @@ export async function dispatchReplyFromConfig(params: {
             kind: "final",
             inboundAudio,
             ttsAuto: sessionTtsAuto,
+            textDelivered: true,
           });
           // Only send if TTS was actually applied (mediaUrl exists)
           if (ttsSyntheticReply.mediaUrl) {
-            // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content
+            // The block text was already delivered; the audio goes out with what it actually says
+            // (the spoken text, after any summarisation) as its body (voice ARCH §2.1).
             const ttsOnlyPayload: ReplyPayload = {
+              ...(ttsSyntheticReply.textIsTranscript && ttsSyntheticReply.text
+                ? { text: ttsSyntheticReply.text, textIsTranscript: true }
+                : {}),
               mediaUrl: ttsSyntheticReply.mediaUrl,
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
             };

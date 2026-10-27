@@ -342,10 +342,27 @@ describe("kokoro TTS", () => {
       expect(header.readUInt32LE(24)).toBe(24000);
     });
 
-    it("returns mp3 for a non voice-bubble channel (signal)", async () => {
+    it("returns opus voice-note audio for Signal (voice ARCH §2.3)", async () => {
       const fx = track(createFixture((f) => successStub(f.argvPath)));
       const result = await withEnvAsync(CLEAN_ENV, () =>
         textToSpeech({ text: "Hello Signal", cfg: kokoroCfg(fx), channel: "signal" }),
+      );
+
+      expect(result.success, result.error).toBe(true);
+      expect(result.provider).toBe("kokoro");
+      expect(result.outputFormat).toBe("opus");
+      expect(result.voiceCompatible).toBe(true);
+      expect(result.audioPath).toMatch(/\.opus$/);
+      expect(runFfmpeg).toHaveBeenCalledWith(
+        expect.arrayContaining(["-ac", "1", "-c:a", "libopus", result.audioPath]),
+        expect.anything(),
+      );
+    });
+
+    it("returns mp3 for a non voice-bubble channel (slack)", async () => {
+      const fx = track(createFixture((f) => successStub(f.argvPath)));
+      const result = await withEnvAsync(CLEAN_ENV, () =>
+        textToSpeech({ text: "Hello Slack", cfg: kokoroCfg(fx), channel: "slack" }),
       );
 
       expect(result.success, result.error).toBe(true);
@@ -424,7 +441,7 @@ describe("kokoro TTS", () => {
         qwen3: { enabled: false, scriptPath: "/nonexistent/qwen3.py" },
       });
       const result = await withEnvAsync(CLEAN_ENV, () =>
-        textToSpeech({ text: "Fallback please", cfg, channel: "signal" }),
+        textToSpeech({ text: "Fallback please", cfg, channel: "slack" }),
       );
 
       expect(result.success, result.error).toBe(true);

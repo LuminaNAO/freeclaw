@@ -11,7 +11,9 @@ title: "Text-to-Speech"
 
 OpenClaw can turn outbound replies into audio with one of two **local** TTS providers.
 Both run on the gateway host. No API key is needed and no text leaves the machine.
-It works anywhere OpenClaw can send audio; Telegram, WhatsApp and Feishu get a voice-note bubble.
+It works anywhere OpenClaw can send audio; Telegram, WhatsApp, Feishu and Signal get a voice-note bubble.
+The audio carries its transcript (the text that was actually spoken, after any summary) as the
+message text, unless the agent's own reply text is sent with it.
 
 ## Providers
 
@@ -361,7 +363,8 @@ Notes:
 
 The `tts` tool converts text to speech and returns a `MEDIA:` path. When the
 result is voice-note compatible (Opus), the tool includes `[[audio_as_voice]]` so
-the channel sends a voice bubble. If the tool says `kokoro: disabled; qwen3: disabled`,
+the channel sends a voice bubble. The spoken text travels in the tool result's
+`details.transcript` and becomes the message text under the audio. If the tool says `kokoro: disabled; qwen3: disabled`,
 no provider is enabled on that host yet.
 
 ## Gateway RPC

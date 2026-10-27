@@ -36,14 +36,15 @@ export function createTtsTool(opts?: {
 
       if (result.success && result.audioPath) {
         const lines: string[] = [];
-        // Tag Telegram Opus output as a voice bubble instead of a file attachment.
+        // Tag Opus output (Telegram, Signal, ...) as a voice bubble instead of a file attachment.
         if (result.voiceCompatible) {
           lines.push("[[audio_as_voice]]");
         }
         lines.push(`MEDIA:${result.audioPath}`);
         return {
           content: [{ type: "text", text: lines.join("\n") }],
-          details: { audioPath: result.audioPath, provider: result.provider },
+          // voice ARCH §2.4: the spoken text travels with the media as its transcript caption.
+          details: { audioPath: result.audioPath, provider: result.provider, transcript: text },
         };
       }
 

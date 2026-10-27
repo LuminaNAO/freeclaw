@@ -338,9 +338,14 @@ export async function tryDispatchAcpReply(params: {
           kind: "final",
           inboundAudio: params.inboundAudio,
           ttsAuto: params.sessionTtsAuto,
+          textDelivered: true,
         });
         if (ttsSyntheticReply.mediaUrl) {
+          // voice ARCH §2.1: the audio carries the spoken text as its body.
           const delivered = await delivery.deliver("final", {
+            ...(ttsSyntheticReply.textIsTranscript && ttsSyntheticReply.text
+              ? { text: ttsSyntheticReply.text, textIsTranscript: true }
+              : {}),
             mediaUrl: ttsSyntheticReply.mediaUrl,
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           });

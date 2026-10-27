@@ -343,6 +343,36 @@ describe("deliverReplies", () => {
     expect(events).toEqual(["recordVoice", "sendVoice"]);
   });
 
+  it("sends a tts voice note with its transcript as the caption (voice ARCH §3)", async () => {
+    const runtime = createRuntime(false);
+    const sendVoice = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const sendAudio = vi.fn();
+    const bot = createBot({ sendVoice, sendAudio });
+
+    mockMediaLoad("voice.opus", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "/tmp/voice.opus",
+          text: "What the audio says",
+          textIsTranscript: true,
+          audioAsVoice: true,
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendAudio).not.toHaveBeenCalled();
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendVoice).toHaveBeenCalledWith(
+      "123",
+      expect.anything(),
+      expect.objectContaining({ caption: "What the audio says" }),
+    );
+  });
+
   it("renders markdown in media captions", async () => {
     const runtime = createRuntime();
     const sendPhoto = vi.fn().mockResolvedValue({

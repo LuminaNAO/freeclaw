@@ -293,8 +293,17 @@ describe("tts", () => {
   });
 
   describe("resolveOutputFormat", () => {
-    it("selects opus for voice-bubble channels (telegram/feishu/whatsapp) and mp3 for others", () => {
+    it("selects opus for voice-bubble channels (telegram/feishu/whatsapp/signal) and mp3 for others", () => {
       const cases = [
+        {
+          channel: "signal",
+          expected: {
+            openai: "opus",
+            elevenlabs: "opus_48000_64",
+            extension: ".opus",
+            voiceCompatible: true,
+          },
+        },
         {
           channel: "telegram",
           expected: {
@@ -825,7 +834,7 @@ sys.exit(7)
       }
     });
 
-    it("converts signal output to a normal MP3 attachment, not a voice-bubble marker", async () => {
+    it("converts signal output to mono Opus voice-note audio (voice ARCH §2.3)", async () => {
       const fixture = createQwenFixture("");
       writeFileSync(fixture.scriptPath, createSuccessfulQwenScript(fixture.argvPath), "utf8");
       try {
@@ -847,13 +856,41 @@ sys.exit(7)
               throw new Error(result.error);
             }
             expect(result.provider).toBe("qwen3");
+            expect(result.audioPath).toMatch(/\.opus$/);
+            expect(result.outputFormat).toBe("opus");
+            expect(result.voiceCompatible).toBe(true);
+            expect(runFfmpeg).toHaveBeenCalledWith(
+              expect.arrayContaining(["-ac", "1", "-c:a", "libopus", result.audioPath]),
+              expect.objectContaining({ timeoutMs: 5000 }),
+            );
+          },
+        );
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps MP3 output for channels without voice notes", async () => {
+      const fixture = createQwenFixture("");
+      writeFileSync(fixture.scriptPath, createSuccessfulQwenScript(fixture.argvPath), "utf8");
+      try {
+        await withEnvAsync(
+          {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+          },
+          async () => {
+            const result = await tts.textToSpeech({
+              text: "Make this a Slack audio file",
+              cfg: createQwenCfg(fixture),
+              channel: "slack",
+            });
+
+            expect(result.success).toBe(true);
             expect(result.audioPath).toMatch(/\.mp3$/);
             expect(result.outputFormat).toBe("mp3");
             expect(result.voiceCompatible).toBe(false);
-            expect(runFfmpeg).toHaveBeenCalledWith(
-              expect.arrayContaining(["-c:a", "libmp3lame", result.audioPath]),
-              expect.objectContaining({ timeoutMs: 5000 }),
-            );
           },
         );
       } finally {
@@ -1009,6 +1046,91 @@ sys.exit(7)
       } finally {
         rmSync(fixture.root, { recursive: true, force: true });
       }
+    });
+
+    describe("transcript caption (voice ARCH §2.1, §2.4)", () => {
+      const runAuto = async (
+        params: Omit<Parameters<typeof maybeApplyTtsToPayload>[0], "cfg">,
+        prefs?: { maxLength?: number; summarize?: boolean },
+      ) => {
+        const fixture = createQwenFixture("");
+        writeFileSync(fixture.scriptPath, createSuccessfulQwenScript(fixture.argvPath), "utf8");
+        if (prefs) {
+          writeFileSync(fixture.prefsPath, JSON.stringify({ tts: prefs }), "utf8");
+        }
+        try {
+          const baseQwenCfg = createQwenCfg(fixture);
+          const cfg: OpenClawConfig = {
+            ...baseQwenCfg,
+            messages: { tts: { ...baseQwenCfg.messages!.tts!, auto: "always" } },
+          };
+          const result = await withEnvAsync(
+            { OPENAI_API_KEY: undefined, ELEVENLABS_API_KEY: undefined, XI_API_KEY: undefined },
+            () => maybeApplyTtsToPayload({ ...params, cfg }),
+          );
+          const argv = JSON.parse(readFileSync(fixture.argvPath, "utf8")) as string[];
+          return { result, spoken: argv[argv.indexOf("--text") + 1] };
+        } finally {
+          rmSync(fixture.root, { recursive: true, force: true });
+        }
+      };
+
+      it("on Signal: opus voice note whose body is the spoken text when the text was already sent", async () => {
+        const { result, spoken } = await runAuto({
+          payload: { text: "Here is **the** answer." },
+          kind: "final",
+          channel: "signal",
+          textDelivered: true,
+        });
+
+        expect(result.mediaUrl).toMatch(/\.opus$/);
+        expect(result.audioAsVoice).toBe(true);
+        expect(spoken).toBe("Here is the answer.");
+        expect(result.text).toBe("Here is the answer.");
+        expect(result.textIsTranscript).toBe(true);
+      });
+
+      it("the agent's own reply text wins when it is delivered with the audio", async () => {
+        const { result } = await runAuto({
+          payload: { text: "Here is **the** answer." },
+          kind: "final",
+          channel: "signal",
+        });
+
+        expect(result.mediaUrl).toMatch(/\.opus$/);
+        expect(result.text).toBe("Here is **the** answer.");
+        expect(result.textIsTranscript).toBeUndefined();
+      });
+
+      it("uses the spoken [[tts:text]] when the visible text is empty", async () => {
+        const { result, spoken } = await runAuto({
+          payload: { text: "[[tts:text]]Only spoken words here[[/tts:text]]" },
+          kind: "final",
+          channel: "telegram",
+        });
+
+        expect(spoken).toBe("Only spoken words here");
+        expect(result.text).toBe("Only spoken words here");
+        expect(result.textIsTranscript).toBe(true);
+        expect(result.audioAsVoice).toBe(true);
+      });
+
+      it("summarised TTS: body is the summary that was spoken, not the original text", async () => {
+        vi.mocked(completeSimple).mockResolvedValueOnce(
+          mockAssistantMessage([{ type: "text", text: "A short spoken summary." }]),
+        );
+        const original = `Long reply. ${"Lots of detail here. ".repeat(10)}`;
+        const { result, spoken } = await runAuto(
+          { payload: { text: original }, kind: "final", channel: "signal", textDelivered: true },
+          { maxLength: 100, summarize: true },
+        );
+
+        expect(completeSimple).toHaveBeenCalled();
+        expect(spoken).toBe("A short spoken summary.");
+        expect(result.text).toBe("A short spoken summary.");
+        expect(result.text).not.toBe(original.trim());
+        expect(result.textIsTranscript).toBe(true);
+      });
     });
   });
 });
