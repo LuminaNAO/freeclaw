@@ -1,5 +1,9 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import fs from "node:fs";
+import { resolveStateDir } from "../config/paths.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { removeSignalOwnerRecord, writeSignalOwnerRecord } from "./daemon-owner.js";
+import { createLinuxProcTable, type ProcTable } from "./proc-table.js";
 
 export type SignalDaemonListener =
   | { kind: "socket"; path: string }
@@ -15,6 +19,12 @@ export type SignalDaemonOpts = {
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
   runtime?: RuntimeEnv;
+  /** Test seams; production uses the real platform, PATH lookup and /proc. */
+  platform?: NodeJS.Platform;
+  /** Absolute setpriv path, or null to disable the pdeathsig wrapper. */
+  pdeathsigWrapper?: string | null;
+  proc?: ProcTable;
+  stateDir?: string;
 };
 
 export type SignalDaemonHandle = {
@@ -96,9 +106,97 @@ export function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
   return args;
 }
 
-export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
+const SETPRIV_CANDIDATES = [
+  "/usr/bin/setpriv",
+  "/bin/setpriv",
+  "/usr/sbin/setpriv",
+  "/sbin/setpriv",
+];
+let cachedSetpriv: string | null | undefined;
+
+/**
+ * signal-daemon-lifecycle ARCH §3.2: on Linux the daemon is started through util-linux
+ * `setpriv --pdeathsig SIGTERM`, which sets PR_SET_PDEATHSIG and then execs signal-cli
+ * (same pid; the setting survives exec), so the kernel stops the daemon when the gateway
+ * dies, including SIGKILL/OOM. No native module needed. Returns null when setpriv is
+ * missing or too old to know --pdeathsig; the exit hooks plus the §3.3 reap cover that case.
+ */
+export function resolvePdeathsigWrapper(): string | null {
+  if (cachedSetpriv !== undefined) {
+    return cachedSetpriv;
+  }
+  cachedSetpriv = null;
+  for (const candidate of SETPRIV_CANDIDATES) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+    } catch {
+      continue;
+    }
+    try {
+      const help = execFileSync(candidate, ["--help"], {
+        encoding: "utf8",
+        timeout: 2_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      if (help.includes("--pdeathsig")) {
+        cachedSetpriv = candidate;
+      }
+    } catch {
+      // unusable; try the next candidate
+    }
+    break;
+  }
+  return cachedSetpriv;
+}
+
+export function buildSignalDaemonSpawnCommand(
+  opts: SignalDaemonOpts,
+  wrapper: string | null,
+): { command: string; args: string[] } {
   const args = buildDaemonArgs(opts);
-  const child = spawn(opts.cliPath, args, {
+  if (wrapper) {
+    return { command: wrapper, args: ["--pdeathsig", "SIGTERM", "--", opts.cliPath, ...args] };
+  }
+  return { command: opts.cliPath, args };
+}
+
+const liveChildren = new Set<{ kill: (signal: NodeJS.Signals) => void }>();
+let exitHookInstalled = false;
+
+/**
+ * ARCH §3.2 fallback for every platform: on process exit (normal exit, uncaught exception,
+ * the gateway's own SIGTERM/SIGINT handlers ending in process.exit) stop any daemon still
+ * running. Hard kills skip this; pdeathsig (Linux) and the §3.3 reap cover those.
+ */
+function trackChildForExit(entry: { kill: (signal: NodeJS.Signals) => void }): () => void {
+  if (!exitHookInstalled) {
+    exitHookInstalled = true;
+    process.once("exit", () => {
+      for (const child of liveChildren) {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // already gone
+        }
+      }
+    });
+  }
+  liveChildren.add(entry);
+  return () => {
+    liveChildren.delete(entry);
+  };
+}
+
+export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
+  const platform = opts.platform ?? process.platform;
+  const wrapper =
+    platform === "linux"
+      ? opts.pdeathsigWrapper !== undefined
+        ? opts.pdeathsigWrapper
+        : resolvePdeathsigWrapper()
+      : null;
+  const { command, args } = buildSignalDaemonSpawnCommand(opts, wrapper);
+  const child = spawn(command, args, {
     stdio: ["ignore", "pipe", "pipe"],
   });
   const log = opts.runtime?.log ?? (() => {});
@@ -118,9 +216,44 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
     resolveExit(value);
   };
 
+  const untrack = trackChildForExit({ kill: (signal) => child.kill(signal) });
+  const socketPath = opts.listener.kind === "socket" ? opts.listener.path : undefined;
+  const childPid = child.pid;
+  let ownerWritten = false;
+  // ARCH §3.1: record ownership so the next gateway can tell our orphan from a stranger.
+  if (socketPath && childPid && platform === "linux") {
+    const startTime = (opts.proc ?? createLinuxProcTable()).readStat(childPid)?.startTime;
+    if (startTime) {
+      try {
+        writeSignalOwnerRecord({
+          pid: childPid,
+          startTime,
+          account: opts.account,
+          socketPath,
+          gatewayPid: process.pid,
+          stateDir: opts.stateDir ?? resolveStateDir(process.env),
+          cliPath: opts.cliPath,
+        });
+        ownerWritten = true;
+      } catch (err) {
+        error(`signal: cannot write daemon owner record for ${socketPath}: ${String(err)}`);
+      }
+    } else {
+      error(`signal: cannot read start time of signal-cli pid ${childPid}; no owner record`);
+    }
+  }
+  const onGone = () => {
+    untrack();
+    if (ownerWritten && socketPath) {
+      ownerWritten = false;
+      removeSignalOwnerRecord(socketPath, childPid);
+    }
+  };
+
   bindSignalCliOutput({ stream: child.stdout, log, error });
   bindSignalCliOutput({ stream: child.stderr, log, error });
   child.once("exit", (code, signal) => {
+    onGone();
     settleExit({
       source: "process",
       code: typeof code === "number" ? code : null,
@@ -139,6 +272,7 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   });
   child.on("error", (err) => {
     error(`signal-cli spawn error: ${String(err)}`);
+    onGone();
     settleExit({ source: "spawn-error", code: null, signal: null });
   });
 
