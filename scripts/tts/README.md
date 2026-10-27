@@ -21,9 +21,17 @@ the TTS error.
 Use a dedicated virtual environment so the packages stay out of the system Python:
 
 ```bash
-python3 -m venv /opt/kokoro/venv
+python3.12 -m venv /opt/kokoro/venv
 /opt/kokoro/venv/bin/pip install kokoro soundfile
+/opt/kokoro/venv/bin/pip install \
+  https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 ```
+
+Use a Python that has PyTorch wheels (3.12 is safe; very new Python releases may not have one yet).
+The English spaCy model must be installed up front: without it the first call tries to download
+it at runtime and fails with a misleading error (e.g. `No virtual environment found`).
+On a CPU-only box, add `--extra-index-url https://download.pytorch.org/whl/cpu` to the first
+`pip install` to get the much smaller CPU-only PyTorch.
 
 Install `espeak-ng` from your distro as well. Kokoro uses it as a fallback for
 out-of-vocabulary words (names, rare words):

@@ -54,8 +54,10 @@ Install the reference script first. It is in the repo at `scripts/tts/kokoro_tts
 see `scripts/tts/README.md` for the full steps. In short:
 
 ```bash
-python3 -m venv /opt/kokoro/venv
+python3.12 -m venv /opt/kokoro/venv
 /opt/kokoro/venv/bin/pip install kokoro soundfile
+/opt/kokoro/venv/bin/pip install \
+  https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 sudo apt install espeak-ng   # fallback for out-of-vocabulary words
 cp scripts/tts/kokoro_tts.py /opt/kokoro/
 ```
