@@ -4,6 +4,12 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  checkSignalOrphan,
+  readSignalOwnerRecord,
+  removeSignalOwnerRecord,
+} from "./daemon-owner.js";
+import { isProcAlive, type ProcTable } from "./proc-table.js";
 
 // sun_path is 108 bytes on Linux and 104 on macOS/BSD, including the trailing NUL.
 const SUN_PATH_MAX_BYTES: Partial<Record<NodeJS.Platform, number>> = {
@@ -307,23 +313,122 @@ export async function probeSocketLiveness(
   });
 }
 
+export type ClearStaleSocketDeps = SocketDirDeps & {
+  /** Linux process table; tests inject a fake. Omitted on non-Linux (today's behaviour). */
+  proc?: ProcTable;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  /** SIGTERM grace before SIGKILL (ARCH §3.3: 10 s). */
+  reapGraceMs?: number;
+  pollMs?: number;
+};
+
+/** Returned only when our own orphaned daemon was reaped (ARCH §3.3); start proceeds at once. */
+export type ClearStaleSocketResult = {
+  reaped: { pid: number; gatewayPid: number };
+};
+
+const DEFAULT_REAP_GRACE_MS = 10_000;
+
+/** Raised when a live socket is held by a daemon that is not ours (ARCH §3.3, §3.5: retry). */
+export class SignalSocketBusyError extends SignalSocketSetupError {
+  constructor(message: string) {
+    super(message);
+    this.name = "SignalSocketBusyError";
+  }
+}
+
+function describeSocketHolders(socketPath: string, proc: ProcTable | undefined): string {
+  const holders = proc?.findSocketHolders(socketPath);
+  if (!holders || holders.length === 0) {
+    const why = holders === null || !proc ? "holder lookup unavailable" : "no visible holder";
+    return ` (${why}; it may run as another user: find it with \`ss -xlp | grep -F ${socketPath}\`)`;
+  }
+  const lines = holders.map((pid) => {
+    const uid = proc?.readUid(pid);
+    const cmdline = proc?.readCmdline(pid)?.join(" ") || "?";
+    return `pid ${pid} uid ${uid ?? "?"}: ${cmdline}`;
+  });
+  return `; held by ${lines.join("; ")}. If it is not needed, stop it with \`kill ${holders.join(" ")}\``;
+}
+
+async function reapOrphan(params: {
+  pid: number;
+  startTime: string;
+  socketPath: string;
+  proc: ProcTable;
+  probeLive: (socketPath: string) => Promise<"live" | "stale">;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+  graceMs: number;
+  pollMs: number;
+}): Promise<void> {
+  const { pid, startTime, proc } = params;
+  const alive = () => isProcAlive(proc, pid, startTime);
+  const released = async () => {
+    try {
+      return (await params.probeLive(params.socketPath)) === "stale";
+    } catch {
+      return false;
+    }
+  };
+  const waitUntil = async (deadline: number, done: () => Promise<boolean>) => {
+    while (!(await done())) {
+      if (params.now() >= deadline) {
+        return false;
+      }
+      await params.sleep(params.pollMs);
+    }
+    return true;
+  };
+  const send = (signal: NodeJS.Signals) => {
+    try {
+      proc.kill(pid, signal);
+    } catch (err) {
+      if (errnoCode(err) !== "ESRCH") {
+        throw err;
+      }
+    }
+  };
+  send("SIGTERM");
+  const exited = await waitUntil(
+    params.now() + params.graceMs,
+    async () => !alive() && (await released()),
+  );
+  if (!exited && alive()) {
+    // Re-check identity right before SIGKILL so a pid recycled during the grace is never hit.
+    send("SIGKILL");
+    await waitUntil(params.now() + 2_000, async () => !alive() && (await released()));
+    if (alive()) {
+      throw new SignalSocketSetupError(
+        `orphaned signal-cli pid ${pid} did not exit after SIGKILL; refusing to start a second daemon`,
+      );
+    }
+  }
+}
+
 /**
- * Before spawning: a missing path is fine, a stale socket is removed, a live socket or a
- * non-socket file is a hard error (never delete what we did not create, never run two daemons).
+ * Before spawning: a missing path is fine, a stale socket is removed, a live socket served by
+ * our own orphaned daemon (owner record matches, ARCH §3.3) is reaped, any other live socket
+ * or a non-socket file is a hard error (never delete what we did not create, never run two
+ * daemons, never touch someone else's daemon).
  */
 export async function clearStaleSignalSocket(params: {
   socketPath: string;
   accountId: string;
-  deps?: SocketDirDeps;
-}): Promise<void> {
+  /** signal-cli account (phone/uuid) the daemon is started for; checked against the owner. */
+  account?: string;
+  deps?: ClearStaleSocketDeps;
+}): Promise<ClearStaleSocketResult | undefined> {
   const deps = params.deps ?? {};
   const fsOps = deps.fs ?? defaultFs;
+  const probeLive = deps.probeLive ?? probeSocketLiveness;
   let st;
   try {
     st = await fsOps.lstat(params.socketPath);
   } catch (err) {
     if (errnoCode(err) === "ENOENT") {
-      return;
+      return undefined;
     }
     throw err;
   }
@@ -332,14 +437,64 @@ export async function clearStaleSignalSocket(params: {
       `${params.socketPath} exists and is not a socket; refusing to replace it`,
     );
   }
-  const liveness = await (deps.probeLive ?? probeSocketLiveness)(params.socketPath);
+  const liveness = await probeLive(params.socketPath);
   if (liveness === "live") {
-    throw new SignalSocketSetupError(
-      `another signal-cli is serving ${params.socketPath}; refusing to start a second daemon for account ${params.accountId}`,
+    const base = `another signal-cli is serving ${params.socketPath}; refusing to start a second daemon for account ${params.accountId}`;
+    const proc = deps.proc;
+    if (!proc) {
+      throw new SignalSocketBusyError(base);
+    }
+    const uid = currentUid(deps);
+    const check = checkSignalOrphan({
+      owner: readSignalOwnerRecord(params.socketPath, uid),
+      socketPath: params.socketPath,
+      account: params.account,
+      uid,
+      proc,
+    });
+    if (!check.orphan) {
+      throw new SignalSocketBusyError(
+        `${base}: not ours (${check.reason})${describeSocketHolders(params.socketPath, proc)}`,
+      );
+    }
+    await reapOrphan({
+      pid: check.record.pid,
+      startTime: check.record.startTime,
+      socketPath: params.socketPath,
+      proc,
+      probeLive,
+      sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+      now: deps.now ?? Date.now,
+      graceMs: deps.reapGraceMs ?? DEFAULT_REAP_GRACE_MS,
+      pollMs: deps.pollMs ?? 100,
+    });
+    if ((await probeLive(params.socketPath)) === "live") {
+      throw new SignalSocketBusyError(
+        `${base}: orphaned signal-cli pid ${check.record.pid} exited but the socket is still served${describeSocketHolders(params.socketPath, proc)}`,
+      );
+    }
+    await unlinkIfPresent(fsOps, params.socketPath);
+    removeSignalOwnerRecord(params.socketPath);
+    deps.log?.(
+      `signal: reaped orphaned signal-cli pid ${check.record.pid} (previous gateway ${check.record.gatewayPid})`,
     );
+    return { reaped: { pid: check.record.pid, gatewayPid: check.record.gatewayPid } };
   }
   await fsOps.unlink(params.socketPath);
+  // A stale socket means its daemon is gone; its owner record is stale too.
+  removeSignalOwnerRecord(params.socketPath);
   deps.log?.(`signal: removed stale socket ${params.socketPath}`);
+  return undefined;
+}
+
+async function unlinkIfPresent(fsOps: SocketFsOps, p: string): Promise<void> {
+  try {
+    await fsOps.unlink(p);
+  } catch (err) {
+    if (errnoCode(err) !== "ENOENT") {
+      throw err;
+    }
+  }
 }
 
 /** After the daemon is ready: enforce and verify the socket's owner/group/mode. */

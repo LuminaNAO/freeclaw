@@ -37,6 +37,7 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import { createLinuxProcTable } from "./proc-table.js";
 import { sendMessageSignal } from "./send.js";
 import {
   assertExternalSocketDirSafe,
@@ -491,10 +492,17 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         deps: { resolveGid: resolveGroupId, log: (m) => runtime.log?.(m) },
       });
       socketGid = prepared.gid;
+      // signal-daemon-lifecycle ARCH §3.3/§3.5: a live socket held by our own orphan (left by
+      // a crashed or killed gateway) is reaped and the start proceeds at once; a foreign
+      // daemon still throws, and the channel manager retries as before.
       await clearStaleSignalSocket({
         socketPath,
         accountId: accountInfo.accountId,
-        deps: { log: (m) => runtime.log?.(m) },
+        account,
+        deps: {
+          log: (m) => runtime.log?.(m),
+          proc: process.platform === "linux" ? createLinuxProcTable() : undefined,
+        },
       });
       daemonHandle = spawnSignalDaemon({
         cliPath: opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli",

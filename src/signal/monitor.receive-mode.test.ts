@@ -189,6 +189,42 @@ describe("signal monitor transport selection", () => {
   });
 });
 
+describe("signal monitor start after a gateway crash (signal-daemon-lifecycle ARCH §3.3, §3.5)", () => {
+  it("passes the account and the process table to the orphan check", async () => {
+    setAutoStartSignalConfig();
+    await runMonitorUntilSseAttach(createMonitorRuntime());
+    const params = socketDirMocks.clearStaleSignalSocket.mock.calls[0]?.[0] as {
+      account?: string;
+      deps?: { proc?: unknown };
+    };
+    expect(params.account).toBe("+15550001111");
+    expect(Boolean(params.deps?.proc)).toBe(process.platform === "linux");
+  });
+
+  it("a reaped orphan lets the same start spawn a fresh daemon at once", async () => {
+    setAutoStartSignalConfig();
+    socketDirMocks.clearStaleSignalSocket.mockResolvedValueOnce({
+      reaped: { pid: 4242, gatewayPid: 31337 },
+    });
+    await runMonitorUntilSseAttach(createMonitorRuntime());
+    expect(spawnSignalDaemonMock).toHaveBeenCalledTimes(1);
+    expect(socketDirMocks.clearStaleSignalSocket.mock.invocationCallOrder[0]).toBeLessThan(
+      spawnSignalDaemonMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("a foreign daemon on the socket fails this start without spawning (channel retries)", async () => {
+    setAutoStartSignalConfig();
+    socketDirMocks.clearStaleSignalSocket.mockRejectedValueOnce(
+      new Error("another signal-cli is serving x; refusing to start a second daemon"),
+    );
+    await expect(runMonitorUntilSseAttach(createMonitorRuntime())).rejects.toThrow(
+      /refusing to start a second daemon/,
+    );
+    expect(spawnSignalDaemonMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("trust gate endpoint classification", () => {
   it("treats the unix socket transport as local, never as a remote endpoint", async () => {
     const { classifySignalEndpoint } = await import("./monitor.js");
