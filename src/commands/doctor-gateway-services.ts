@@ -19,7 +19,7 @@ import {
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { uninstallLegacySystemdUnits } from "../daemon/systemd.js";
+import { migrateSystemdKillMode, uninstallLegacySystemdUnits } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
@@ -306,7 +306,40 @@ export async function maybeRepairGatewayServiceConfig(
     "Gateway service config",
   );
 
-  const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
+  // signal-daemon-lifecycle ARCH §3.4: KillMode is fixed in place (rewrite + daemon-reload,
+  // no reinstall or restart); drop-ins that set KillMode are only reported.
+  const killModeIssue = audit.issues.find(
+    (issue) => issue.code === SERVICE_AUDIT_CODES.systemdKillMode,
+  );
+  if (killModeIssue) {
+    const fixKillMode = await prompter.confirmRepair({
+      message: "Rewrite the gateway unit to KillMode=control-group and reload systemd now?",
+      initialValue: true,
+    });
+    if (fixKillMode) {
+      try {
+        const migrated = await migrateSystemdKillMode(process.env);
+        if (migrated.rewritten) {
+          note(
+            `Rewrote ${migrated.unitPath} to KillMode=control-group (backup: ${migrated.unitPath}.bak) and ran systemctl --user daemon-reload. Takes effect at the next gateway stop.`,
+            "Gateway service config",
+          );
+        }
+      } catch (err) {
+        runtime.error(`Gateway unit KillMode repair failed: ${String(err)}`);
+      }
+    }
+  }
+  const reinstallIssues = audit.issues.filter(
+    (issue) =>
+      issue.code !== SERVICE_AUDIT_CODES.systemdKillMode &&
+      issue.code !== SERVICE_AUDIT_CODES.systemdKillModeDropIn,
+  );
+  if (reinstallIssues.length === 0) {
+    return;
+  }
+
+  const aggressiveIssues = reinstallIssues.filter((issue) => issue.level === "aggressive");
   const needsAggressive = aggressiveIssues.length > 0;
 
   if (needsAggressive && !prompter.shouldForce) {
@@ -319,7 +352,7 @@ export async function maybeRepairGatewayServiceConfig(
   const repair = needsAggressive
     ? await prompter.confirmAggressive({
         message: "Overwrite gateway service config with current defaults now?",
-        initialValue: Boolean(prompter.shouldForce),
+        initialValue: prompter.shouldForce,
       })
     : await prompter.confirmRepair({
         message: "Update gateway service config to the recommended defaults now?",

@@ -12,6 +12,7 @@ import {
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { formatKillModeDropInWarning, migrateSystemdKillMode } from "../../daemon/systemd.js";
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
@@ -553,6 +554,38 @@ async function updatePluginsAfterCoreUpdate(params: {
   }
 }
 
+/**
+ * signal-daemon-lifecycle ARCH §3.4: an update that does not reinstall the unit still moves an
+ * old KillMode=process unit to control-group (rewrite + daemon-reload) before restarting, so the
+ * restart itself already stops signal-cli. Drop-ins are reported, not edited. Best effort.
+ */
+async function maybeMigrateGatewayUnitKillMode(jsonMode: boolean): Promise<void> {
+  if (process.platform !== "linux") {
+    return;
+  }
+  try {
+    const migrated = await migrateSystemdKillMode(process.env);
+    if (jsonMode) {
+      return;
+    }
+    if (migrated.rewritten) {
+      defaultRuntime.log(
+        theme.muted(
+          `Updated ${migrated.unitPath} to KillMode=control-group (backup kept as .bak).`,
+        ),
+      );
+    }
+    const warning = formatKillModeDropInWarning(migrated.dropInOverrides);
+    if (warning) {
+      defaultRuntime.log(theme.warn(warning));
+    }
+  } catch (err) {
+    if (!jsonMode) {
+      defaultRuntime.log(theme.warn(`Gateway unit KillMode migration failed: ${String(err)}`));
+    }
+  }
+}
+
 async function maybeRestartService(params: {
   shouldRestart: boolean;
   result: UpdateRunResult;
@@ -571,6 +604,7 @@ async function maybeRestartService(params: {
     try {
       let restarted = false;
       let restartInitiated = false;
+      let unitReinstalled = false;
       if (params.refreshServiceEnv) {
         try {
           await refreshGatewayServiceEnv({
@@ -578,6 +612,7 @@ async function maybeRestartService(params: {
             jsonMode: Boolean(params.opts.json),
             invocationCwd: params.invocationCwd,
           });
+          unitReinstalled = true;
         } catch (err) {
           if (!params.opts.json) {
             defaultRuntime.log(
@@ -587,6 +622,10 @@ async function maybeRestartService(params: {
             );
           }
         }
+      }
+      if (!unitReinstalled) {
+        // A reinstall already wrote KillMode=control-group; otherwise migrate in place.
+        await maybeMigrateGatewayUnitKillMode(Boolean(params.opts.json));
       }
       if (params.restartScriptPath) {
         await runRestartScript(params.restartScriptPath);
@@ -601,7 +640,7 @@ async function maybeRestartService(params: {
         process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
         try {
           const interactiveDoctor =
-            Boolean(process.stdin.isTTY) && !params.opts.json && params.opts.yes !== true;
+            process.stdin.isTTY && !params.opts.json && params.opts.yes !== true;
           await doctorCommand(defaultRuntime, {
             nonInteractive: !interactiveDoctor,
           });

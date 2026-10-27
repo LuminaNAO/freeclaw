@@ -8,7 +8,8 @@ import {
   resolveSystemNodePath,
 } from "./runtime-paths.js";
 import { getMinimalServicePathPartsFromEnv } from "./service-env.js";
-import { resolveSystemdUserUnitPath } from "./systemd.js";
+import { SYSTEMD_REQUIRED_KILL_MODE } from "./systemd-unit.js";
+import { inspectSystemdKillMode, resolveSystemdUserUnitPath } from "./systemd.js";
 
 export type GatewayServiceCommand = {
   programArguments: string[];
@@ -45,6 +46,8 @@ export const SERVICE_AUDIT_CODES = {
   launchdKeepAlive: "launchd-keep-alive",
   launchdRunAtLoad: "launchd-run-at-load",
   systemdAfterNetworkOnline: "systemd-after-network-online",
+  systemdKillMode: "systemd-kill-mode",
+  systemdKillModeDropIn: "systemd-kill-mode-drop-in",
   systemdRestartSec: "systemd-restart-sec",
   systemdWantsNetworkOnline: "systemd-wants-network-online",
 } as const;
@@ -155,6 +158,49 @@ async function auditSystemdUnit(
       code: SERVICE_AUDIT_CODES.systemdRestartSec,
       message: "RestartSec does not match the recommended 5s",
       detail: unitPath,
+      level: "recommended",
+    });
+  }
+}
+
+/**
+ * signal-daemon-lifecycle ARCH §3.4: KillMode other than control-group lets signal-cli (and
+ * other children) outlive a gateway stop. A unit-file KillMode is fixable by doctor; a drop-in
+ * that sets KillMode is reported and never edited.
+ */
+export async function auditSystemdKillMode(
+  env: Record<string, string | undefined>,
+  issues: ServiceConfigIssue[],
+  opts: { systemUnitRoots?: string[] } = {},
+) {
+  let inspection;
+  try {
+    inspection = await inspectSystemdKillMode(env, opts);
+  } catch {
+    return;
+  }
+  if (!inspection.unitExists) {
+    return;
+  }
+  if (
+    inspection.unitKillMode !== undefined &&
+    inspection.unitKillMode !== SYSTEMD_REQUIRED_KILL_MODE
+  ) {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.systemdKillMode,
+      message: `Gateway unit sets KillMode=${inspection.unitKillMode}; children such as signal-cli survive restarts (want KillMode=${SYSTEMD_REQUIRED_KILL_MODE}).`,
+      detail: inspection.unitPath,
+      level: "recommended",
+    });
+  }
+  for (const dropIn of inspection.dropIns) {
+    if (dropIn.killMode === SYSTEMD_REQUIRED_KILL_MODE) {
+      continue;
+    }
+    issues.push({
+      code: SERVICE_AUDIT_CODES.systemdKillModeDropIn,
+      message: `systemd drop-in sets KillMode=${dropIn.killMode}; children such as signal-cli survive restarts. Edit it by hand (doctor does not change drop-ins).`,
+      detail: dropIn.path,
       level: "recommended",
     });
   }
@@ -415,6 +461,7 @@ export async function auditGatewayServiceConfig(params: {
 
   if (platform === "linux") {
     await auditSystemdUnit(params.env, issues);
+    await auditSystemdKillMode(params.env, issues);
   } else if (platform === "darwin") {
     await auditLaunchdPlist(params.env, issues);
   }

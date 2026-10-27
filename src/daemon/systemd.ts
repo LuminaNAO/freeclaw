@@ -31,6 +31,9 @@ import {
   buildSystemdUnit,
   parseSystemdEnvAssignment,
   parseSystemdExecStart,
+  readSystemdKillMode,
+  rewriteSystemdKillMode,
+  SYSTEMD_REQUIRED_KILL_MODE,
 } from "./systemd-unit.js";
 
 function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
@@ -499,6 +502,12 @@ export async function installSystemdService({
     throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
   }
 
+  // signal-daemon-lifecycle ARCH §3.4: the unit we wrote uses control-group, but a drop-in can
+  // still override it; report (never edit) such drop-ins.
+  const dropInWarning = formatKillModeDropInWarning(
+    (await inspectSystemdKillMode(env).catch(() => null))?.dropIns ?? [],
+  );
+
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
     stdout,
@@ -507,6 +516,7 @@ export async function installSystemdService({
         label: "Installed systemd service",
         value: unitPath,
       },
+      ...(dropInWarning ? [{ label: "Warning", value: dropInWarning }] : []),
       ...(backedUp
         ? [
             {
@@ -711,4 +721,128 @@ export async function uninstallLegacySystemdUnits({
   }
 
   return units;
+}
+
+export type SystemdKillModeDropIn = { path: string; killMode: string };
+
+export type SystemdKillModeInspection = {
+  unitPath: string;
+  /** False when no gateway unit is installed. */
+  unitExists: boolean;
+  /** KillMode set by the unit file itself (undefined = systemd default, control-group). */
+  unitKillMode?: string;
+  /** Drop-ins that set KillMode, in systemd's application order (last wins). */
+  dropIns: SystemdKillModeDropIn[];
+  /** What systemd will use: last drop-in, else the unit, else the default. */
+  effective: string;
+};
+
+/** Global drop-in roots checked in addition to the unit's own directory. */
+const SYSTEM_USER_UNIT_ROOTS = ["/etc/systemd/user"];
+
+async function listDropInFiles(dir: string): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(dir);
+    return entries
+      .filter((name) => name.endsWith(".conf"))
+      .toSorted()
+      .map((name) => path.join(dir, name));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Read the gateway unit's KillMode and every drop-in that overrides it
+ * (signal-daemon-lifecycle ARCH §3.4). Read-only.
+ */
+export async function inspectSystemdKillMode(
+  env: GatewayServiceEnv,
+  opts: { systemUnitRoots?: string[] } = {},
+): Promise<SystemdKillModeInspection> {
+  const unitPath = resolveSystemdUnitPath(env);
+  const unitName = path.basename(unitPath);
+  let content: string | null = null;
+  try {
+    content = await fs.readFile(unitPath, "utf8");
+  } catch {
+    content = null;
+  }
+  const unitKillMode = content === null ? undefined : readSystemdKillMode(content);
+  // systemd applies drop-ins sorted by file name across all *.d dirs; a same-named file in a
+  // higher-priority dir masks the lower one. The user config dir outranks /etc.
+  const byName = new Map<string, string>();
+  const roots = opts.systemUnitRoots ?? SYSTEM_USER_UNIT_ROOTS;
+  for (const root of [...roots, path.dirname(unitPath)]) {
+    for (const file of await listDropInFiles(path.join(root, `${unitName}.d`))) {
+      byName.set(path.basename(file), file);
+    }
+  }
+  const dropIns: SystemdKillModeDropIn[] = [];
+  for (const name of [...byName.keys()].toSorted()) {
+    const file = byName.get(name) as string;
+    let dropIn: string;
+    try {
+      dropIn = await fs.readFile(file, "utf8");
+    } catch {
+      continue;
+    }
+    const killMode = readSystemdKillMode(dropIn);
+    if (killMode !== undefined) {
+      dropIns.push({ path: file, killMode });
+    }
+  }
+  const effective = dropIns.at(-1)?.killMode ?? unitKillMode ?? SYSTEMD_REQUIRED_KILL_MODE;
+  return { unitPath, unitExists: content !== null, unitKillMode, dropIns, effective };
+}
+
+export type SystemdKillModeMigration = SystemdKillModeInspection & {
+  /** True when the unit file was rewritten and systemd reloaded. */
+  rewritten: boolean;
+  /** Drop-ins that still override KillMode; reported, never edited. */
+  dropInOverrides: SystemdKillModeDropIn[];
+};
+
+/**
+ * ARCH §3.4: rewrite an installed gateway unit whose KillMode is not control-group, keeping a
+ * .bak copy, then `systemctl --user daemon-reload` (no restart; systemd applies KillMode on
+ * the next stop). Drop-ins that set KillMode are left untouched and returned for reporting.
+ */
+export async function migrateSystemdKillMode(
+  env: GatewayServiceEnv,
+  opts: { systemUnitRoots?: string[] } = {},
+): Promise<SystemdKillModeMigration> {
+  const inspection = await inspectSystemdKillMode(env, opts);
+  const dropInOverrides = inspection.dropIns.filter(
+    (entry) => entry.killMode !== SYSTEMD_REQUIRED_KILL_MODE,
+  );
+  if (!inspection.unitExists || inspection.unitKillMode === SYSTEMD_REQUIRED_KILL_MODE) {
+    return { ...inspection, rewritten: false, dropInOverrides };
+  }
+  const content = await fs.readFile(inspection.unitPath, "utf8");
+  await fs.copyFile(inspection.unitPath, `${inspection.unitPath}.bak`);
+  const tmp = `${inspection.unitPath}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, rewriteSystemdKillMode(content), "utf8");
+  await fs.rename(tmp, inspection.unitPath);
+  const reload = await execSystemctlUser(env, ["daemon-reload"]);
+  if (reload.code !== 0) {
+    throw new Error(
+      `rewrote ${inspection.unitPath} to KillMode=${SYSTEMD_REQUIRED_KILL_MODE} but systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim(),
+    );
+  }
+  return {
+    ...inspection,
+    unitKillMode: SYSTEMD_REQUIRED_KILL_MODE,
+    effective: dropInOverrides.at(-1)?.killMode ?? SYSTEMD_REQUIRED_KILL_MODE,
+    rewritten: true,
+    dropInOverrides,
+  };
+}
+
+export function formatKillModeDropInWarning(dropIns: SystemdKillModeDropIn[]): string | null {
+  const offending = dropIns.filter((entry) => entry.killMode !== SYSTEMD_REQUIRED_KILL_MODE);
+  if (offending.length === 0) {
+    return null;
+  }
+  return `systemd drop-in ${offending.map((entry) => `${entry.path} sets KillMode=${entry.killMode}`).join("; ")}; signal-cli and other gateway children can outlive a restart. Remove that line or set KillMode=${SYSTEMD_REQUIRED_KILL_MODE} (not edited automatically).`;
 }

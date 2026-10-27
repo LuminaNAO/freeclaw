@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
+  migrateSystemdKillMode: vi.fn(),
   note: vi.fn(),
 }));
 
@@ -66,6 +67,9 @@ vi.mock("../daemon/service-audit.js", () => ({
       : command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
   SERVICE_AUDIT_CODES: {
     gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
+    gatewayTokenMismatch: "gateway-token-mismatch",
+    systemdKillMode: "systemd-kill-mode",
+    systemdKillModeDropIn: "systemd-kill-mode-drop-in",
   },
 }));
 
@@ -78,6 +82,7 @@ vi.mock("../daemon/service.js", () => ({
 
 vi.mock("../daemon/systemd.js", () => ({
   uninstallLegacySystemdUnits: mocks.uninstallLegacySystemdUnits,
+  migrateSystemdKillMode: mocks.migrateSystemdKillMode,
 }));
 
 vi.mock("../terminal/note.js", () => ({
@@ -482,6 +487,76 @@ describe("maybeRepairGatewayServiceConfig", () => {
         );
       },
     );
+  });
+});
+
+describe("maybeRepairGatewayServiceConfig KillMode (signal-daemon-lifecycle ARCH §3.4)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fsMocks.realpath.mockImplementation(async (value: string) => value);
+    mocks.resolveGatewayAuthTokenForService.mockResolvedValue({ token: undefined });
+    mocks.readCommand.mockResolvedValue({ programArguments: gatewayProgramArguments });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.migrateSystemdKillMode.mockResolvedValue({
+      unitPath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+      rewritten: true,
+      dropInOverrides: [],
+    });
+  });
+
+  const killModeIssue = {
+    code: "systemd-kill-mode",
+    message: "Gateway unit sets KillMode=process",
+    detail: "/home/test/.config/systemd/user/openclaw-gateway.service",
+    level: "recommended",
+  };
+
+  it("reports KillMode=process and fixes it in place without reinstalling", async () => {
+    mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: false, issues: [killModeIssue] });
+    await runRepair({});
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("KillMode=process"),
+      "Gateway service config",
+    );
+    expect(mocks.migrateSystemdKillMode).toHaveBeenCalledTimes(1);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("daemon-reload"),
+      "Gateway service config",
+    );
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it("does not rewrite when the repair is declined", async () => {
+    mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: false, issues: [killModeIssue] });
+    const prompts = makeDoctorPrompts();
+    prompts.confirmRepair.mockResolvedValue(false);
+    await maybeRepairGatewayServiceConfig({}, "local", makeDoctorIo(), prompts);
+    expect(mocks.migrateSystemdKillMode).not.toHaveBeenCalled();
+  });
+
+  it("reports a KillMode drop-in but never edits it", async () => {
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "systemd-kill-mode-drop-in",
+          message: "systemd drop-in sets KillMode=process",
+          detail: "/home/test/.config/systemd/user/openclaw-gateway.service.d/override.conf",
+          level: "recommended",
+        },
+      ],
+    });
+    await runRepair({});
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("override.conf"),
+      "Gateway service config",
+    );
+    expect(mocks.migrateSystemdKillMode).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
   });
 });
 

@@ -106,6 +106,13 @@ vi.mock("../daemon/service.js", () => ({
   })),
 }));
 
+const migrateSystemdKillMode = vi.hoisted(() => vi.fn());
+vi.mock("../daemon/systemd.js", () => ({
+  migrateSystemdKillMode: (...args: unknown[]) => migrateSystemdKillMode(...args),
+  formatKillModeDropInWarning: (dropIns: Array<{ path: string }>) =>
+    dropIns.length > 0 ? `drop-in ${dropIns.map((d) => d.path).join(", ")} sets KillMode` : null,
+}));
+
 vi.mock("../infra/ports.js", () => ({
   inspectPortUsage: (...args: unknown[]) => inspectPortUsage(...args),
   classifyPortListener: (...args: unknown[]) => classifyPortListener(...args),
@@ -259,6 +266,7 @@ describe("update-cli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    migrateSystemdKillMode.mockResolvedValue({ rewritten: false, dropInOverrides: [] });
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
@@ -722,6 +730,38 @@ describe("update-cli", () => {
 
   it("updateCommand falls back to restart when no detached restart script is available", async () => {
     await runRestartFallbackScenario({ daemonInstall: "ok" });
+  });
+
+  it("updateCommand migrates an old KillMode unit before restarting when it did not reinstall (signal-daemon-lifecycle ARCH §3.4)", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    vi.mocked(runDaemonInstall).mockRejectedValueOnce(new Error("refresh failed"));
+    prepareRestartScript.mockResolvedValue(null);
+    serviceLoaded.mockResolvedValue(true);
+    vi.mocked(runDaemonRestart).mockResolvedValue(true);
+    migrateSystemdKillMode.mockResolvedValue({
+      unitPath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+      rewritten: true,
+      dropInOverrides: [{ path: "/x/override.conf", killMode: "process" }],
+    });
+
+    await updateCommand({});
+
+    if (process.platform === "linux") {
+      expect(migrateSystemdKillMode).toHaveBeenCalledTimes(1);
+      expect(migrateSystemdKillMode.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(runDaemonRestart).mock.invocationCallOrder[0],
+      );
+      const logs = vi.mocked(defaultRuntime.log).mock.calls.map((c) => String(c[0]));
+      expect(logs.some((l) => l.includes("KillMode=control-group"))).toBe(true);
+      expect(logs.some((l) => l.includes("/x/override.conf"))).toBe(true);
+    } else {
+      expect(migrateSystemdKillMode).not.toHaveBeenCalled();
+    }
+  });
+
+  it("updateCommand skips the in-place KillMode migration after a successful reinstall", async () => {
+    await runRestartFallbackScenario({ daemonInstall: "ok" });
+    expect(migrateSystemdKillMode).not.toHaveBeenCalled();
   });
 
   it("updateCommand does not refresh service env when --no-restart is set", async () => {
