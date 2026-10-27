@@ -639,15 +639,20 @@ async function deliverOutboundPayloadsCore(
     }
   };
 
-  const sendSignalMedia = async (caption: string, mediaUrl: string) => {
+  const sendSignalMedia = async (caption: string, mediaUrl: string, voiceNote?: boolean) => {
     throwIfAborted(abortSignal);
-    const formatted = markdownToSignalTextChunks(caption, Number.POSITIVE_INFINITY, {
-      tableMode: signalTableMode,
-    })[0] ?? {
+    // voice ARCH §2.5: a caption longer than the text limit goes out as its first chunk with
+    // the media; the rest follows as text messages after the media.
+    const captionChunks = markdownToSignalTextChunks(
+      caption,
+      textLimit === undefined ? Number.POSITIVE_INFINITY : textLimit,
+      { tableMode: signalTableMode },
+    );
+    const formatted = captionChunks[0] ?? {
       text: caption,
       styles: [],
     };
-    return {
+    const delivery = {
       channel: "signal" as const,
       ...(await sendSignal(to, formatted.text, {
         cfg,
@@ -657,8 +662,14 @@ async function deliverOutboundPayloadsCore(
         textMode: "plain",
         textStyles: formatted.styles,
         mediaLocalRoots,
+        ...(voiceNote ? { voiceNote: true } : {}),
       })),
     };
+    const followUps: OutboundDeliveryResult[] = [];
+    for (const chunk of captionChunks.slice(1)) {
+      followUps.push(await sendSignalText(chunk.text, chunk.styles));
+    }
+    return { delivery, followUps };
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(
     payloads,
@@ -776,8 +787,13 @@ async function deliverOutboundPayloadsCore(
         const caption = first ? payloadSummary.text : "";
         first = false;
         if (isSignalChannel) {
-          const delivery = await sendSignalMedia(caption, url);
-          results.push(delivery);
+          // voice ARCH §2.3: `[[audio_as_voice]]` audio goes out as a Signal voice note.
+          const { delivery, followUps } = await sendSignalMedia(
+            caption,
+            url,
+            effectivePayload.audioAsVoice,
+          );
+          results.push(delivery, ...followUps);
           lastMessageId = delivery.messageId;
         } else {
           const delivery = await handler.sendMedia(caption, url, sendOverrides);

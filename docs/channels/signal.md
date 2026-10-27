@@ -280,6 +280,10 @@ Trust boundary: the gate trusts the sender ids that the `signal-cli` daemon repo
 - Outbound text is chunked to `channels.signal.textChunkLimit` (default 4000).
 - Optional newline chunking: set `channels.signal.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking.
 - Attachments supported (base64 fetched from `signal-cli`).
+- Outbound media with no text is sent attachment-only (no placeholder body).
+- TTS audio is Opus and goes out as a voice note (signal-cli JSON-RPC `send` param `voiceNote`, the
+  `--voice-note` flag; needs signal-cli 0.14.2 or newer) with the spoken text as its message text.
+  A caption longer than `textChunkLimit` is split: the first chunk goes with the audio, the rest follows.
 - Default media cap: `channels.signal.mediaMaxMb` (default 8).
 - Use `channels.signal.ignoreAttachments` to skip downloading media.
 - Group history context uses `channels.signal.historyLimit` (or `channels.signal.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).

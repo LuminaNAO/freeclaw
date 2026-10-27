@@ -357,14 +357,29 @@ async function deliverReplies(params: {
         });
       }
     } else {
+      // voice ARCH §2.5: a caption longer than the text limit goes out as its first chunk with
+      // the media; the rest follows as plain text messages after the media.
+      const captionChunks = text ? chunkTextWithMode(text, textLimit, chunkMode) : [];
+      const [captionText = "", ...followUpChunks] =
+        captionChunks.length > 0 ? captionChunks : [text];
       let first = true;
       for (const url of mediaList) {
-        const caption = first ? text : "";
+        const caption = first ? captionText : "";
         first = false;
         await sendMessageSignal(target, caption, {
           baseUrl,
           account,
           mediaUrl: url,
+          maxBytes,
+          accountId,
+          // voice ARCH §2.3: `[[audio_as_voice]]` audio goes out as a Signal voice note.
+          ...(payload.audioAsVoice ? { voiceNote: true } : {}),
+        });
+      }
+      for (const chunk of followUpChunks) {
+        await sendMessageSignal(target, chunk, {
+          baseUrl,
+          account,
           maxBytes,
           accountId,
         });

@@ -308,6 +308,83 @@ describe("monitorSignalProvider tool results", () => {
     expect(sendMock.mock.calls[0][1]).toBe("PFX final reply");
   });
 
+  it("delivers TTS audio as a voice note with its transcript, long text after the media (voice ARCH §2.3, §2.5)", async () => {
+    setSignalToolResultTestConfig({
+      ...config,
+      messages: {},
+      channels: {
+        signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"], textChunkLimit: 20 },
+      },
+    });
+    replyMock.mockResolvedValue({
+      text: "short transcript",
+      mediaUrl: "/tmp/voice.opus",
+      audioAsVoice: true,
+    });
+    const inbound = {
+      envelope: {
+        sourceNumber: "+15550001111",
+        sourceName: "Ada",
+        timestamp: 1,
+        dataMessage: { message: "hello" },
+      },
+    };
+
+    await receiveSignalPayloads({ payloads: [inbound] });
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][1]).toBe("short transcript");
+    expect(sendMock.mock.calls[0][2]).toMatchObject({
+      mediaUrl: "/tmp/voice.opus",
+      voiceNote: true,
+    });
+
+    sendMock.mockClear();
+    replyMock.mockResolvedValue({
+      text: "a transcript that is much longer than twenty chars",
+      mediaUrl: "/tmp/voice.opus",
+      audioAsVoice: true,
+    });
+    await receiveSignalPayloads({
+      payloads: [{ envelope: { ...inbound.envelope, timestamp: 2 } }],
+    });
+
+    expect(sendMock.mock.calls.length).toBeGreaterThan(1);
+    expect(sendMock.mock.calls[0][2]).toMatchObject({
+      mediaUrl: "/tmp/voice.opus",
+      voiceNote: true,
+    });
+    expect((sendMock.mock.calls[0][1] as string).length).toBeLessThanOrEqual(20);
+    for (const call of sendMock.mock.calls.slice(1)) {
+      expect(call[2]).not.toHaveProperty("mediaUrl");
+      expect(call[2]).not.toHaveProperty("voiceNote");
+    }
+    expect(sendMock.mock.calls.map((call) => call[1] as string).join(" ")).toBe(
+      "a transcript that is much longer than twenty chars",
+    );
+  });
+
+  it("sends media without the voice flag when audioAsVoice is not set", async () => {
+    replyMock.mockResolvedValue({ mediaUrl: "/tmp/file.mp3" });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1,
+            dataMessage: { message: "hello" },
+          },
+        },
+      ],
+    });
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][1]).toBe("");
+    expect(sendMock.mock.calls[0][2]).not.toHaveProperty("voiceNote");
+  });
+
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
     setSignalToolResultTestConfig(
       createSignalConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),

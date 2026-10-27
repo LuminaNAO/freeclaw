@@ -384,6 +384,62 @@ describe("deliverOutboundPayloads", () => {
     expect(results[0]).toMatchObject({ channel: "signal", messageId: "s1" });
   });
 
+  it("sends audioAsVoice audio to Signal as a voice note with its transcript (voice ARCH §2.3)", async () => {
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "signal",
+      to: "+1555",
+      payloads: [
+        { text: "Spoken words", mediaUrl: "/tmp/voice.opus", audioAsVoice: true },
+        { text: "plain", mediaUrl: "/tmp/file.mp3" },
+      ],
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "Spoken words",
+      expect.objectContaining({ mediaUrl: "/tmp/voice.opus", voiceNote: true }),
+    );
+    expect(sendSignal.mock.calls[1]?.[2]).not.toHaveProperty("voiceNote");
+  });
+
+  it("splits a Signal media caption over the text limit and sends the rest after the media (voice ARCH §2.5)", async () => {
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
+    const cfg: OpenClawConfig = { channels: { signal: { textChunkLimit: 20 } } };
+    const text = "one two three four five six seven eight nine ten eleven twelve";
+    const expectedChunks = markdownToSignalTextChunks(text, 20);
+    expect(expectedChunks.length).toBeGreaterThan(1);
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text, mediaUrl: "/tmp/voice.opus", audioAsVoice: true }],
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledTimes(expectedChunks.length);
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      expectedChunks[0]?.text,
+      expect.objectContaining({ mediaUrl: "/tmp/voice.opus", voiceNote: true }),
+    );
+    expectedChunks.slice(1).forEach((chunk, index) => {
+      expect(sendSignal).toHaveBeenNthCalledWith(
+        index + 2,
+        "+1555",
+        chunk.text,
+        expect.not.objectContaining({ mediaUrl: expect.anything() }),
+      );
+    });
+    expect(results).toHaveLength(expectedChunks.length);
+  });
+
   it("chunks Signal markdown using the format-first chunker", async () => {
     const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
     const cfg: OpenClawConfig = {
