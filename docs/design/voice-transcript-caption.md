@@ -42,3 +42,28 @@ voice-bubble channel set; the send path never sets signal-cli's voice-note flag)
 ## 4. Acceptance
 Touched suites green, `pnpm build` green. Live on the dev gateway: the agent's tts tool on Signal arrives as a voice
 note bubble with the transcript as its text.
+
+## 5. Voice replies switch off block streaming (operator, 2026-10-28)
+Problem found live: with automatic voice replies on (`ttsAuto` / prefs / config auto = `always`) and block streaming on
+(the default), each reply is posted twice: the streamed text blocks, then the voice note captioned with the same text
+(§2.1 `textDelivered` path). Decision (operator): voice and streaming are a dynamic switch.
+
+1. **Rule.** When the effective automatic TTS mode for the turn (`resolveTtsAutoMode`: session `ttsAuto`, then prefs,
+   then config `messages.tts.auto`) will produce audio for this reply, block streaming is turned off for that turn,
+   exactly as `disableBlockStreaming: true`. Concretely:
+   - `always`: streaming off for every turn of that session.
+   - `inbound`: streaming off only for turns whose inbound message contained audio.
+   - `tagged`: unchanged (audio only for tagged text; streaming stays as configured).
+   - `off`: unchanged.
+   The decision is made once at the start of the turn in `dispatchReplyFromConfig`, before the reply is resolved,
+   and passed down as `disableBlockStreaming: true`; an explicit caller `disableBlockStreaming: false` does not
+   override it for these modes.
+2. **Result.** One message per reply: the voice note with its transcript as the body (§2.1, §2.3). The block-streaming
+   TTS synthesis path (§2.1 `textDelivered`) stays for other cases but is no longer reached in normal voice turns.
+3. **Safety net.** In the `textDelivered` path (text already streamed to the chat), the voice note goes out with no
+   caption (the text is directly above it), never a second copy of the text.
+4. **Tests.** Session `ttsAuto=always` + streaming default on: one delivered payload (audio + transcript), no block
+   sends. `inbound` with and without inbound audio. `tagged`/`off`: streaming unchanged. `textDelivered` path: media
+   sent with empty body. Existing voice and streaming suites green.
+5. **Acceptance.** Live on the dev gateway: a group with voice on gets exactly one message per reply (voice note +
+   transcript); a group with voice off still streams as before.
