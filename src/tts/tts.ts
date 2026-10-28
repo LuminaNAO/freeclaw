@@ -420,6 +420,33 @@ export function resolveTtsAutoMode(params: {
   return params.config.auto;
 }
 
+/**
+ * Voice ARCH §5.1: automatic voice replies and block streaming are a dynamic switch. True when the
+ * effective automatic TTS mode for this turn will produce audio for the reply, so the turn runs with
+ * block streaming off (one message per reply: the voice note with its transcript).
+ * - `always`: every turn. `inbound`: only turns whose inbound message contained audio.
+ * - `tagged` / `off`: never (streaming stays as configured).
+ */
+export function shouldTtsDisableBlockStreaming(params: {
+  cfg: OpenClawConfig;
+  sessionAuto?: string;
+  inboundAudio?: boolean;
+}): boolean {
+  const config = resolveTtsConfig(params.cfg);
+  const autoMode = resolveTtsAutoMode({
+    config,
+    prefsPath: resolveTtsPrefsPath(config),
+    sessionAuto: params.sessionAuto,
+  });
+  if (autoMode === "always") {
+    return true;
+  }
+  if (autoMode === "inbound") {
+    return params.inboundAudio === true;
+  }
+  return false;
+}
+
 export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefined {
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);

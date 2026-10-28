@@ -78,6 +78,7 @@ const {
   getTtsProvider,
   setTtsProvider,
   isTtsProviderConfigured,
+  shouldTtsDisableBlockStreaming,
 } = tts;
 
 const {
@@ -1148,6 +1149,79 @@ sys.exit(7)
         expect(result.text).toBe("A short spoken summary.");
         expect(result.text).not.toBe(original.trim());
         expect(result.textIsTranscript).toBe(true);
+      });
+    });
+  });
+
+  describe("shouldTtsDisableBlockStreaming (voice ARCH §5.1)", () => {
+    const withPrefs = <T>(prefs: unknown, run: (cfgPrefsPath: string) => T): T => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "tts-stream-"));
+      try {
+        const prefsPath = path.join(root, "prefs.json");
+        if (prefs !== undefined) {
+          writeFileSync(prefsPath, JSON.stringify(prefs), "utf8");
+        }
+        return run(prefsPath);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    };
+    const cfgWith = (prefsPath: string, auto?: string): OpenClawConfig =>
+      ({
+        messages: { tts: { prefsPath, ...(auto ? { auto } : {}) } },
+      }) as OpenClawConfig;
+
+    it("always: streaming off for every turn", () => {
+      withPrefs(undefined, (prefsPath) => {
+        const cfg = cfgWith(prefsPath);
+        expect(shouldTtsDisableBlockStreaming({ cfg, sessionAuto: "always" })).toBe(true);
+        expect(
+          shouldTtsDisableBlockStreaming({ cfg, sessionAuto: "always", inboundAudio: true }),
+        ).toBe(true);
+      });
+    });
+
+    it("inbound: streaming off only when the inbound message contained audio", () => {
+      withPrefs(undefined, (prefsPath) => {
+        const cfg = cfgWith(prefsPath);
+        expect(
+          shouldTtsDisableBlockStreaming({ cfg, sessionAuto: "inbound", inboundAudio: true }),
+        ).toBe(true);
+        expect(
+          shouldTtsDisableBlockStreaming({ cfg, sessionAuto: "inbound", inboundAudio: false }),
+        ).toBe(false);
+        expect(shouldTtsDisableBlockStreaming({ cfg, sessionAuto: "inbound" })).toBe(false);
+      });
+    });
+
+    it("tagged and off: streaming unchanged", () => {
+      withPrefs(undefined, (prefsPath) => {
+        const cfg = cfgWith(prefsPath);
+        for (const sessionAuto of ["tagged", "off"]) {
+          expect(shouldTtsDisableBlockStreaming({ cfg, sessionAuto, inboundAudio: true })).toBe(
+            false,
+          );
+        }
+        expect(shouldTtsDisableBlockStreaming({ cfg })).toBe(false);
+      });
+    });
+
+    it("resolves session ttsAuto, then prefs, then config auto", () => {
+      withPrefs({ tts: { auto: "always" } }, (prefsPath) => {
+        expect(shouldTtsDisableBlockStreaming({ cfg: cfgWith(prefsPath, "off") })).toBe(true);
+        expect(
+          shouldTtsDisableBlockStreaming({ cfg: cfgWith(prefsPath), sessionAuto: "off" }),
+        ).toBe(false);
+      });
+      withPrefs(undefined, (prefsPath) => {
+        expect(shouldTtsDisableBlockStreaming({ cfg: cfgWith(prefsPath, "always") })).toBe(true);
+        expect(
+          shouldTtsDisableBlockStreaming({
+            cfg: cfgWith(prefsPath, "inbound"),
+            inboundAudio: true,
+          }),
+        ).toBe(true);
+        expect(shouldTtsDisableBlockStreaming({ cfg: cfgWith(prefsPath, "tagged") })).toBe(false);
       });
     });
   });

@@ -32,7 +32,12 @@ import {
 } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
+import {
+  maybeApplyTtsToPayload,
+  normalizeTtsAutoMode,
+  resolveTtsConfig,
+  shouldTtsDisableBlockStreaming,
+} from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -221,6 +226,14 @@ export async function dispatchReplyFromConfig(params: {
     const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
     const inboundAudio = isInboundAudioContext(ctx);
     const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
+    // Voice ARCH §5.1: decided once per turn. When automatic TTS will voice this reply, block
+    // streaming is off for the turn (one message: the voice note with its transcript); an explicit
+    // caller `disableBlockStreaming: false` does not override it.
+    const ttsDisablesBlockStreaming = shouldTtsDisableBlockStreaming({
+      cfg,
+      sessionAuto: sessionTtsAuto,
+      inboundAudio,
+    });
     const hookRunner = getGlobalHookRunner();
 
     // Extract message context for hooks (plugin and internal)
@@ -463,6 +476,7 @@ export async function dispatchReplyFromConfig(params: {
         ctx,
         {
           ...params.replyOptions,
+          ...(ttsDisablesBlockStreaming ? { disableBlockStreaming: true } : {}),
           typingPolicy: typing.typingPolicy,
           suppressTyping: typing.suppressTyping,
           onToolResult: (payload: ReplyPayload) => {
