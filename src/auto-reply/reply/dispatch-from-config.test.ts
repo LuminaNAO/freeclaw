@@ -61,8 +61,9 @@ const ttsMocks = vi.hoisted(() => {
       ) {
         return {
           ...params.payload,
-          // Like the real implementation: already-delivered text becomes the spoken transcript.
-          ...(params.textDelivered ? { textIsTranscript: true } : {}),
+          // Like the real implementation: already-delivered text is not repeated as a caption
+          // (voice ARCH §5.3).
+          ...(params.textDelivered ? { text: undefined } : {}),
           mediaUrl: "https://example.com/tts-synth.opus",
           audioAsVoice: true,
         };
@@ -525,7 +526,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(sent[1]?.text).toBeUndefined();
   });
 
-  it("sends block-streamed TTS audio with the block text as its transcript (voice ARCH §2.1)", async () => {
+  it("sends block-streamed TTS audio with no caption after the streamed text (voice ARCH §5.3)", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
     const dispatcher = createDispatcher();
@@ -542,14 +543,16 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "final", textDelivered: true }),
+    );
     const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as ReplyPayload | undefined;
-    expect(finalPayload).toMatchObject({
-      text: "Streamed answer.",
-      textIsTranscript: true,
+    expect(finalPayload).toEqual({
       mediaUrl: "https://example.com/tts-synth.opus",
       audioAsVoice: true,
     });
+    expect(finalPayload?.text).toBeUndefined();
   });
 
   it("provides onToolResult in DM sessions", async () => {
@@ -1449,9 +1452,9 @@ describe("dispatchReplyFromConfig", () => {
     const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
-    // voice ARCH §2.1: the audio carries its transcript as the body.
-    expect(finalPayload?.text).toBe("Hello from ACP streaming.");
-    expect(finalPayload?.textIsTranscript).toBe(true);
+    // voice ARCH §5.3: the text was streamed above; the audio goes out with no caption.
+    expect(finalPayload?.text).toBeUndefined();
+    expect(finalPayload?.textIsTranscript).toBeUndefined();
     expect(finalPayload?.audioAsVoice).toBe(true);
   });
 

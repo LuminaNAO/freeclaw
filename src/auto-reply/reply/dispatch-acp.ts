@@ -341,11 +341,9 @@ export async function tryDispatchAcpReply(params: {
           textDelivered: true,
         });
         if (ttsSyntheticReply.mediaUrl) {
-          // voice ARCH §2.1: the audio carries the spoken text as its body.
+          // Voice ARCH §5.3: the block text was already streamed above, so the audio goes out
+          // with no caption, never a second copy of the text.
           const delivered = await delivery.deliver("final", {
-            ...(ttsSyntheticReply.textIsTranscript && ttsSyntheticReply.text
-              ? { text: ttsSyntheticReply.text, textIsTranscript: true }
-              : {}),
             mediaUrl: ttsSyntheticReply.mediaUrl,
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           });

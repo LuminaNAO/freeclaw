@@ -616,12 +616,9 @@ export async function dispatchReplyFromConfig(params: {
           });
           // Only send if TTS was actually applied (mediaUrl exists)
           if (ttsSyntheticReply.mediaUrl) {
-            // The block text was already delivered; the audio goes out with what it actually says
-            // (the spoken text, after any summarisation) as its body (voice ARCH §2.1).
+            // Voice ARCH §5.3: the block text was already streamed to the chat directly above, so
+            // the audio goes out with no caption, never a second copy of the text.
             const ttsOnlyPayload: ReplyPayload = {
-              ...(ttsSyntheticReply.textIsTranscript && ttsSyntheticReply.text
-                ? { text: ttsSyntheticReply.text, textIsTranscript: true }
-                : {}),
               mediaUrl: ttsSyntheticReply.mediaUrl,
               audioAsVoice: ttsSyntheticReply.audioAsVoice,
             };

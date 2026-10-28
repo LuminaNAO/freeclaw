@@ -1068,7 +1068,7 @@ export async function maybeApplyTtsToPayload(params: {
   ttsAuto?: string;
   /**
    * The payload text was already delivered on its own (e.g. as streamed blocks), so the audio
-   * goes out alone with the spoken text as its caption (voice ARCH §2.1).
+   * goes out alone with no caption: the text is directly above it (voice ARCH §5.3).
    */
   textDelivered?: boolean;
 }): Promise<ReplyPayload> {
@@ -1191,10 +1191,16 @@ export async function maybeApplyTtsToPayload(params: {
       channelId !== null && VOICE_BUBBLE_CHANNELS.has(channelId) && result.voiceCompatible === true;
     // voice ARCH §2.1/§2.4: the audio carries what it actually says (after summarisation) as its
     // body, unless the agent's own reply text is delivered with it; then the agent text wins.
-    const agentText = params.textDelivered ? "" : (nextPayload.text?.trim() ?? "");
+    // Voice ARCH §5.3: when the text was already delivered (streamed), the audio has no caption.
+    const agentText = nextPayload.text?.trim() ?? "";
+    const caption: Pick<ReplyPayload, "text" | "textIsTranscript"> = params.textDelivered
+      ? { text: undefined, textIsTranscript: undefined }
+      : agentText
+        ? {}
+        : { text: textForAudio, textIsTranscript: true };
     const finalPayload: ReplyPayload = {
       ...nextPayload,
-      ...(agentText ? {} : { text: textForAudio, textIsTranscript: true }),
+      ...caption,
       mediaUrl: result.audioPath,
       audioAsVoice: shouldVoice || params.payload.audioAsVoice,
     };

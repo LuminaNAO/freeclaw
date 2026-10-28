@@ -1075,7 +1075,21 @@ sys.exit(7)
         }
       };
 
-      it("on Signal: opus voice note whose body is the spoken text when the text was already sent", async () => {
+      it("on Signal: opus voice note whose body is the spoken text", async () => {
+        const { result, spoken } = await runAuto({
+          payload: { text: "[[tts:text]]Here is **the** answer.[[/tts:text]]" },
+          kind: "final",
+          channel: "signal",
+        });
+
+        expect(result.mediaUrl).toMatch(/\.opus$/);
+        expect(result.audioAsVoice).toBe(true);
+        expect(spoken).toBe("Here is the answer.");
+        expect(result.text).toBe("Here is the answer.");
+        expect(result.textIsTranscript).toBe(true);
+      });
+
+      it("textDelivered: the voice note goes out with no caption (voice ARCH §5.3)", async () => {
         const { result, spoken } = await runAuto({
           payload: { text: "Here is **the** answer." },
           kind: "final",
@@ -1086,8 +1100,8 @@ sys.exit(7)
         expect(result.mediaUrl).toMatch(/\.opus$/);
         expect(result.audioAsVoice).toBe(true);
         expect(spoken).toBe("Here is the answer.");
-        expect(result.text).toBe("Here is the answer.");
-        expect(result.textIsTranscript).toBe(true);
+        expect(result.text).toBeUndefined();
+        expect(result.textIsTranscript).toBeUndefined();
       });
 
       it("the agent's own reply text wins when it is delivered with the audio", async () => {
@@ -1121,7 +1135,11 @@ sys.exit(7)
         );
         const original = `Long reply. ${"Lots of detail here. ".repeat(10)}`;
         const { result, spoken } = await runAuto(
-          { payload: { text: original }, kind: "final", channel: "signal", textDelivered: true },
+          {
+            payload: { text: `[[tts:text]]${original}[[/tts:text]]` },
+            kind: "final",
+            channel: "signal",
+          },
           { maxLength: 100, summarize: true },
         );
 
