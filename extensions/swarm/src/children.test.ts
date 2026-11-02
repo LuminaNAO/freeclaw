@@ -115,6 +115,12 @@ describe("holon paths and sessions (ARCH §2, §5)", () => {
       role: "taskmaster",
     });
     expect(() => taskDirFor("/state", "root-a/../x")).toThrow(SwarmContractError);
+    // plan.md interface for the other partitions.
+    expect(children.holonPathKey(["root-a", "child-b"])).toBe("root-a/child-b");
+    expect(children.holonDirFor("/state", "root-a", ["child-b"])).toBe(
+      taskDirFor("/state", "root-a/child-b"),
+    );
+    expect(children.holonDirFor("/state", "root-a", [])).toBe(taskDirFor("/state", "root-a"));
   });
 });
 

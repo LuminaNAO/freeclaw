@@ -6,6 +6,7 @@ import {
   isHolonKey,
   parentKeyOf,
   SwarmContractError,
+  taskDirFor,
 } from "./contract.js";
 import type { SwarmEngine, TaskState } from "./engine.js";
 import {
@@ -32,6 +33,18 @@ export const CHILD_EVENTS: Readonly<Record<string, string>> = Object.freeze({
   // parent is never left waiting on it (§1.3).
   CANCELLED: "CHILD_CANCELLED",
 });
+
+/** plan.md interface: `["root", "c1"]` → `"root/c1"` (the holon key used everywhere). */
+export function holonPathKey(segments: string[]): string {
+  const key = segments.join(HOLON_KEY_SEPARATOR);
+  holonKeySegments(key);
+  return key;
+}
+
+/** plan.md interface: the folder of the holon at `segments` below `rootId` (`[]` = root). */
+export function holonDirFor(stateDir: string, rootId: string, segments: string[]): string {
+  return taskDirFor(stateDir, holonPathKey([rootId, ...segments]));
+}
 
 /** Where a child's report to its parent is recorded in the child's own log. */
 export const TO_PARENT = "parent";
@@ -321,9 +334,10 @@ export type SpawnResult = StartedTask & { parent: string; path: string[]; canon:
  */
 export async function spawnChild(
   engine: SwarmEngine,
-  parentKey: string,
+  parentRef: string | string[],
   yamlText: string,
 ): Promise<SpawnResult> {
+  const parentKey = Array.isArray(parentRef) ? holonPathKey(parentRef) : parentRef;
   holonKeySegments(parentKey);
   const parent = engine.loadState(parentKey);
   if (parent.status !== "open") {
