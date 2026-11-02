@@ -4,8 +4,15 @@ import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/swarm";
 import { spawnChild } from "./children.js";
 import { continueTask } from "./continue.js";
 import type { SwarmEngine } from "./engine.js";
+<<<<<<< HEAD
 import { OPERATOR_CALLER, runOp, SWARM_OPS } from "./ops.js";
 import { answerTask, cancelTask, listTasks, startTask } from "./tasks.js";
+=======
+// §10a.3 (humans over a channel): group lifecycle and the relay's inbound reply.
+import { closeHolonGroup, openHolonGroup } from "./humans.js";
+import { relayHumanReply } from "./relay.js";
+import { answerTask, cancelTask, listTasks, startTask } from "./tasks.js";
+>>>>>>> feature/holon-steps-3-5-p3
 
 // Gateway methods swarm.start / list / show / cancel / answer (ARCH §5, §9),
 // swarm.continue (ARCH §12) and swarm.spawn (ARCH §5, §10a.1). The steps 3-5 ops
@@ -128,5 +135,23 @@ export function createSwarmMethods(
         guarded((engine, params) => runOp(name, engine, params, OPERATOR_CALLER)),
       ]),
     ),
+    // ARCH §10a.3: the same ops the channel hook and the fake channel call.
+    "swarm.group": guarded((engine, params) => {
+      const taskId = str(params, "taskId");
+      const action = str(params, "action");
+      if (!taskId || (action !== "open" && action !== "close")) {
+        throw new Error("swarm.group needs `taskId` and `action` (open | close)");
+      }
+      return action === "open" ? openHolonGroup(engine, taskId) : closeHolonGroup(engine, taskId);
+    }),
+    "swarm.relay": guarded((engine, params) => {
+      const taskId = str(params, "taskId");
+      const who = str(params, "who");
+      const message = str(params, "message");
+      if (!taskId || !who || !message) {
+        throw new Error("swarm.relay needs `taskId`, `who` (a human's channel id) and `message`");
+      }
+      return relayHumanReply(engine, { taskId, who, text: message });
+    }),
   };
 }

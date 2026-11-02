@@ -14,6 +14,7 @@ import {
   holonStateFrom,
   loadHolon,
   parseHolon,
+  RELAY_ROLE,
   targetMembers,
   type Holon,
   type HolonState,
@@ -161,7 +162,7 @@ export async function startHolon(
         `cannot apply the lead model: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-  } else {
+  } else if (holon.lead.kind === "agent") {
     await patch
       .patchSession?.({
         sessionKey: engine.sessionKey(contract.id, TASKMASTER),
@@ -555,7 +556,13 @@ async function cancelOne(
     engine.close(taskId, "cancelled");
     const rec = engine.record(taskId, { kind: "system", event: "CANCELLED", body: reason });
     const members = state.holon.lanes.flatMap((l) => targetMembers(state.holon, l.role));
-    for (const role of [TASKMASTER, ...members]) {
+    // ARCH §10a.3: the relay is stopped (no run of its own to brief); humans get the line.
+    const relayKey = engine.sessionKey(taskId, RELAY_ROLE);
+    if (engine.mailbox.isBusy(relayKey)) {
+      await engine.runtime.subagent.abortSession?.({ sessionKey: relayKey });
+    }
+    const humanRoles = state.holon.participants.map((p) => p.role);
+    for (const role of [TASKMASTER, ...members, ...humanRoles]) {
       await engine.sendTo(taskId, state, {
         to: role,
         from: UPSTREAM,

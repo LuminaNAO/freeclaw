@@ -1,6 +1,17 @@
-import type { PluginHookAgentContext, PluginHookLlmInputEvent } from "openclaw/plugin-sdk/swarm";
+import type {
+  PluginHookAgentContext,
+  PluginHookBeforeToolCallEvent,
+  PluginHookLlmInputEvent,
+  PluginHookMessageContext,
+  PluginHookMessageReceivedEvent,
+  PluginHookMessageSendingEvent,
+  PluginHookToolContext,
+} from "openclaw/plugin-sdk/swarm";
 import type { RunEnd } from "./delivery.js";
+import { SWARM_EMIT_TOOL } from "./emit.js";
 import { lastInputSeqFor, type SwarmEngine, type TaskState } from "./engine.js";
+import { RELAY_ROLE } from "./holon.js";
+import { onRelayRunEnd, relayHumanReply, relayModelOf } from "./relay.js";
 import { TASKMASTER } from "./routing.js";
 import { isSwarmSessionKey, laneRoleOf, parseSwarmSessionKey } from "./sessions.js";
 import type { SwarmEvent } from "./store.js";
@@ -48,6 +59,11 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
     const ref = parseSwarmSessionKey(end.sessionKey);
     if (!ref || end.status === "aborted") {
       return; // aborts are urgent stops or a wrong-model stop, already handled
+    }
+    if (ref.role === RELAY_ROLE) {
+      // ARCH §10a.3: the relay's own exit enforcement (re-prompt once, then BLOCKED).
+      await onRelayRunEnd(engine, ref.taskId, end);
+      return;
     }
     await engine.locks.run(ref.taskId, async () => {
       let state: TaskState;
@@ -208,18 +224,20 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
       });
       const expectedModel = isLead
         ? state.holon.lead.model
-        : (() => {
-            const lane = state.holon.lanes.find((l) => l.role === laneRoleOf(ref.role));
-            const models = lane?.models;
-            return (
-              (models && models.length > 0
-                ? models[
-                    // The member's own model in a redundant lane's model cycle (ARCH §4.3).
-                    (Number(ref.role.slice(ref.role.lastIndexOf(":") + 1)) || 1) - 1
-                  ] || models[0]
-                : undefined) ?? state.contract.workers[laneRoleOf(ref.role)]?.model
-            );
-          })();
+        : ref.role === RELAY_ROLE
+          ? relayModelOf(state.holon).model
+          : (() => {
+              const lane = state.holon.lanes.find((l) => l.role === laneRoleOf(ref.role));
+              const models = lane?.models;
+              return (
+                (models && models.length > 0
+                  ? models[
+                      // The member's own model in a redundant lane's model cycle (ARCH §4.3).
+                      (Number(ref.role.slice(ref.role.lastIndexOf(":") + 1)) || 1) - 1
+                    ] || models[0]
+                  : undefined) ?? state.contract.workers[laneRoleOf(ref.role)]?.model
+              );
+            })();
       if (expectedModel && expectedModel !== observed) {
         // ARCH §3: a participant must never silently run on another model. Stop the run,
         // refuse its emits (engine.emit checks MODEL_MISMATCH), and escalate.
@@ -243,5 +261,61 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
     });
   }
 
-  return { onLlmInput, onRunEnd, attach };
+  /**
+   * ARCH §10a.3: the relay has no tools except swarm_emit (its reply is the emit body, which
+   * the swarm posts to the group). Any other tool call from a relay session is blocked.
+   */
+  function onBeforeToolCall(event: PluginHookBeforeToolCallEvent, ctx: PluginHookToolContext) {
+    const ref = parseSwarmSessionKey(ctx.sessionKey);
+    if (ref?.role !== RELAY_ROLE || event.toolName === SWARM_EMIT_TOOL) {
+      return undefined;
+    }
+    return {
+      block: true,
+      blockReason: `the swarm relay may only call ${SWARM_EMIT_TOOL} (ARCH §10a.3)`,
+    };
+  }
+
+  /**
+   * ARCH §3.3: a message in a channel group. When the group is a holon's group, the human's
+   * reply goes to that holon's relay; any other message is none of the swarm's business.
+   */
+  async function onMessageReceived(
+    event: PluginHookMessageReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ) {
+    const engine = getEngine();
+    const conversation = ctx.conversationId ?? "";
+    if (!engine || engine.humans.channels.size === 0 || !conversation) {
+      return;
+    }
+    const channel = (ctx.channelId ?? "").toLowerCase();
+    if (!engine.humans.channels.has(channel)) {
+      return;
+    }
+    const groupId = conversation.replace(/^group:/i, "");
+    const meta = event.metadata ?? {};
+    const who = typeof meta.senderId === "string" && meta.senderId ? meta.senderId : event.from;
+    await relayHumanReply(engine, { channel, groupId, who, text: event.content ?? "" });
+  }
+
+  /**
+   * ARCH §3.3, §8.1: a holon's group carries only the swarm's lines (posted through the
+   * channel's group API, not this path) and the humans' replies. An ordinary agent reply into
+   * an open holon group would bypass the relay, so it is cancelled.
+   */
+  function onMessageSending(event: PluginHookMessageSendingEvent, ctx: PluginHookMessageContext) {
+    const engine = getEngine();
+    const channel = (ctx.channelId ?? "").toLowerCase();
+    if (!engine || !engine.humans.channels.has(channel)) {
+      return undefined;
+    }
+    const groupId = (event.to ?? "").replace(/^[a-z]+:(?=group:)/i, "").replace(/^group:/i, "");
+    if (!groupId || !engine.humans.findHolonByGroup(engine, channel, groupId)) {
+      return undefined;
+    }
+    return { cancel: true };
+  }
+
+  return { onLlmInput, onRunEnd, attach, onBeforeToolCall, onMessageReceived, onMessageSending };
 }
