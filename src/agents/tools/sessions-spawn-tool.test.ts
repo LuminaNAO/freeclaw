@@ -36,6 +36,11 @@ describe("sessions_spawn tool", () => {
     });
   });
 
+  it("tells the model to always pass a short label (ARCH subagent-session-names §4)", () => {
+    const tool = createSessionsSpawnTool();
+    expect(tool.description).toMatch(/Always pass a short "label"/);
+  });
+
   it("uses subagent runtime by default", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
