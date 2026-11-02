@@ -63,6 +63,7 @@ describe("swarm gateway methods", () => {
       "swarm.continue",
       "swarm.list",
       "swarm.show",
+      "swarm.spawn",
       "swarm.start",
     ]);
 
@@ -372,7 +373,7 @@ describe("swarm CLI", () => {
 });
 
 describe("swarm plugin registration", () => {
-  it("registers the tool, the model hook, six methods, the CLI and the service", () => {
+  it("registers the tools, the model hook, the methods, the CLI and the service", () => {
     const tools: Array<{ opts?: { name?: string } }> = [];
     const hooks: string[] = [];
     const methods: string[] = [];
@@ -392,7 +393,7 @@ describe("swarm plugin registration", () => {
         registerCli: (_r, opts) => cli.push(opts ?? {}),
       }),
     );
-    expect(tools).toEqual([{ opts: { name: "swarm_emit" } }]);
+    expect(tools).toEqual([{ opts: { name: "swarm_emit" } }, { opts: { name: "swarm_holon" } }]);
     expect(hooks).toEqual(["llm_input"]);
     expect(methods.toSorted()).toEqual([
       "swarm.answer",
@@ -400,6 +401,7 @@ describe("swarm plugin registration", () => {
       "swarm.continue",
       "swarm.list",
       "swarm.show",
+      "swarm.spawn",
       "swarm.start",
     ]);
     expect(services).toEqual(["swarm"]);

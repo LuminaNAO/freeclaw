@@ -1,11 +1,13 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/swarm";
+import { spawnChild } from "./children.js";
 import { continueTask } from "./continue.js";
 import type { SwarmEngine } from "./engine.js";
 import { answerTask, cancelTask, listTasks, showTask, startTask } from "./tasks.js";
 
-// Gateway methods swarm.start / list / show / cancel / answer (ARCH §5, §9) and
-// swarm.continue (ARCH §12).
+// Gateway methods swarm.start / list / show / cancel / answer (ARCH §5, §9),
+// swarm.continue (ARCH §12) and swarm.spawn (ARCH §5, §10a.1).
 
 type Handler = (opts: GatewayRequestHandlerOptions) => Promise<void>;
 
@@ -97,6 +99,23 @@ export function createSwarmMethods(
         throw new Error("swarm.cancel needs `taskId`");
       }
       return cancelTask(engine, taskId, str(params, "reason"));
+    }),
+    // ARCH §5, §10a.1: spawn a child holon under a parent (the lead tool calls the same op).
+    "swarm.spawn": guarded((engine, params) => {
+      const parent = str(params, "parent");
+      const holonYaml = str(params, "holon");
+      const holonPath = str(params, "file");
+      if (!parent || (!holonYaml && !holonPath)) {
+        throw new Error(
+          "swarm.spawn needs `parent` and `file` (holon path) or `holon` (YAML text)",
+        );
+      }
+      if (!holonYaml && holonPath && !path.isAbsolute(holonPath)) {
+        throw new Error(
+          `swarm.spawn \`file\` must be an absolute path (got "${holonPath}"); resolve it in the caller`,
+        );
+      }
+      return spawnChild(engine, parent, holonYaml ?? fs.readFileSync(holonPath!, "utf8"));
     }),
     "swarm.answer": guarded((engine, params) => {
       const taskId = str(params, "taskId");
