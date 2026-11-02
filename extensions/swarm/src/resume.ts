@@ -1,11 +1,13 @@
-import { briefFor } from "./briefs.js";
+import { briefFor, holonBriefFor } from "./briefs.js";
+import { compareHolonKeys, reconcileChildReports, reportToParent, TO_PARENT } from "./children.js";
+import { parentKeyOf } from "./contract.js";
 import { msgIdFor } from "./delivery.js";
 import { lastInputSeqFor, type SwarmEngine, type TaskState } from "./engine.js";
 import { currentRoundEvents } from "./rounds.js";
 import { TASKMASTER } from "./routing.js";
 import { appendOutbox, readOutbox, readTasksIndex, type OutboxEntry } from "./store.js";
 
-// Resume after a gateway restart (ARCH §8, §7).
+// Resume after a gateway restart (ARCH §7, v1 §8): every open holon in the tree.
 
 export type ResumeSummary = {
   tasks: number;
@@ -17,6 +19,8 @@ export type ResumeSummary = {
   deferred: number;
   /** Workers held back because their contract model could not be re-applied. */
   modelBlocked: number;
+  /** ARCH §5.3: child reports re-delivered to a parent lead after the restart. */
+  childReports: number;
 };
 
 /** ARCH §8 step 2: the line put on top of a re-delivered input. */
@@ -111,11 +115,24 @@ async function resumeTask(engine: SwarmEngine, taskId: string, summary: ResumeSu
   }
   // A terminal upstream event in the log means the task finished before the index caught up.
   // ARCH §12: per round; an earlier round's DONE does not close the current one.
-  if (
-    currentRoundEvents(state.events).some(
-      (e) => e.event === "DONE" && (e.from === TASKMASTER || e.kind === "upstream"),
-    )
-  ) {
+  const round = currentRoundEvents(state.events);
+  const done = round.findLast(
+    (e) => e.event === "DONE" && (e.from === TASKMASTER || e.kind === "upstream"),
+  );
+  if (done) {
+    // ARCH §5.3: a child whose lead emitted DONE just before the crash still reports it to
+    // its parent lead before it closes (exactly once; reconcileChildReports covers the rest).
+    if (
+      parentKeyOf(taskId) &&
+      !round.some((e) => e.kind === "upstream" && e.to === TO_PARENT && e.event === "DONE")
+    ) {
+      await reportToParent(engine, taskId, {
+        event: "DONE",
+        from: TASKMASTER,
+        sha: done.sha ?? state.sha,
+        body: done.body ?? "",
+      });
+    }
     engine.close(taskId, "done");
     return;
   }
@@ -218,10 +235,11 @@ async function resumeTask(engine: SwarmEngine, taskId: string, summary: ResumeSu
       seqs: [inputSeq],
       idempotencyKey: msgId,
       message: redeliveryText(after, pending, role, inputSeq, msgId),
-      extraSystemPrompt: briefFor(
-        after.contract,
-        role === TASKMASTER ? role : role.replace(/:\d+$/, ""),
-      ),
+      // A v2 lead keeps its full lead brief (lanes, canon, its parent) across a restart.
+      extraSystemPrompt:
+        role === TASKMASTER && !after.holon.v1
+          ? holonBriefFor(after.holon, [], TASKMASTER)
+          : briefFor(after.contract, role === TASKMASTER ? role : role.replace(/:\d+$/, "")),
     });
     summary.redelivered += 1;
   }
@@ -300,9 +318,14 @@ export async function resumeOpenTasks(engine: SwarmEngine): Promise<ResumeSummar
     redelivered: 0,
     deferred: 0,
     modelBlocked: 0,
+    childReports: 0,
   };
-  for (const [taskId, entry] of Object.entries(readTasksIndex(engine.stateDir))) {
-    if (entry.status !== "open") {
+  // ARCH §7: walk every open holon in the tree, parents before their children. Each holon
+  // resumes on its own: a failure in one branch is logged and never blocks its siblings.
+  const index = readTasksIndex(engine.stateDir);
+  const keys = Object.keys(index).toSorted(compareHolonKeys);
+  for (const taskId of keys) {
+    if (index[taskId]?.status !== "open") {
       continue;
     }
     try {
@@ -310,6 +333,20 @@ export async function resumeOpenTasks(engine: SwarmEngine): Promise<ResumeSummar
     } catch (err) {
       engine.logger?.warn(
         `[swarm] resume of ${taskId} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  // ARCH §5.3: a child's report recorded before the crash reaches its parent lead exactly
+  // once, whether the child is still open or already closed.
+  for (const taskId of keys) {
+    if (!parentKeyOf(taskId)) {
+      continue;
+    }
+    try {
+      summary.childReports += await reconcileChildReports(engine, taskId);
+    } catch (err) {
+      engine.logger?.warn(
+        `[swarm] child report of ${taskId} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
