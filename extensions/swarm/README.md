@@ -129,6 +129,53 @@ upstream stay as they are.
 - `--file` resolves like `start --file`. `swarm list` shows the round (`r2`); `swarm show`
   returns `round` and `rounds` (one handover timeline per round) and prints them grouped.
 
+## Humans over a channel (ARCH §3.3, §8, §10a.3)
+
+A holon may have a human lead or human participants:
+
+```yaml
+lead: { kind: human, who: [<channel id>], channel: signal }
+participants:
+  - { kind: human, who: [<channel id>], channel: signal, role: review }
+canon:
+  relay: { model: provider/model } # optional; default the lead model
+```
+
+- On first need the swarm opens one channel group per holon with humans, named
+  `<root> · <holon id>`, with those humans and the root owner (plugin config
+  `humans.owners.<channel>`). The group id is recorded as `GROUP_OPENED` in the holon's
+  events. When the holon is done the group is renamed `… [done]` and left (`GROUP_CLOSED`).
+  Agent-only holons never get a group.
+- An event addressed to a human becomes one short plain line in that group: what happened,
+  what is needed, the sha.
+- A human's reply goes to the holon's relay session (`<task>:relay`), which turns it into
+  exactly one routed event from that human's role (e.g. `APPROVED`, `RETRY`, `BLOCKED`,
+  `DONE`) and confirms in one line. Unclear replies get one question (`ASK`), never two. The
+  relay has no tool but `swarm_emit`; a relay turn without an emit is re-prompted once, then
+  reported `BLOCKED` with the human's words.
+- No channel configured or the group cannot be created: everything else runs, and the holon
+  reports `BLOCKED: no channel` one level up, once.
+
+```json
+{
+  "swarm": {
+    "config": {
+      "humans": {
+        "channels": { "signal": { "accountId": "default" } },
+        "owners": { "signal": ["<owner channel id>"] }
+      }
+    }
+  }
+}
+```
+
+`fake` is an in-process loopback channel for tests and dry runs; it never leaves the process.
+
+```bash
+openclaw swarm group open|close <task-id> [--json]           # same op the engine uses
+openclaw swarm relay <task-id> <message> --who <id> [--json] # a human reply, as if in the group
+```
+
 ## How a task flows
 
 1. `swarm start` briefs the build worker and tells the taskmaster the task has begun.
