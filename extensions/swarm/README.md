@@ -74,7 +74,8 @@ and join are reserved for later. `routes` may replace the default build table.
 
 ```bash
 openclaw swarm start --file task.yaml      # validate, apply models, brief build, kick taskmaster
-openclaw swarm list [--json]               # tasks with status, sha, recent event, age
+openclaw swarm list [--json]               # holon tree: path, state, lead, age, recent event
+openclaw swarm spawn <parent> --file child.yaml [--json]  # child holon under <parent> (ARCH §5)
 openclaw swarm show <task-id> [--json]     # models per role, event log, handover timeline
 openclaw swarm cancel <task-id> [--reason] # stop every task session, close the task
 openclaw swarm answer <task-id> <message>  # answer the taskmaster; logged as OPERATOR
@@ -97,7 +98,26 @@ openclaw swarm continue <task-id> --file <followup.yaml>  # next round on the sa
   still active there).
 
 The same operations are gateway methods: `swarm.start`, `swarm.list`, `swarm.show`,
-`swarm.cancel`, `swarm.answer`, `swarm.continue`.
+`swarm.cancel`, `swarm.answer`, `swarm.continue`, `swarm.spawn`.
+
+## Child holons (ARCH §5)
+
+A holon's lead may split its work into child holons, each its own holon (lanes, lead,
+sessions, log) in the parent's folder. The lead uses the `swarm_holon` tool (spawn, answer a
+child, cancel a child); the operator uses `swarm spawn <parent> --file child.yaml`. Both call
+the same function.
+
+- The child inherits the parent's canon. It may only tighten it: add to `never`/`approve`,
+  narrow `scope`, ask for fewer `depth` levels. Any loosening is refused at spawn, naming the
+  key (for example `canon.never: child drops "push"`). A child has no `upstream`.
+- A child without a `lead` gets its parent lead's model.
+- A child's `DONE`, `BLOCKED` and `FAILED` go to its parent lead only, as `CHILD_DONE`,
+  `CHILD_BLOCKED`, `CHILD_FAILED` with a 1-5 line summary. The root alone reports upstream, so
+  escalation climbs one level at a time. A lead cannot report `DONE` while a child is open.
+- `swarm cancel <holon>` cancels its whole subtree. `swarm list` prints the tree; a child is
+  addressed by its path, `<root>/<child>`.
+- Resume walks every open holon in the tree; a broken branch never blocks its siblings, and a
+  child report written before a crash reaches its parent exactly once.
 
 A task id is used once. A finished or cancelled task keeps its state on disk so `swarm show`
 still works. Start new work under a new id; a follow-up to the same work is a new round of the
@@ -172,9 +192,11 @@ emit. The only deadline is `budget.wall`, and it never moves work forward on its
   <task-id>/contract.yaml
   <task-id>/events.jsonl
   <task-id>/outbox.jsonl
+  <task-id>/children/<child-id>/holon.yaml      # child holons, same layout, any depth
 ```
 
 ## Sessions
 
 `agent:<agentId>:swarm:<task-id>:<role>`, with `<role>` one of the contract's workers or
-`taskmaster`. Each is labeled `swarm:<task-id>:<role>`.
+`taskmaster`. Each is labeled `swarm:<task-id>:<role>`. A child holon's sessions put its path
+in place of the task id, one segment per level: `agent:<agentId>:swarm:<root>:<child>:<role>`.
