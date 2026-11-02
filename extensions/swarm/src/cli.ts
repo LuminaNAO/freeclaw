@@ -74,7 +74,27 @@ type TaskRow = {
   sha: string;
   recentEvent?: string;
   ageMs: number;
+  depth?: number;
+  state?: string;
+  lead?: string;
 };
+
+/**
+ * ARCH §9 `swarm list`: one line per holon (path, state, lead, age), children indented under
+ * their parent. A one-level list (v1 tasks) prints the same columns as before plus the lead.
+ */
+export function formatTaskTree(tasks: TaskRow[]): string[] {
+  return tasks.map((t) => {
+    const depth = t.depth ?? 0;
+    const name =
+      depth > 0 ? `${"  ".repeat(depth - 1)}└ ${t.id.slice(t.id.lastIndexOf("/") + 1)}` : t.id;
+    const state = t.state ?? t.status;
+    return (
+      `${name.padEnd(24)} ${state.padEnd(9)} ${`r${t.round ?? 1}`.padEnd(4)} ${t.sha.padEnd(10)} ` +
+      `${formatAge(t.ageMs).padStart(6)}  ${t.recentEvent ?? ""}${t.lead && t.lead !== "-" ? `  lead=${t.lead}` : ""}`
+    ).trimEnd();
+  });
+}
 type EventRow = {
   seq: number;
   ts: number;
@@ -255,7 +275,32 @@ export function registerSwarmCli(params: {
     }),
   );
 
-  withClientOptions(swarm.command("list").description("List tasks")).action(
+  withClientOptions(
+    swarm
+      .command("spawn")
+      .description("Spawn a child holon under a parent holon (ARCH §5)")
+      .argument("<parent>", "Parent holon: <root> or <root>/<child>/…")
+      .requiredOption("--file <path>", "Child holon.yaml"),
+  ).action(
+    guarded(async (parent: string, opts: CliOpts & { file: string }) => {
+      const file = resolveContractPath(opts.file, cwd());
+      const result = (await call("swarm.spawn", opts, { parent, file })) as {
+        taskId: string;
+        sha: string;
+        sessions: Record<string, string>;
+      };
+      if (opts.json) {
+        log(JSON.stringify(result, null, 2));
+        return;
+      }
+      log(`spawned ${result.taskId} @ ${result.sha}`);
+      for (const [role, sessionKey] of Object.entries(result.sessions)) {
+        log(`  ${role.padEnd(10)} ${sessionKey}`);
+      }
+    }),
+  );
+
+  withClientOptions(swarm.command("list").description("List holons as a tree")).action(
     guarded(async (opts: CliOpts) => {
       const { tasks } = (await call("swarm.list", opts, {})) as {
         tasks: TaskRow[];
@@ -268,10 +313,8 @@ export function registerSwarmCli(params: {
         log("no swarm tasks");
         return;
       }
-      for (const t of tasks) {
-        log(
-          `${t.id.padEnd(24)} ${t.status.padEnd(9)} ${`r${t.round ?? 1}`.padEnd(4)} ${t.sha.padEnd(10)} ${formatAge(t.ageMs).padStart(6)}  ${t.recentEvent ?? ""}`,
-        );
+      for (const line of formatTaskTree(tasks)) {
+        log(line);
       }
     }),
   );

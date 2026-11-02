@@ -1,5 +1,5 @@
-import type { Contract } from "./contract.js";
-import type { Holon, Lane } from "./holon.js";
+import { parentKeyOf, type Contract } from "./contract.js";
+import type { Canon, Holon, Lane } from "./holon.js";
 import { ROLE_PLACEHOLDER, TASKMASTER, UPSTREAM } from "./routing.js";
 import { laneRoleOf } from "./sessions.js";
 
@@ -83,11 +83,51 @@ export function taskmasterBrief(contract: Contract): string {
   ].join("\n");
 }
 
+/**
+ * ARCH §5: the holarchy part of a lead brief: where this holon reports (its parent lead, or
+ * upstream for a root), its canon, and how it may split work into child holons.
+ */
+export function holarchyBrief(contract: Contract, canon: Canon | undefined): string[] {
+  const parent = parentKeyOf(contract.id);
+  if (!canon && !parent) {
+    return [];
+  }
+  const lines: string[] = [""];
+  if (parent) {
+    lines.push(
+      `This holon is a child of ${parent}. Your DONE / BLOCKED / FAILED go to its lead only ` +
+        "(as CHILD_DONE / CHILD_BLOCKED / CHILD_FAILED), with a 1-5 line summary in the body; " +
+        "never raw chatter. Escalate only what you cannot resolve within your canon.",
+    );
+  }
+  if (canon) {
+    const rules = [
+      ...(canon.scope ? [`scope: ${canon.scope}`] : []),
+      ...(canon.never.length > 0 ? [`never: ${canon.never.join(", ")}`] : []),
+      ...(canon.approve.length > 0 ? [`needs your parent's yes: ${canon.approve.join(", ")}`] : []),
+      `child levels allowed below this holon: ${canon.depth ?? "no limit"}`,
+    ];
+    lines.push(`Canon (rules from above; you may only tighten them): ${rules.join("; ")}.`);
+    if (canon.depth === undefined || canon.depth > 0) {
+      lines.push(
+        "You may split this holon into child holons (ARCH §5) with the swarm_holon tool " +
+          "(action spawn, a child holon.yaml: id, goal, done_when, lanes, optional lead and " +
+          "canon). A child inherits your canon; any loosening is refused. Each child reports " +
+          "to you once as CHILD_DONE / CHILD_BLOCKED / CHILD_FAILED; answer a blocked child " +
+          "with swarm_holon action answer, stop one with action cancel. You cannot report " +
+          "DONE while a child is still open.",
+      );
+    }
+  }
+  return lines;
+}
+
 /** ARCH §3.1/§6.1: the lead brief for a holon with lanes; names the fan-out it owns. */
-export function leadBrief(contract: Contract, lanes: Lane[]): string {
+export function leadBrief(contract: Contract, lanes: Lane[], opts: { canon?: Canon } = {}): string {
   const wide = lanes.filter((l) => l.count > 1);
+  const holarchy = holarchyBrief(contract, opts.canon);
   if (wide.length === 0) {
-    return taskmasterBrief(contract);
+    return [taskmasterBrief(contract), ...holarchy].join("\n");
   }
   const joinWord = (l: Lane) => (l.join.kind === "quorum" ? `quorum:${l.join.k}` : l.join.kind);
   const description = wide
@@ -117,6 +157,7 @@ export function leadBrief(contract: Contract, lanes: Lane[]): string {
     "- On LANE_STALLED: decide: re-prompt the silent members (RETRY), RETRY the lane's input, " +
       "or BLOCKED up.",
     "Never end a round on NO_REPLY unless a LANE_WAITING told you a follow-up is coming.",
+    ...holarchy,
   ].join("\n");
 }
 
@@ -126,12 +167,12 @@ export function briefFor(contract: Contract, role: string): string {
 
 /** Brief for any participant, with the holon's fan-out shape when it has one. */
 export function holonBriefFor(
-  holon: Pick<Holon, "contract" | "lanes">,
+  holon: Pick<Holon, "contract" | "lanes"> & Partial<Pick<Holon, "canon" | "v1">>,
   plan: string[],
   member: string,
 ): string {
   if (member === TASKMASTER) {
-    return leadBrief(holon.contract, holon.lanes);
+    return leadBrief(holon.contract, holon.lanes, { canon: holon.v1 ? undefined : holon.canon });
   }
   const lane = holon.lanes.find((l) => l.role === laneRoleOf(member));
   if (lane?.partition && member.includes(":")) {

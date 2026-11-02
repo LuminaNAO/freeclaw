@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import {
+  holonKeySegments,
   loadContract,
   parseContract,
   SwarmContractError,
@@ -14,8 +15,8 @@ import { ANY as ANY_ROLE, ROLE_PLACEHOLDER, TASKMASTER, type RouteRow } from "./
 
 // The holon file (ARCH §2) and derived state. A v1 contract.yaml is a root holon whose lead
 // is the gateway default model (ARCH §11); a v2 holon.yaml carries lead, lanes, canon and
-// children. Steps 3-5 of §10 (children, commands, human leads) are not built yet; the file
-// format carries them so nothing is designed out.
+// children. A child holon (ARCH §5) lives in its parent's `children/<id>/` folder and is
+// known by its path from the root, `<root>/<child>`.
 
 export type Join = { kind: "all" } | { kind: "any" } | { kind: "quorum"; k: number };
 
@@ -340,7 +341,19 @@ export function loadHolon(
   const dir = taskDirFor(stateDir, taskId);
   const holonFile = path.join(dir, HOLON_FILE);
   if (fs.existsSync(holonFile)) {
-    return parseHolon(fs.readFileSync(holonFile, "utf8"), defaults);
+    const holon = parseHolon(fs.readFileSync(holonFile, "utf8"), defaults);
+    // ARCH §5: a child's id is unique within its parent; everywhere else (events, sessions,
+    // briefs) it is known by its path from the root.
+    const segments = holonKeySegments(taskId);
+    if (segments.length > 1) {
+      if (holon.contract.id !== segments.at(-1)) {
+        throw new SwarmContractError(
+          `child holon at ${taskId} has id "${holon.contract.id}"; expected "${segments.at(-1)}"`,
+        );
+      }
+      holon.contract = { ...holon.contract, id: taskId };
+    }
+    return holon;
   }
   const contract = loadContract(stateDir, taskId, defaults);
   return {

@@ -5,6 +5,7 @@ import type { ContractDefaults, UpstreamChannel } from "./src/contract.js";
 import { SWARM_EMIT_TOOL, createSwarmEmitToolFactory } from "./src/emit.js";
 import { SwarmEngine } from "./src/engine.js";
 import { resolveGroupAdapter } from "./src/group.js";
+import { createSwarmHolonToolFactory, SWARM_HOLON_TOOL } from "./src/holon-tool.js";
 import { createSwarmHooks } from "./src/hooks.js";
 import { createSwarmMethods } from "./src/methods.js";
 import { resumeOpenTasks } from "./src/resume.js";
@@ -36,6 +37,8 @@ export default function register(api: OpenClawPluginApi) {
   const getEngine = () => engine;
 
   api.registerTool(createSwarmEmitToolFactory(getEngine), { name: SWARM_EMIT_TOOL });
+  // ARCH §5.1, §10a.1: the lead's tool for its child holons (same ops as `swarm spawn`).
+  api.registerTool(createSwarmHolonToolFactory(getEngine), { name: SWARM_HOLON_TOOL });
 
   const hooks = createSwarmHooks(getEngine);
   api.on("llm_input", hooks.onLlmInput);
@@ -65,7 +68,8 @@ export default function register(api: OpenClawPluginApi) {
       if (summary.tasks > 0) {
         api.logger.info(
           `[swarm] resumed ${summary.tasks} task(s): resent=${summary.resent} ` +
-            `acked=${summary.ackedFromTranscript + summary.ackedAsAnswered} redelivered=${summary.redelivered}`,
+            `acked=${summary.ackedFromTranscript + summary.ackedAsAnswered} redelivered=${summary.redelivered} ` +
+            `childReports=${summary.childReports}`,
         );
       }
     },
