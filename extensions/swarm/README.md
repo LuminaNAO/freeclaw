@@ -79,7 +79,36 @@ openclaw swarm show <task-id> [--json]     # models per role, event log, handove
 openclaw swarm cancel <task-id> [--reason] # stop every task session, close the task
 openclaw swarm answer <task-id> <message>  # answer the taskmaster; logged as OPERATOR
 openclaw swarm continue <task-id> --file <followup.yaml>  # next round on the same sessions
+openclaw swarm add <holon> <file> [--urgent] [--json]      # queue more work to the holon's lead
+openclaw swarm lead <holon> <spec> [--json]                # change a holon's lead (root owner)
+openclaw swarm show <holon> --tree [--json]                # the holon plus one line per holon in its tree
 ```
+
+- `<holon>` is a holon path, `<root>[/<child>...]` (ARCH §2).
+- `add` (ARCH §6.4): the file is the work in plain text. It is queued to the lead like any other
+  message: a lead mid-turn gets everything added meanwhile as one message on its next turn;
+  nothing interrupts. Front matter `urgent: true` (or `--urgent`) steers instead: the lead's
+  current turn stops and the added work comes first, followed by anything already queued.
+  Logged as `WORK_ADDED`.
+
+  ```markdown
+  ---
+  urgent: true
+  ---
+
+  Rules changed: stop using the old API.
+  ```
+
+- `lead` (ARCH §3.4): only the root owner (the operator through the gateway, or the root's
+  upstream session) may change a lead; anyone else is refused with who may. `<spec>` is
+  `agent`, `agent:<provider/model>[:<thinking>]`, `human:<channel>:<who>[,<who>]`, or a YAML
+  mapping as in the holon file. The new model is applied to the lead session first (a refused
+  model changes nothing), then `holon.yaml` is rewritten, `LEAD_CHANGED` is logged and the lead
+  is told.
+- `list` and `show` work with the gateway down: they read the state files directly (ARCH §9).
+- Leads also get the `swarm_holon` tool (`op: add | lead | showTree`). It calls the same op
+  functions as these verbs (ARCH §10a); a lead adds work only to its own child holons and reads
+  only its own holon, its parent and its children (§8.2).
 
 - `start --file` resolves a relative path against the directory you run the command from (or
   the package-manager launch directory, `INIT_CWD`), never the gateway's. The result carries
