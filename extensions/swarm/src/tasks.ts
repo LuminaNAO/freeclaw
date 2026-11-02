@@ -3,7 +3,7 @@ import path from "node:path";
 import { leadBrief, workerBrief } from "./briefs.js";
 import { parseContract, SwarmContractError, taskDirFor, type Contract } from "./contract.js";
 import { readRepoHead, type SwarmEngine } from "./engine.js";
-import { parseHolon, targetMembers, type Holon } from "./holon.js";
+import { parseHolon, RELAY_ROLE, targetMembers, type Holon } from "./holon.js";
 import { readPlan, setupPartition, holonBranch, memberBranch, writePlan } from "./partition.js";
 import { ROUND_STARTED, roundStarts } from "./rounds.js";
 import { TASKMASTER, UPSTREAM } from "./routing.js";
@@ -125,7 +125,7 @@ export async function startTask(
         `cannot apply the lead model: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-  } else {
+  } else if (holon.lead.kind === "agent") {
     await patch
       .patchSession?.({
         sessionKey: engine.sessionKey(contract.id, TASKMASTER),
@@ -465,7 +465,13 @@ export async function cancelTask(engine: SwarmEngine, taskId: string, reason = "
     engine.close(taskId, "cancelled");
     const rec = engine.record(taskId, { kind: "system", event: "CANCELLED", body: reason });
     const members = state.holon.lanes.flatMap((l) => targetMembers(state.holon, l.role));
-    for (const role of [TASKMASTER, ...members]) {
+    // ARCH §10a.3: the relay is stopped (no run of its own to brief); humans get the line.
+    const relayKey = engine.sessionKey(taskId, RELAY_ROLE);
+    if (engine.mailbox.isBusy(relayKey)) {
+      await engine.runtime.subagent.abortSession?.({ sessionKey: relayKey });
+    }
+    const humanRoles = state.holon.participants.map((p) => p.role);
+    for (const role of [TASKMASTER, ...members, ...humanRoles]) {
       await engine.sendTo(taskId, state, {
         to: role,
         from: UPSTREAM,

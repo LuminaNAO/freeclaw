@@ -61,7 +61,9 @@ describe("swarm gateway methods", () => {
       "swarm.answer",
       "swarm.cancel",
       "swarm.continue",
+      "swarm.group",
       "swarm.list",
+      "swarm.relay",
       "swarm.show",
       "swarm.start",
     ]);
@@ -372,7 +374,7 @@ describe("swarm CLI", () => {
 });
 
 describe("swarm plugin registration", () => {
-  it("registers the tool, the model hook, six methods, the CLI and the service", () => {
+  it("registers the tool, the model hook, the methods, the CLI and the service", () => {
     const tools: Array<{ opts?: { name?: string } }> = [];
     const hooks: string[] = [];
     const methods: string[] = [];
@@ -398,7 +400,9 @@ describe("swarm plugin registration", () => {
       "swarm.answer",
       "swarm.cancel",
       "swarm.continue",
+      "swarm.group",
       "swarm.list",
+      "swarm.relay",
       "swarm.show",
       "swarm.start",
     ]);

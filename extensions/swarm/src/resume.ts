@@ -1,6 +1,7 @@
 import { briefFor } from "./briefs.js";
 import { msgIdFor } from "./delivery.js";
 import { lastInputSeqFor, type SwarmEngine, type TaskState } from "./engine.js";
+import { resumeHumans } from "./relay.js";
 import { currentRoundEvents } from "./rounds.js";
 import { TASKMASTER } from "./routing.js";
 import { appendOutbox, readOutbox, readTasksIndex, type OutboxEntry } from "./store.js";
@@ -234,6 +235,12 @@ async function resumeTask(engine: SwarmEngine, taskId: string, summary: ResumeSu
       await engine.recheckLane(taskId, lane.role);
     }
   }
+
+  // ARCH §7, §10a.3: the human side resumes too: unposted lines are posted again and an
+  // unanswered human reply goes back to the relay.
+  const humans = await resumeHumans(engine, taskId);
+  summary.resent += humans.reposted;
+  summary.redelivered += humans.relayed;
 }
 
 /**

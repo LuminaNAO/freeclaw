@@ -359,4 +359,54 @@ export function registerSwarmCli(params: {
       );
     }),
   );
+
+  // ARCH §10a.3: humans over a channel. Thin verbs over swarm.group / swarm.relay.
+  withClientOptions(
+    swarm
+      .command("group")
+      .description("Open or close a holon's channel group (ARCH §8.1)")
+      .argument("<action>", "open | close")
+      .argument("<taskId>"),
+  ).action(
+    guarded(async (action: string, taskId: string, opts: CliOpts) => {
+      const res = (await call("swarm.group", opts, { taskId, action })) as
+        | { ok: true; name: string; opened: boolean }
+        | { ok: false; reason: string };
+      if (opts.json) {
+        log(JSON.stringify(res, null, 2));
+        return;
+      }
+      log(
+        res.ok
+          ? `${taskId}: group ${action === "close" ? "closed" : res.opened ? "opened" : "open"} (${res.name})`
+          : `${taskId}: no group (${res.reason})`,
+      );
+    }),
+  );
+
+  withClientOptions(
+    swarm
+      .command("relay")
+      .description(
+        "Hand a human's reply to a holon's relay, as if written in its group (ARCH §3.3)",
+      )
+      .argument("<taskId>")
+      .argument("<message>")
+      .requiredOption("--who <id>", "the human's channel id, as in the holon file"),
+  ).action(
+    guarded(async (taskId: string, message: string, opts: CliOpts & { who: string }) => {
+      const res = (await call("swarm.relay", opts, { taskId, who: opts.who, message })) as
+        | { ok: true; role: string; seq: number; delivery: string }
+        | { ok: false; reason: string };
+      if (opts.json) {
+        log(JSON.stringify(res, null, 2));
+        return;
+      }
+      log(
+        res.ok
+          ? `${taskId}: reply from ${res.role} seq ${res.seq} to the relay (${res.delivery})`
+          : `${taskId}: not relayed (${res.reason})`,
+      );
+    }),
+  );
 }

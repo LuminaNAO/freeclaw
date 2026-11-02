@@ -2,6 +2,9 @@ import path from "node:path";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/swarm";
 import { continueTask } from "./continue.js";
 import type { SwarmEngine } from "./engine.js";
+// §10a.3 (humans over a channel): group lifecycle and the relay's inbound reply.
+import { closeHolonGroup, openHolonGroup } from "./humans.js";
+import { relayHumanReply } from "./relay.js";
 import { answerTask, cancelTask, listTasks, showTask, startTask } from "./tasks.js";
 
 // Gateway methods swarm.start / list / show / cancel / answer (ARCH §5, §9) and
@@ -105,6 +108,24 @@ export function createSwarmMethods(
         throw new Error("swarm.answer needs `taskId` and `message`");
       }
       return answerTask(engine, taskId, message);
+    }),
+    // ARCH §10a.3: the same ops the channel hook and the fake channel call.
+    "swarm.group": guarded((engine, params) => {
+      const taskId = str(params, "taskId");
+      const action = str(params, "action");
+      if (!taskId || (action !== "open" && action !== "close")) {
+        throw new Error("swarm.group needs `taskId` and `action` (open | close)");
+      }
+      return action === "open" ? openHolonGroup(engine, taskId) : closeHolonGroup(engine, taskId);
+    }),
+    "swarm.relay": guarded((engine, params) => {
+      const taskId = str(params, "taskId");
+      const who = str(params, "who");
+      const message = str(params, "message");
+      if (!taskId || !who || !message) {
+        throw new Error("swarm.relay needs `taskId`, `who` (a human's channel id) and `message`");
+      }
+      return relayHumanReply(engine, { taskId, who, text: message });
     }),
   };
 }

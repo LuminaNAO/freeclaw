@@ -118,7 +118,15 @@ describe("exit enforcement (run settled, ARCH §5)", () => {
     expect(runtime.liveIn(key("build"))).toBe(1);
     expect(runtime.runs).toHaveLength(1);
     expect(readEvents(stateDir, TASK).map((e) => e.event)).toEqual(["PING", "DELIVERED"]);
-    expect(Object.keys(hooks).toSorted()).toEqual(["attach", "onLlmInput", "onRunEnd"]);
+    // No timer hook; the §10a.3 hooks (relay tool gate, group inbound) are event-driven too.
+    expect(Object.keys(hooks).toSorted()).toEqual([
+      "attach",
+      "onBeforeToolCall",
+      "onLlmInput",
+      "onMessageReceived",
+      "onMessageSending",
+      "onRunEnd",
+    ]);
   });
 });
 
