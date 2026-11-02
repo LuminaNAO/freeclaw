@@ -1,18 +1,13 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/swarm";
-import { spawnChild } from "./children.js";
 import { continueTask } from "./continue.js";
 import type { SwarmEngine } from "./engine.js";
-// §10a.3 (humans over a channel): group lifecycle and the relay's inbound reply.
-import { closeHolonGroup, openHolonGroup } from "./humans.js";
 import { OPERATOR_CALLER, runOp, SWARM_OPS } from "./ops.js";
-import { relayHumanReply } from "./relay.js";
 import { answerTask, cancelTask, listTasks, startTask } from "./tasks.js";
 
-// Gateway methods swarm.start / list / show / cancel / answer (ARCH §5, §9),
-// swarm.continue (ARCH §12) and swarm.spawn (ARCH §5, §10a.1). The steps 3-5 ops
-// (ARCH §10a: add, lead, show --tree, …) are one gateway method per SWARM_OPS row,
+// Gateway methods swarm.start / list / cancel / answer (ARCH §5, §9) and swarm.continue
+// (ARCH §12). The steps 3-5 ops (ARCH §10a: add, lead, show --tree, spawn, relay, group)
+// are one gateway method per SWARM_OPS row,
 // dispatched through runOp: the same function the lead tool calls. A gateway client is
 // the operator (the root owner, §3.4).
 
@@ -99,23 +94,6 @@ export function createSwarmMethods(
       }
       return cancelTask(engine, taskId, str(params, "reason"));
     }),
-    // ARCH §5, §10a.1: spawn a child holon under a parent (the lead tool calls the same op).
-    "swarm.spawn": guarded((engine, params) => {
-      const parent = str(params, "parent");
-      const holonYaml = str(params, "holon");
-      const holonPath = str(params, "file");
-      if (!parent || (!holonYaml && !holonPath)) {
-        throw new Error(
-          "swarm.spawn needs `parent` and `file` (holon path) or `holon` (YAML text)",
-        );
-      }
-      if (!holonYaml && holonPath && !path.isAbsolute(holonPath)) {
-        throw new Error(
-          `swarm.spawn \`file\` must be an absolute path (got "${holonPath}"); resolve it in the caller`,
-        );
-      }
-      return spawnChild(engine, parent, holonYaml ?? fs.readFileSync(holonPath!, "utf8"));
-    }),
     "swarm.answer": guarded((engine, params) => {
       const taskId = str(params, "taskId");
       const message = str(params, "message");
@@ -131,23 +109,5 @@ export function createSwarmMethods(
         guarded((engine, params) => runOp(name, engine, params, OPERATOR_CALLER)),
       ]),
     ),
-    // ARCH §10a.3: the same ops the channel hook and the fake channel call.
-    "swarm.group": guarded((engine, params) => {
-      const taskId = str(params, "taskId");
-      const action = str(params, "action");
-      if (!taskId || (action !== "open" && action !== "close")) {
-        throw new Error("swarm.group needs `taskId` and `action` (open | close)");
-      }
-      return action === "open" ? openHolonGroup(engine, taskId) : closeHolonGroup(engine, taskId);
-    }),
-    "swarm.relay": guarded((engine, params) => {
-      const taskId = str(params, "taskId");
-      const who = str(params, "who");
-      const message = str(params, "message");
-      if (!taskId || !who || !message) {
-        throw new Error("swarm.relay needs `taskId`, `who` (a human's channel id) and `message`");
-      }
-      return relayHumanReply(engine, { taskId, who, text: message });
-    }),
   };
 }

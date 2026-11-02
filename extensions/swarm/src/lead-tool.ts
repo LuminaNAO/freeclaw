@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/swarm";
-import { answerChild, directChildKey, spawnChild } from "./children.js";
+import { answerChild, directChildKey, type spawnChild } from "./children.js";
 import type { SwarmEngine } from "./engine.js";
 import { runOp, SWARM_OPS, type OpCaller } from "./ops.js";
 import { TASKMASTER } from "./routing.js";
@@ -51,13 +51,16 @@ export function createSwarmHolonTool(params: {
       "tighten yours); action=answer messages a child's lead; action=cancel stops a child and " +
       `its subtree. op (one of: ${ops.join(", ")}): add = queue more work to a child holon's ` +
       "lead (urgent: true steers); lead = change a holon's lead (root owner only); showTree = " +
-      "read a holon and its tree. Children report back as CHILD_DONE / CHILD_BLOCKED / " +
+      "read a holon and its tree; spawn = the same as action=spawn. Children report back as CHILD_DONE / CHILD_BLOCKED / " +
       "CHILD_FAILED. This does not end your turn: still finish with swarm_emit.",
     parameters: Type.Object({
       action: Type.Optional(
-        Type.Union(ACTIONS.map((a) => Type.Literal(a)), {
-          description: "Child action: spawn, answer or cancel.",
-        }),
+        Type.Union(
+          ACTIONS.map((a) => Type.Literal(a)),
+          {
+            description: "Child action: spawn, answer or cancel.",
+          },
+        ),
       ),
       op: Type.Optional(Type.String({ description: `Table op, one of: ${ops.join(", ")}.` })),
       holon: Type.Optional(
@@ -87,6 +90,12 @@ export function createSwarmHolonTool(params: {
           ? (args[key] as string)
           : undefined;
       const action = text("action");
+      const sessionCaller = (): OpCaller => ({
+        kind: "session",
+        sessionKey: callerSessionKey ?? "",
+        taskId: ref.taskId,
+        role: ref.role,
+      });
       try {
         switch (action) {
           case "spawn": {
@@ -94,7 +103,10 @@ export function createSwarmHolonTool(params: {
             if (!holon) {
               return result({ ok: false, error: "spawn needs `holon` (the child holon.yaml)" });
             }
-            const spawned = await spawnChild(engine, parent, holon);
+            // The same table op as `swarm spawn` and swarm.spawn (ARCH §10a parity).
+            const spawned = (await runOp("spawn", engine, { holon }, sessionCaller())) as Awaited<
+              ReturnType<typeof spawnChild>
+            >;
             return result({
               ok: true,
               child: spawned.taskId,
@@ -135,13 +147,7 @@ export function createSwarmHolonTool(params: {
               : `need \`action\` (${ACTIONS.join(", ")}) or \`op\` (${ops.join(", ")})`,
           });
         }
-        const caller: OpCaller = {
-          kind: "session",
-          sessionKey: callerSessionKey ?? "",
-          taskId: ref.taskId,
-          role: ref.role,
-        };
-        const out = await runOp(op, engine, { ...args }, caller);
+        const out = await runOp(op, engine, { ...args }, sessionCaller());
         return result({ ok: true, result: out as unknown });
       } catch (err) {
         return result({ ok: false, error: errorText(err) });

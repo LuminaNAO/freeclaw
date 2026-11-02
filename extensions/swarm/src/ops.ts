@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { holonPathKey, listHolonTree } from "./children.js";
+import { holonPathKey, listHolonTree, spawnChild } from "./children.js";
 import { HOLON_KEY_SEPARATOR, SwarmContractError, TASK_ID_RE, taskDirFor } from "./contract.js";
 import type { SwarmEngine } from "./engine.js";
 import {
@@ -12,6 +12,8 @@ import {
   type Holon,
   type HolonState,
 } from "./holon.js";
+import { closeHolonGroup, openHolonGroup } from "./humans.js";
+import { relayHumanReply } from "./relay.js";
 import { TASKMASTER } from "./routing.js";
 import { parseSwarmSessionKey } from "./sessions.js";
 import { readEvents, readTasksIndex, writeFileAtomic } from "./store.js";
@@ -507,6 +509,74 @@ export const SWARM_OPS: Record<string, SwarmOp> = {
       assertCanSee(caller, target);
       const limit = typeof params.limit === "number" ? params.limit : undefined;
       return showHolon(engine, target, { tree: params.tree === true, limit });
+    },
+  },
+  // ARCH §5.1, §10a.1: spawn a child holon. The operator names the parent; a lead's parent is
+  // its own holon, from its session key (a lead spawns only under itself, §1.6).
+  spawn: {
+    method: "swarm.spawn",
+    cliVerb: "spawn",
+    leadTool: true,
+    run: (engine, params, caller) => {
+      const holonYaml = str(params, "holon") ?? str(params, "spec");
+      const file = str(params, "file");
+      let parent = str(params, "parent");
+      if (caller.kind === "session") {
+        const own = callerHolonPath(caller)?.join(HOLON_KEY_SEPARATOR);
+        if (!own || caller.role !== TASKMASTER) {
+          throw new Error("spawn refused: only a holon's lead spawns, under its own holon");
+        }
+        if (parent && parent !== own) {
+          throw new Error(`spawn refused: a lead spawns only under its own holon (${own})`);
+        }
+        parent = own;
+      }
+      if (!parent || (!holonYaml && !file)) {
+        throw new Error(
+          "swarm.spawn needs `parent` and `file` (holon path) or `holon` (YAML text)",
+        );
+      }
+      if (!holonYaml && file && !path.isAbsolute(file)) {
+        throw new Error(
+          `swarm.spawn \`file\` must be an absolute path (got "${file}"); resolve it in the caller`,
+        );
+      }
+      return spawnChild(engine, parseHolonRef(parent), holonYaml ?? fs.readFileSync(file!, "utf8"));
+    },
+  },
+  // ARCH §3.3, §10a.3: hand a human's reply to a holon's relay (as if written in its group).
+  // Operator only: a human's words come from the channel, never from an agent's tool.
+  relay: {
+    method: "swarm.relay",
+    cliVerb: "relay",
+    leadTool: false,
+    run: (engine, params) => {
+      const ref = str(params, "holon") ?? str(params, "taskId");
+      const who = str(params, "who");
+      const message = str(params, "message") ?? str(params, "text");
+      if (!ref || !who || !message) {
+        throw new Error("swarm.relay needs `taskId`, `who` (a human's channel id) and `message`");
+      }
+      return relayHumanReply(engine, {
+        taskId: holonPathKey(parseHolonRef(ref)),
+        who,
+        text: message,
+      });
+    },
+  },
+  // ARCH §8.1, §10a.3: open or close a holon's channel group. Operator only.
+  group: {
+    method: "swarm.group",
+    cliVerb: "group",
+    leadTool: false,
+    run: (engine, params) => {
+      const ref = str(params, "holon") ?? str(params, "taskId");
+      const action = str(params, "action") ?? "open";
+      if (!ref || (action !== "open" && action !== "close")) {
+        throw new Error("swarm.group needs `taskId` and `action` (open | close)");
+      }
+      const taskId = holonPathKey(parseHolonRef(ref));
+      return action === "open" ? openHolonGroup(engine, taskId) : closeHolonGroup(engine, taskId);
     },
   },
 };
