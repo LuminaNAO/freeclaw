@@ -109,6 +109,14 @@ export function leadBrief(contract: Contract, lanes: Lane[]): string {
     "When a lane settles you get its merged verdict; drive the next hop yourself: emit the " +
       "same event (BUILD_DONE / AUDIT_PASS / AUDIT_FAIL / TEST_FAIL) to hand the work on, or " +
       "DONE / BLOCKED to report up.",
+    "Every member verdict goes through its lane's join, whatever its route; you never see raw " +
+      "member verdicts, only the lane's one result (a fail always comes to you with the " +
+      "merged findings for build).",
+    "- On LANE_WAITING: wait. The swarm guarantees a follow-up: the lane's result, or " +
+      "LANE_STALLED.",
+    "- On LANE_STALLED: decide: re-prompt the silent members (RETRY), RETRY the lane's input, " +
+      "or BLOCKED up.",
+    "Never end a round on NO_REPLY unless a LANE_WAITING told you a follow-up is coming.",
   ].join("\n");
 }
 
