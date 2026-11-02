@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { SwarmContractError, TASK_ID_RE, taskDirFor } from "./contract.js";
+import { holonPathKey, listHolonTree } from "./children.js";
+import { HOLON_KEY_SEPARATOR, SwarmContractError, TASK_ID_RE, taskDirFor } from "./contract.js";
 import type { SwarmEngine } from "./engine.js";
 import {
   HOLON_FILE,
-  holonStateFrom,
+  loadHolon,
   parseHolon,
   parseLead,
   type Holon,
@@ -47,23 +48,18 @@ export function parseHolonRef(ref: string): string[] {
 }
 
 /**
- * The engine task that runs a holon path. TODO(§5): child holons live in their parent's
- * folder (partition 1's holonDirFor); until that lands only a root path resolves.
+ * The engine task that runs a holon path (ARCH §2, §5): the holon key `<root>/<child>/…`,
+ * whose folder is the parent's `children/<id>/` (children.ts holonDirFor).
  */
 export function resolveHolonTask(engine: SwarmEngine, holonPath: string[]): string {
-  const [root, ...rest] = holonPath;
-  if (!root) {
+  if (holonPath.length === 0) {
     throw new SwarmContractError("empty holon path");
   }
-  if (rest.length > 0) {
-    throw new SwarmContractError(
-      `holon ${holonPath.join("/")}: child holons resolve through §5 child folders`,
-    );
+  const key = holonPathKey(holonPath);
+  if (!readTasksIndex(engine.stateDir)[key]) {
+    throw new Error(`holon "${key}" not found`);
   }
-  if (!readTasksIndex(engine.stateDir)[root]) {
-    throw new Error(`holon "${root}" not found`);
-  }
-  return root;
+  return key;
 }
 
 // ── §6.4 stacking: swarm add ────────────────────────────────────────────────────────────
@@ -181,10 +177,10 @@ export async function addWork(
   });
 }
 
-/** The holon path of a swarm session (root only until §5 child session keys land). */
+/** The holon path of a swarm session: its key `<root>/<child>/…` split (ARCH §2, §5). */
 function callerHolonPath(caller: Extract<OpCaller, { kind: "session" }>): string[] | undefined {
   const taskId = caller.taskId ?? parseSwarmSessionKey(caller.sessionKey)?.taskId;
-  return taskId ? [taskId] : undefined;
+  return taskId ? taskId.split(HOLON_KEY_SEPARATOR) : undefined;
 }
 
 // ── §3.4 / §9 lead override: swarm lead ─────────────────────────────────────────────────
@@ -285,7 +281,12 @@ export async function overrideLead(
   const lead = parseLeadSpec(spec);
   return engine.locks.run(taskId, async () => {
     const state = engine.loadState(taskId);
-    assertRootOwner(caller, state.contract.upstream.sessionKey, holonRef);
+    // §3.4: the root owner is the root's, whatever the depth of the holon being changed.
+    const rootUpstream =
+      holonPath.length > 1
+        ? engine.loadState(holonPath[0]!).contract.upstream.sessionKey
+        : state.contract.upstream.sessionKey;
+    assertRootOwner(caller, rootUpstream, holonRef);
     if (state.status !== "open") {
       throw new Error(`holon ${holonRef} is ${state.status}; its lead cannot change`);
     }
@@ -344,23 +345,22 @@ export type HolonTreeRow = {
 };
 
 /**
- * The holon tree under a root, depth first. TODO(§5): partition 1's listHolonTree walks the
- * child folders; until it lands the tree is the root alone.
+ * ARCH §8.2, §9: the holon tree under a holon, depth first (the holon, then each child and
+ * its subtree by id), walked by children.ts listHolonTree over the child folders.
  */
-export function holonTree(engine: SwarmEngine, rootId: string, now = Date.now()): HolonTreeRow[] {
-  const entry = readTasksIndex(engine.stateDir)[rootId];
-  if (!entry) {
-    throw new Error(`holon "${rootId}" not found`);
+export function holonTree(engine: SwarmEngine, holonKey: string, now = Date.now()): HolonTreeRow[] {
+  if (!readTasksIndex(engine.stateDir)[holonKey]) {
+    throw new Error(`holon "${holonKey}" not found`);
   }
-  const state = engine.loadState(rootId);
-  return [
-    {
-      path: [rootId],
-      state: holonStateFrom(readEvents(engine.stateDir, rootId)),
-      lead: describeLead(state.holon.lead),
-      ageMs: Math.max(0, now - Date.parse(entry.createdAt)),
-    },
-  ];
+  return listHolonTree(engine.stateDir, holonKey, now).map((row) => {
+    let lead = "-";
+    try {
+      lead = describeLead(loadHolon(engine.stateDir, row.key, engine.defaults).lead);
+    } catch {
+      // an unreadable holon file: its lead is unknown, the row still shows
+    }
+    return { path: row.path, state: row.state, lead, ageMs: row.ageMs };
+  });
 }
 
 export type HolonShown = TaskDetail & {
@@ -387,7 +387,7 @@ export function showHolon(
   if (opts.tree) {
     shown.tree = holonTree(engine, taskId).map((row) => ({
       ...row,
-      summary: latestSummary(readEvents(engine.stateDir, row.path.at(-1) ?? taskId)),
+      summary: latestSummary(readEvents(engine.stateDir, holonPathKey(row.path))),
     }));
   }
   return shown;
@@ -448,8 +448,9 @@ function need(params: Params, key: string, method: string): string {
 }
 
 /**
- * Every new op of steps 3-5, keyed by name. Partitions add rows (spawn, relay, group); the
- * gateway methods and the lead tool dispatch through `.run` at call time.
+ * Every new op of steps 3-5, keyed by name (add, lead, showTree, spawn, relay, group). The
+ * gateway methods (and through them the CLI verbs) and the lead tool dispatch through `.run`
+ * at call time; none has a second implementation.
  */
 export const SWARM_OPS: Record<string, SwarmOp> = {
   add: {
