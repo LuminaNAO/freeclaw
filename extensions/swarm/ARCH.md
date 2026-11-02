@@ -78,6 +78,33 @@ upstream: { sessionKey: <optional>, channel: <optional> }   # root only; childre
 5. The join is done by the lead from the members' events; there is no join service. A lane's result is one event
    upward to the lead (`AUDIT_PASS`/`AUDIT_FAIL` with the merged findings), so routing (§6) stays linear.
 
+### 4.6 Every verdict joins, whatever its route (operator, 2026-11-02)
+Found live (a 3-tester `join: all` lane, one TEST_FAIL and two TEST_PASS on the same head): the lane never settled
+and the holon sat idle for 39 minutes. Cause: a member verdict whose route goes to the lead or upstream (TEST_PASS →
+lead) skipped the join and reached the lead raw, while the same lane's FAIL (routed to build) went through the join;
+the join then waited forever for members whose verdicts had already bypassed it.
+1. A member's verdict (any PASS/FAIL pair the join understands) **always** goes through its lane's join, whatever
+   its route target (a lane, the lead, or upstream). Only non-verdict events (BLOCKED, QUESTION, …) pass straight.
+2. When the lane settles, exactly one event goes to the route's target: the PASS for a pass, or the merged findings
+   for a fail (a fail always goes to the lead, which hands it to build). The lead never sees raw member verdicts.
+3. Invariant (tested): once every member of a lane has emitted a verdict for the current round, the lane is settled.
+   No combination of routes can leave it waiting.
+
+### 4.7 Nobody waits on nothing (operator, 2026-11-02)
+Event-driven, no timers (§7 "no time limits" stays):
+1. When a member's turn ends and its lane is unsettled for the round, the engine checks whether any member of that
+   lane still has a turn in flight or a queued input. If none does, the lead gets one `LANE_STALLED` event naming the
+   lane, the join status, and the members with no verdict this round; each such member is re-prompted once
+   (as a silent participant, §7). Never repeated for the same round.
+2. The lead brief says: on `LANE_WAITING`, wait (the engine guarantees a follow-up); on `LANE_STALLED`, decide
+   (re-prompt, RETRY, or BLOCKED up). A lead never ends a round on NO_REPLY without one of those coming.
+3. `LANE_WAITING` records its lane in `data.lane` (it was missing), so `swarm show` and resume can see unsettled lanes.
+
+Tests: replay of the exact live sequence (test:1 TEST_FAIL, test:2/test:3 TEST_PASS, join all) settles as a fail
+with test:1's findings; all-pass sends the lead one TEST_PASS, not three; quorum/any unchanged; a lane whose last
+idle member has no verdict emits LANE_STALLED once and re-prompts it; resume of a holon with an unsettled lane
+re-checks §4.7.1. All existing swarm tests stay green.
+
 ## 5. Child holons (the holarchy)
 1. A lead may create child holons within its canon and `depth` (`swarm spawn` from the lead's session, or by
    writing the child `holon.yaml` through the tool the plugin gives leads). Example: "fix the test suite" →
