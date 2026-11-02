@@ -3,7 +3,7 @@ import path from "node:path";
 import { briefFor, holonBriefFor } from "./briefs.js";
 import { loadContract, type Contract, type ContractDefaults } from "./contract.js";
 import { formatEnvelope, Mailbox, msgIdFor, type RunEnd, type RuntimeLike } from "./delivery.js";
-import { dedupeFindings, joinStatus, laneEmits } from "./fanout.js";
+import { joinStatus, laneEmits } from "./fanout.js";
 import { noGroupAdapter, type SwarmGroupAdapter } from "./group.js";
 import { loadHolon, targetMembers, type Holon } from "./holon.js";
 import { holonBranch, memberBranch, mergePartition } from "./partition.js";
@@ -360,7 +360,13 @@ export class SwarmEngine {
   async notify(
     taskId: string,
     state: Pick<TaskState, "contract" | "sha">,
-    notice: { event: string; body: string; from?: string; sha?: string },
+    notice: {
+      event: string;
+      body: string;
+      from?: string;
+      sha?: string;
+      data?: Record<string, unknown>;
+    },
   ) {
     const rec = this.record(taskId, {
       kind: "system",
@@ -369,6 +375,7 @@ export class SwarmEngine {
       to: TASKMASTER,
       sha: notice.sha ?? state.sha,
       body: notice.body,
+      ...(notice.data && { data: notice.data }),
     });
     return this.sendTo(taskId, state, {
       to: TASKMASTER,
@@ -472,8 +479,9 @@ export class SwarmEngine {
   ): Promise<EmitResult> {
     const { fromLane, to, event, emitted, input, message } = args;
     const kind = classify(event);
-    if (!kind || !to || to === TASKMASTER || to === UPSTREAM) {
-      // Not a verdict the join understands (e.g. BLOCKED): straight through, as v1.
+    if (!kind || !to) {
+      // §4.6.1: only non-verdict events (BLOCKED, QUESTION, …) pass straight; a verdict
+      // joins whatever its route target (a lane, the lead or upstream).
       await this.sendTo(taskId, state, {
         to: to ?? TASKMASTER,
         from: emitted.from ?? fromLane.role,
@@ -489,7 +497,7 @@ export class SwarmEngine {
     // state.events was loaded before this emit was recorded; re-read so the log is the
     // single source (ARCH §2) and the current emit counts.
     const fresh = this.loadState(taskId).events;
-    const floor = this.laneFloor(state, fromLane.role);
+    const floor = laneFloor(state.events, fromLane.role);
     const passEvent = passOf(event);
     const failEvent = VERDICTS[passEvent]!;
     const emits = [
@@ -504,7 +512,7 @@ export class SwarmEngine {
         e.event === "LANE_SETTLED" &&
         e.seq > floor &&
         e.data?.lane === fromLane.role &&
-        e.data?.verdict === passEvent,
+        (e.data?.verdict === passEvent || e.data?.verdict === failEvent),
     )?.seq;
     if (settledSeq !== undefined && emitted.seq > settledSeq) {
       this.record(taskId, {
@@ -524,9 +532,19 @@ export class SwarmEngine {
     const status = joinStatus(fromLane, emits, passEvent, failEvent);
 
     if (!status.settled) {
+      // §4.7.3: the lane is in data, so `swarm show` and resume can see unsettled lanes.
       await this.notify(taskId, state, {
         event: "LANE_WAITING",
-        body: `${fromLane.role} member ${emitted.from} emitted ${event} @ ${input.sha}; join ${status.reason}.`,
+        body:
+          `${fromLane.role} member ${emitted.from} emitted ${event} @ ${input.sha}; join ${status.reason}. ` +
+          "Wait: the swarm sends the lane's result or LANE_STALLED.",
+        data: {
+          lane: fromLane.role,
+          member: emitted.from,
+          verdict: passEvent,
+          floor,
+          reason: status.reason,
+        },
       });
       return {
         ok: true,
@@ -617,6 +635,23 @@ export class SwarmEngine {
         join: fromLane.join.kind === "quorum" ? `quorum:${fromLane.join.k}` : fromLane.join.kind,
       },
     });
+    // §4.6.2: a pass goes to its route's target when that is upstream; to the lead otherwise
+    // (the lead's own route, or a lane target whose next hop the lead drives, §4.5). A fail
+    // always goes to the lead, which hands it to build.
+    if (pass && to === UPSTREAM) {
+      await this.toUpstream(taskId, state, {
+        event: passEvent,
+        from: fromLane.role,
+        sha,
+        body,
+      });
+      return {
+        ok: true,
+        seq: emitted.seq,
+        routedTo: UPSTREAM,
+        notice: `lane ${fromLane.role} settled (pass); sent upstream`,
+      };
+    }
     await this.notify(taskId, state, {
       event: pass ? passEvent : failEvent,
       from: fromLane.role,
@@ -631,6 +666,125 @@ export class SwarmEngine {
     };
   }
 
+  /**
+   * ARCH §4.7.1: nobody waits on nothing. Called when a member's turn ends (and on resume):
+   * if the lane is unsettled for its round and no member has a turn in flight or a queued
+   * input, the lead gets one LANE_STALLED and each member with no verdict this round is
+   * re-prompted once. Never repeated for the same round. Caller holds the task lock.
+   * `ending` is the member whose run is ending now (its session is still claimed).
+   */
+  async recheckLane(
+    taskId: string,
+    laneRole: string,
+    opts: { ending?: string } = {},
+  ): Promise<{ stalled: boolean; missing: string[] }> {
+    const none = { stalled: false, missing: [] as string[] };
+    let state: TaskState;
+    try {
+      state = this.loadState(taskId);
+    } catch {
+      return none;
+    }
+    const lane = state.holon.lanes.find((l) => l.role === laneRole);
+    if (state.status !== "open" || !lane || lane.count < 2) {
+      return none;
+    }
+    const round = laneRoundStatus(state.events, lane, targetMembers(state.holon, lane.role));
+    if (!round || round.settled) {
+      return none;
+    }
+    if (round.missing.length === 0) {
+      // §4.6.3: every member has a verdict, so the lane is settled. A log written before
+      // §4.6 (a verdict that bypassed the join) gets its join run now from the last verdict.
+      await this.settleFromLog(taskId, state, lane, round.floor);
+      return none;
+    }
+    const busy = round.members.some(
+      (m) =>
+        (m !== opts.ending && this.mailbox.isBusy(this.sessionKey(taskId, m))) ||
+        this.mailbox.hasPending(this.sessionKey(taskId, m)),
+    );
+    if (busy) {
+      return none;
+    }
+    const already = state.events.some(
+      (e) =>
+        e.kind === "system" &&
+        e.event === "LANE_STALLED" &&
+        e.seq > round.floor &&
+        e.data?.lane === lane.role,
+    );
+    if (already) {
+      return none;
+    }
+    const joinWord = lane.join.kind === "quorum" ? `quorum:${lane.join.k}` : lane.join.kind;
+    const join = `${joinWord}: ${round.reported.length}/${lane.count} members reported`;
+    await this.notify(taskId, state, {
+      event: "LANE_STALLED",
+      body:
+        `lane ${lane.role} is stalled (join ${join}); no member has a turn in flight or a queued ` +
+        `input. No verdict this round from: ${round.missing.join(", ")}; each was re-prompted ` +
+        "once. Decide: re-prompt (RETRY), RETRY the lane's input, or BLOCKED up.",
+      data: { lane: lane.role, join, floor: round.floor, missing: round.missing },
+    });
+    const stall = this.loadState(taskId).events.findLast((e) => e.event === "LANE_STALLED");
+    const input = state.events.find((e) => e.seq === round.floor);
+    for (const member of round.missing) {
+      await this.sendTo(taskId, state, {
+        to: member,
+        from: "swarm",
+        event: "RETRY",
+        sha: input?.sha ?? state.sha,
+        body:
+          `lane ${lane.role} is waiting for your verdict on this round and nothing else is ` +
+          "running. Finish the work you were given and emit your verdict now.\n" +
+          (input?.body ?? ""),
+        seqs: [stall?.seq ?? round.floor],
+        salt: `lane-stalled-${lane.role}-${round.floor}-${member}`,
+      });
+    }
+    return { stalled: true, missing: round.missing };
+  }
+
+  /** Run the lane's join from the round's last member verdict (§4.6.3, resume of an old log). */
+  private async settleFromLog(
+    taskId: string,
+    state: TaskState,
+    lane: Holon["lanes"][number],
+    floor: number,
+  ): Promise<void> {
+    const members = new Set(targetMembers(state.holon, lane.role));
+    const last = state.events.findLast(
+      (e) =>
+        e.kind === "emit" &&
+        e.seq > floor &&
+        e.from !== undefined &&
+        members.has(e.from) &&
+        classify(e.event) !== undefined,
+    );
+    if (!last?.from) {
+      return;
+    }
+    const route = resolveRoute(state.contract.routes, { event: last.event, from: lane.role });
+    const sha = last.sha ?? state.sha;
+    const body = last.body ?? "";
+    this.record(taskId, {
+      kind: "system",
+      event: "LANE_REJOINED",
+      from: lane.role,
+      sha,
+      data: { lane: lane.role, floor, verdict: last.event, member: last.from },
+    });
+    await this.joinFanOut(taskId, state, {
+      fromLane: lane,
+      to: route?.to ?? TASKMASTER,
+      event: last.event,
+      emitted: last,
+      input: { event: last.event, sha, body },
+      message: `${route ? renderRouteMessage(route.message, { sha }) : ""}\n${body}`.trim(),
+    });
+  }
+
   /** The branch the holon works on: the repo's checked-out branch (v1 default; §4.2). */
   private holonBranch(repo: string): string | undefined {
     try {
@@ -638,29 +792,6 @@ export class SwarmEngine {
     } catch {
       return undefined;
     }
-  }
-
-  /**
-   * The seq after which this lane's current round of verdicts counts: the last event that
-   * handed work into the lane — TASK_STARTED/ROUND_STARTED for the first lane, or the emit
-   * that was fanned out to it — so an earlier round's verdicts never count twice.
-   */
-  private laneFloor(state: TaskState, role: string): number {
-    let floor = 0;
-    for (const e of state.events) {
-      if (
-        e.kind === "system" &&
-        (e.event === "TASK_STARTED" || e.event === "ROUND_STARTED") &&
-        e.to === role
-      ) {
-        floor = e.seq;
-      }
-      // An emit routed to this lane fans out to its members: it is the round's input.
-      if (e.kind === "emit" && e.to === role) {
-        floor = e.seq;
-      }
-    }
-    return floor;
   }
 }
 
@@ -670,6 +801,66 @@ const VERDICTS: Record<string, string> = {
   AUDIT_PASS: "AUDIT_FAIL",
   TEST_PASS: "TEST_FAIL",
 };
+
+/**
+ * The seq after which this lane's current round of verdicts counts: the last event that
+ * handed work into the lane — TASK_STARTED/ROUND_STARTED for the first lane, or the emit
+ * that was fanned out to it — so an earlier round's verdicts never count twice.
+ */
+export function laneFloor(events: SwarmEvent[], role: string): number {
+  let floor = 0;
+  for (const e of events) {
+    if (
+      e.kind === "system" &&
+      (e.event === "TASK_STARTED" || e.event === "ROUND_STARTED") &&
+      e.to === role
+    ) {
+      floor = e.seq;
+    }
+    // An emit routed to this lane fans out to its members: it is the round's input. A
+    // fanned-out member's own emit (`<role>:<n>`) records its route target but joins in its
+    // lane instead (§4.6), so it never hands work to the target lane.
+    if (e.kind === "emit" && e.to === role && !/:\d+$/.test(e.from ?? "")) {
+      floor = e.seq;
+    }
+  }
+  return floor;
+}
+
+/**
+ * ARCH §4.6.3/§4.7: a lane's current round from the log. `undefined` when the lane has had
+ * no input yet. A member has a verdict when it emitted any verdict the join understands
+ * since the round's floor; the round is settled once a LANE_SETTLED for the lane follows it.
+ */
+export function laneRoundStatus(
+  events: SwarmEvent[],
+  lane: Holon["lanes"][number],
+  members: string[],
+):
+  | { floor: number; settled: boolean; members: string[]; reported: string[]; missing: string[] }
+  | undefined {
+  const floor = laneFloor(events, lane.role);
+  if (floor === 0) {
+    return undefined;
+  }
+  const settled = events.some(
+    (e) =>
+      e.kind === "system" &&
+      e.event === "LANE_SETTLED" &&
+      e.seq > floor &&
+      e.data?.lane === lane.role,
+  );
+  const reported = members.filter((m) =>
+    events.some((e) => e.kind === "emit" && e.from === m && e.seq > floor && classify(e.event)),
+  );
+  return {
+    floor,
+    settled,
+    members,
+    reported,
+    missing: members.filter((m) => !reported.includes(m)),
+  };
+}
 
 function classify(event: string): "pass" | "fail" | undefined {
   if (event in VERDICTS) {

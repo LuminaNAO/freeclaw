@@ -128,6 +128,11 @@ export class Mailbox {
     return this.active.has(sessionKey);
   }
 
+  /** A message is held for the session's next turn (ARCH §4.7.1: a queued input). */
+  hasPending(sessionKey: string): boolean {
+    return (this.pending.get(sessionKey)?.length ?? 0) > 0;
+  }
+
   /** Writes the outbox record first, then sends now or holds it for the next turn. */
   async deliver(req: DeliveryRequest): Promise<DeliveryResult> {
     recordDelivery(req);
