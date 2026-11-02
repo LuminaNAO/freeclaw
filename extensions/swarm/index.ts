@@ -6,6 +6,7 @@ import { SWARM_EMIT_TOOL, createSwarmEmitToolFactory } from "./src/emit.js";
 import { SwarmEngine } from "./src/engine.js";
 import { resolveGroupAdapter } from "./src/group.js";
 import { createSwarmHooks } from "./src/hooks.js";
+import { createSwarmHolonToolFactory, SWARM_HOLON_TOOL } from "./src/lead-tool.js";
 import { createSwarmMethods } from "./src/methods.js";
 import { resumeOpenTasks } from "./src/resume.js";
 import { createRuntimeChannelSender } from "./src/upstream.js";
@@ -36,6 +37,8 @@ export default function register(api: OpenClawPluginApi) {
   const getEngine = () => engine;
 
   api.registerTool(createSwarmEmitToolFactory(getEngine), { name: SWARM_EMIT_TOOL });
+  // ARCH §10a: the lead's tool; it dispatches through the same op table as swarm.* methods.
+  api.registerTool(createSwarmHolonToolFactory(getEngine), { name: SWARM_HOLON_TOOL });
 
   const hooks = createSwarmHooks(getEngine);
   api.on("llm_input", hooks.onLlmInput);
