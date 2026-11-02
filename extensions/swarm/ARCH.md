@@ -159,6 +159,35 @@ Every read works with the gateway down (reads the files).
 4. Stacking command `add`, tree `list/show`, `lead` override (§6.4, §9).
 5. Human lead/participant via channel + relay session; groups for holons with humans (§3.3, §8).
 
+## 10a. Steps 3-5 build notes (operator, 2026-11-02)
+Applies the house standard (one ops core, thin frontends): every new capability (spawn, add, lead override, relay,
+group open/close) is an engine/ops function first; the `swarm` CLI (`--json`), the lead's tool and the relay call the
+same functions. Generic: no person, number, group id, host or org in code; humans and channels come from the holon
+file or the parent's canon.
+1. **Step 3, child holons (§5):** `swarm spawn` (CLI + lead tool) writes the child holon.yaml under the parent's
+   folder; canon inheritance refuses any loosening at spawn with the exact key named; `CHILD_DONE/BLOCKED/FAILED`
+   (1-5 line summary) route to the parent lead only; escalation climbs one level at a time to upstream. `swarm list`
+   shows the tree; resume walks the tree (§7).
+2. **Step 4 (§6.4, §9):** `swarm add <holon> <file>` queues work to the lead (never interrupts; `urgent: true`
+   steers); `swarm show <root> --tree`; `swarm lead <holon> <spec>` (root owner only).
+3. **Step 5, humans over a channel (§3.3, §8):** `lead: { kind: human, who: [<channel id>…], channel: <channel> }`
+   and `participants: [{ kind: human, who, channel, role }]`.
+   - Group: on first need the engine creates one channel group per holon with humans (members: those humans, the
+     root owner, the agent identity), name `<root> · <holon id>`, through the channel plugin's group API (Signal:
+     the existing signal-cli JSON-RPC `updateGroup`, resolved by account, never by port). Closed (left + renamed
+     `[done]`) when the holon is done. The group id is recorded in the holon's events.
+   - Outbound: events addressed to a human lead/participant become one short plain line (what happened, what is
+     needed, the sha) in that group.
+   - Relay: a small relay session per holon (model from canon, default the lead model) reads each human reply in
+     that group and emits **exactly one** routed event, then confirms back in one line what it understood. Unclear →
+     asks once. It never decides on its own and has no tools except swarm_emit and the reply.
+   - No channel available → `BLOCKED: no channel` up one level (§8.3).
+4. **Tests:** fake channel (loopback) for groups and relay: a human lead approves a plan in plain words and the relay
+   emits APPROVED once; an unclear reply gets one question; a child spawn that drops `never: [push]` is refused; three
+   children finish and the root integrates; `add` mid-turn queues; resume after two gateway kills finishes every
+   holon; parity gate: every new op has a CLI verb with `--json` and the lead/relay tool calls the same function;
+   all existing swarm tests green. §12.2, §12.3 and §12.6 are the acceptance items for this build.
+
 ## 11. Compatibility
 Every v1 contract, `continue` round and resume behaviour keeps working unchanged. v1 tests stay green. A v1
 contract is a root holon whose lead is the gateway default model (as today) unless `lead` is given.
