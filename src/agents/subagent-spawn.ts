@@ -29,6 +29,7 @@ import {
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { buildSubagentDisplayName, resolveSubagentLabel } from "./subagent-names.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentRunTimeoutSeconds } from "./timeout.js";
 import { readStringParam } from "./tools/common.js";
@@ -573,8 +574,17 @@ export async function spawnSubagentDirect(
         targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir,
     }),
   });
+  // ARCH §1: the child entry is named in the same patch that writes spawnedBy.
+  const childSessionLabel = resolveSubagentLabel({ label, task });
+  const childDisplayName = buildSubagentDisplayName({
+    cfg,
+    requesterSessionKey: requesterInternalKey,
+    label: childSessionLabel,
+  });
   const spawnLineagePatchError = await patchChildSession({
     spawnedBy: spawnedByKey,
+    label: childSessionLabel,
+    displayName: childDisplayName,
     ...(spawnedMetadata.workspaceDir ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir } : {}),
   });
   if (spawnLineagePatchError) {
