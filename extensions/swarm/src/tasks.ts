@@ -1,9 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import { leadBrief, workerBrief } from "./briefs.js";
-import { parseContract, SwarmContractError, taskDirFor, type Contract } from "./contract.js";
+import { compareHolonKeys, leadLabel, openChildrenOf } from "./children.js";
+import {
+  parentKeyOf,
+  parseContract,
+  SwarmContractError,
+  taskDirFor,
+  type Contract,
+} from "./contract.js";
 import { readRepoHead, type SwarmEngine } from "./engine.js";
-import { parseHolon, targetMembers, type Holon } from "./holon.js";
+import {
+  holonStateFrom,
+  loadHolon,
+  parseHolon,
+  targetMembers,
+  type Holon,
+  type HolonState,
+} from "./holon.js";
 import { readPlan, setupPartition, holonBranch, memberBranch, writePlan } from "./partition.js";
 import { ROUND_STARTED, roundStarts } from "./rounds.js";
 import { TASKMASTER, UPSTREAM } from "./routing.js";
@@ -58,13 +72,35 @@ export async function startTask(
   if (!yaml) {
     throw new SwarmContractError("swarm.start needs a contract file or contract text");
   }
-  const holon = parseHolon(yaml, engine.defaults);
+  return startHolon(engine, yaml);
+}
+
+/**
+ * Start one holon from its file text. A root holon is keyed by its id; a child (ARCH §5) by
+ * its path from the root (`parentKey/<id>`), always stored as holon.yaml in its parent's
+ * `children/<id>/` folder, and reports to its parent lead instead of upstream.
+ */
+export async function startHolon(
+  engine: SwarmEngine,
+  yaml: string,
+  opts: { parentKey?: string } = {},
+): Promise<StartedTask> {
+  const parsed = parseHolon(yaml, engine.defaults);
   // v1 detection: the start input names v1 fields (workers/input) and no v2-only ones (§11).
-  const v1 = /(^|\n)workers:/.test(yaml) && !/(^|\n)(lanes|lead|children|canon):/.test(yaml);
+  // A child holon is always v2: it has a lead whose parent is a holon.
+  const v1 =
+    !opts.parentKey &&
+    /(^|\n)workers:/.test(yaml) &&
+    !/(^|\n)(lanes|lead|children|canon):/.test(yaml);
+  const key = opts.parentKey ? `${opts.parentKey}/${parsed.contract.id}` : parsed.contract.id;
+  const holon =
+    key === parsed.contract.id ? parsed : { ...parsed, contract: { ...parsed.contract, id: key } };
   const contract = holon.contract;
   const dir = taskDirFor(engine.stateDir, contract.id);
   if (readTasksIndex(engine.stateDir)[contract.id] || fs.existsSync(dir)) {
-    throw new SwarmContractError(`task "${contract.id}" already exists`);
+    throw new SwarmContractError(
+      `${opts.parentKey ? "child holon" : "task"} "${contract.id}" already exists`,
+    );
   }
 
   const workers: Record<string, AppliedModel> = {};
@@ -218,7 +254,9 @@ export async function startTask(
       body: `Task started; ${members.join(", ")} ${members.length > 1 ? "have" : "has"} the brief. Wait for events; do not do the work yourself.`,
       seqs: [startRec.seq],
       salt: "kickoff",
-      extraSystemPrompt: leadBrief(state.holon.contract, state.holon.lanes),
+      extraSystemPrompt: leadBrief(state.holon.contract, state.holon.lanes, {
+        canon: state.holon.v1 ? undefined : state.holon.canon,
+      }),
     });
   });
 
@@ -255,6 +293,7 @@ function memberBrief(
 }
 
 export type TaskSummary = {
+  /** Holon key: the root id, or `<root>/<child>/…` for a child holon (ARCH §5). */
   id: string;
   status: TaskStatus;
   /** ARCH §12: the current round (1 until the first `swarm continue`). */
@@ -263,19 +302,37 @@ export type TaskSummary = {
   recentEvent?: string;
   updatedAt: string;
   ageMs: number;
+  /** ARCH §9 tree view: 0 for a root, 1 for its children, … */
+  depth: number;
+  /** ARCH §2: the state derived from the holon's event log. */
+  state: HolonState;
+  /** ARCH §9: the holon's lead, e.g. `agent provider/model`. */
+  lead: string;
 };
 
+/** ARCH §9: every holon in the tree, depth-first (a parent, then its children by id). */
 export function listTasks(stateDir: string, now = Date.now()): TaskSummary[] {
-  return Object.entries(readTasksIndex(stateDir))
-    .map(([id, entry]) => {
+  const index = readTasksIndex(stateDir);
+  return Object.keys(index)
+    .toSorted(compareHolonKeys)
+    .map((id) => {
+      const entry = index[id]!;
       let recentEvent: string | undefined;
       let round = 1;
+      let state: HolonState = "planning";
+      let lead = "-";
       try {
         const events = readEvents(stateDir, id);
         recentEvent = events.at(-1)?.event;
         round = roundStarts(events).length;
+        state = holonStateFrom(events);
       } catch {
         recentEvent = undefined;
+      }
+      try {
+        lead = leadLabel(loadHolon(stateDir, id).lead);
+      } catch {
+        lead = "-";
       }
       return {
         id,
@@ -285,9 +342,11 @@ export function listTasks(stateDir: string, now = Date.now()): TaskSummary[] {
         recentEvent,
         updatedAt: entry.updatedAt,
         ageMs: Math.max(0, now - Date.parse(entry.createdAt)),
+        depth: id.split("/").length - 1,
+        state,
+        lead,
       };
-    })
-    .toSorted((a, b) => a.id.localeCompare(b.id));
+    });
 }
 
 export type TaskDetail = HandoverTimeline & {
@@ -455,8 +514,39 @@ export function showTask(engine: SwarmEngine, taskId: string, limit?: number): T
   };
 }
 
-/** Urgent stop to every task session, then close and report CANCELLED upstream. */
-export async function cancelTask(engine: SwarmEngine, taskId: string, reason = "cancelled") {
+/**
+ * Urgent stop to every task session, then close and report CANCELLED upstream. ARCH §9:
+ * cancelling a holon cancels its subtree first (deepest first); a holon cancelled as part of
+ * its parent's subtree does not report back to that parent, which is being cancelled itself.
+ * A child cancelled on its own reports CHILD_CANCELLED to its parent lead (one level, §5.3).
+ */
+export async function cancelTask(
+  engine: SwarmEngine,
+  taskId: string,
+  reason = "cancelled",
+  opts: { subtree?: boolean } = {},
+): Promise<{ id: string; status: TaskStatus; changed: boolean; children?: string[] }> {
+  // Children first and outside this holon's lock: a child's report takes its parent's lock
+  // (lock order is always child → parent).
+  const children: string[] = [];
+  for (const child of openChildrenOf(engine.stateDir, taskId)) {
+    const res = await cancelTask(engine, child, `parent ${taskId} cancelled: ${reason}`, {
+      subtree: true,
+    });
+    if (res.changed) {
+      children.push(child, ...(res.children ?? []));
+    }
+  }
+  const own = await cancelOne(engine, taskId, reason, opts);
+  return children.length > 0 ? { ...own, children } : own;
+}
+
+async function cancelOne(
+  engine: SwarmEngine,
+  taskId: string,
+  reason: string,
+  opts: { subtree?: boolean },
+) {
   return engine.locks.run(taskId, async () => {
     const state = engine.loadState(taskId);
     if (state.status !== "open") {
@@ -476,6 +566,9 @@ export async function cancelTask(engine: SwarmEngine, taskId: string, reason = "
         urgent: true,
         salt: `cancel-${role}`,
       });
+    }
+    if (opts.subtree && parentKeyOf(taskId)) {
+      return { id: taskId, status: "cancelled" as const, changed: true };
     }
     // ARCH §9: cancel always reports CANCELLED upstream, whatever upstream.events lists.
     await engine.toUpstream(

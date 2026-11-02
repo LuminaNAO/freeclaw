@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { briefFor, holonBriefFor } from "./briefs.js";
-import { loadContract, type Contract, type ContractDefaults } from "./contract.js";
+import { openChildrenOf, reportToParent } from "./children.js";
+import { loadContract, parentKeyOf, type Contract, type ContractDefaults } from "./contract.js";
 import { formatEnvelope, Mailbox, msgIdFor, type RunEnd, type RuntimeLike } from "./delivery.js";
 import { joinStatus, laneEmits } from "./fanout.js";
 import { noGroupAdapter, type SwarmGroupAdapter } from "./group.js";
@@ -236,6 +237,20 @@ export class SwarmEngine {
       to = target;
     }
 
+    // ARCH §5.3: the parent decides what its children's results mean; a lead cannot report
+    // its holon done while a child it spawned is still open.
+    if (isTaskmaster && event === "DONE" && to === UPSTREAM) {
+      const open = openChildrenOf(this.stateDir, taskId);
+      if (open.length > 0) {
+        return {
+          ok: false,
+          error:
+            `DONE refused: child holon(s) still open: ${open.join(", ")}. Wait for their ` +
+            "CHILD_DONE / CHILD_BLOCKED / CHILD_FAILED, or cancel them, then report.",
+        };
+      }
+    }
+
     const emitted = this.record(taskId, {
       kind: "emit",
       event,
@@ -393,6 +408,12 @@ export class SwarmEngine {
     msg: { event: string; from: string; sha: string; body: string },
     opts: { force?: boolean } = {},
   ): Promise<void> {
+    // ARCH §5.3/§5.4: a child holon reports to its parent lead only, one level up; only the
+    // root reports to `upstream`.
+    if (parentKeyOf(taskId)) {
+      await reportToParent(this, taskId, msg);
+      return;
+    }
     const upstream = state.contract.upstream;
     await deliverUpstream({
       engine: this,
