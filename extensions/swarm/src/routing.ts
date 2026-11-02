@@ -34,6 +34,10 @@ export const DEFAULT_BUILD_ROUTES: readonly RouteRow[] = Object.freeze([
   { on: "BLOCKED", from: ANY, to: TASKMASTER, message: "blocked" },
   { on: "FAILED", from: TASKMASTER, to: UPSTREAM, message: "failed" },
   { on: "RETRY", from: TASKMASTER, to: ROLE_PLACEHOLDER, message: "re-prompt" },
+  // ARCH §3.3, §10a.3: a plan goes to the lead for a yes; the lead's APPROVED (an agent's, or a
+  // human's through the relay) goes back to the role that asked.
+  { on: "PLAN", from: ANY, to: TASKMASTER, message: "plan for approval" },
+  { on: "APPROVED", from: TASKMASTER, to: ROLE_PLACEHOLDER, message: "approved: go on" },
 ]);
 
 export const TEMPLATES: Readonly<Record<string, readonly RouteRow[]>> = Object.freeze({

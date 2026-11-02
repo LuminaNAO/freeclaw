@@ -14,8 +14,8 @@ import { ANY as ANY_ROLE, ROLE_PLACEHOLDER, TASKMASTER, type RouteRow } from "./
 
 // The holon file (ARCH §2) and derived state. A v1 contract.yaml is a root holon whose lead
 // is the gateway default model (ARCH §11); a v2 holon.yaml carries lead, lanes, canon and
-// children. Steps 3-5 of §10 (children, commands, human leads) are not built yet; the file
-// format carries them so nothing is designed out.
+// children. Human leads and participants (§3.3, §10a.3) are parsed here; their channel group
+// and relay live in humans.ts / relay.ts.
 
 export type Join = { kind: "all" } | { kind: "any" } | { kind: "quorum"; k: number };
 
@@ -28,13 +28,31 @@ export type Lane = {
   join: Join;
 };
 
-export type LeadSpec = { kind: "agent"; model?: string; thinking?: string };
+export type AgentLead = { kind: "agent"; model?: string; thinking?: string };
+/**
+ * ARCH §3.3, §10a.3: a human lead. `who` are channel ids (from the holon file, never code);
+ * `channel` is the channel kind whose group API carries the holon's group. The model fields
+ * exist so callers can read `lead.model` on either kind; a human lead never has one.
+ */
+export type HumanLead = {
+  kind: "human";
+  who: string[];
+  channel: string;
+  model?: undefined;
+  thinking?: undefined;
+};
+export type LeadSpec = AgentLead | HumanLead;
+
+/** ARCH §10a.3: a human participant of a holon, reached through the holon's group. */
+export type HumanParticipant = { kind: "human"; who: string[]; channel: string; role: string };
 
 export type Canon = {
   scope?: string;
   never: string[];
   approve: string[];
   depth?: number;
+  /** ARCH §10a.3: the relay session's model (default: the lead model). */
+  relay?: { model?: string; thinking?: string };
 };
 
 export type Holon = {
@@ -43,6 +61,8 @@ export type Holon = {
   lanes: Lane[];
   children: string[];
   canon: Canon;
+  /** ARCH §10a.3: human participants (each with its own role); empty for agent-only holons. */
+  participants: HumanParticipant[];
   /** True when the on-disk file is a v1 contract.yaml (single role lanes, no lead key). */
   v1: boolean;
 };
@@ -158,6 +178,29 @@ function parseLane(role: string, raw: unknown, defaults: ContractDefaults): Lane
   };
 }
 
+/** Reserved participant names: never a lane or a human role (ARCH §10a.3). */
+export const RELAY_ROLE = "relay";
+const RESERVED_ROLES = new Set([TASKMASTER, "upstream", RELAY_ROLE, "lead", "parent", "swarm"]);
+
+function parseWho(raw: unknown, where: string): string[] {
+  const list = typeof raw === "string" ? [raw] : raw;
+  if (
+    !Array.isArray(list) ||
+    list.length === 0 ||
+    list.some((w) => typeof w !== "string" || !w.trim())
+  ) {
+    throw new SwarmContractError(`${where}.who must be a channel id or a non-empty list of them`);
+  }
+  return (list as string[]).map((w) => w.trim());
+}
+
+function parseChannelName(raw: unknown, where: string): string {
+  if (typeof raw !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/i.test(raw.trim())) {
+    throw new SwarmContractError(`${where}.channel must name a channel (e.g. the channel kind)`);
+  }
+  return raw.trim().toLowerCase();
+}
+
 function parseLead(raw: unknown): LeadSpec {
   if (raw === undefined || raw === null) {
     return { kind: "agent" };
@@ -166,12 +209,21 @@ function parseLead(raw: unknown): LeadSpec {
     throw new SwarmContractError("holon.lead must be a mapping");
   }
   if (raw.kind === "human") {
-    throw new SwarmContractError("holon.lead.kind human is a later build step (ARCH §10.5)");
+    for (const key of Object.keys(raw)) {
+      if (!["kind", "who", "channel"].includes(key)) {
+        throw new SwarmContractError(`holon.lead.${key} is not a field of a human lead`);
+      }
+    }
+    return {
+      kind: "human",
+      who: parseWho(raw.who, "holon.lead"),
+      channel: parseChannelName(raw.channel, "holon.lead"),
+    };
   }
   if (raw.kind !== undefined && raw.kind !== "agent") {
     throw new SwarmContractError(`holon.lead.kind "${String(raw.kind)}" is not agent or human`);
   }
-  const lead: LeadSpec = { kind: "agent" };
+  const lead: AgentLead = { kind: "agent" };
   if (raw.model !== undefined) {
     if (typeof raw.model !== "string" || !raw.model.trim()) {
       throw new SwarmContractError("holon.lead.model must be a non-empty string");
@@ -185,6 +237,40 @@ function parseLead(raw: unknown): LeadSpec {
     lead.thinking = raw.thinking.trim();
   }
   return lead;
+}
+
+/** ARCH §10a.3: `participants: [{ kind: human, who, channel, role }]`. */
+function parseParticipants(raw: unknown): HumanParticipant[] {
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+  if (!Array.isArray(raw)) {
+    throw new SwarmContractError("holon.participants must be a list");
+  }
+  const seen = new Set<string>();
+  return raw.map((p, i) => {
+    const where = `holon.participants[${i}]`;
+    if (!isRecord(p)) {
+      throw new SwarmContractError(`${where} must be a mapping`);
+    }
+    if (p.kind !== "human") {
+      throw new SwarmContractError(`${where}.kind must be human (agents are lanes)`);
+    }
+    const role = typeof p.role === "string" ? p.role.trim().toLowerCase() : "";
+    if (!ROLE_RE.test(role) || RESERVED_ROLES.has(role)) {
+      throw new SwarmContractError(`${where}.role "${String(p.role)}" is not a usable role name`);
+    }
+    if (seen.has(role)) {
+      throw new SwarmContractError(`${where}.role "${role}" is used twice`);
+    }
+    seen.add(role);
+    return {
+      kind: "human" as const,
+      who: parseWho(p.who, where),
+      channel: parseChannelName(p.channel, where),
+      role,
+    };
+  });
 }
 
 function parseCanon(raw: unknown): Canon {
@@ -215,6 +301,23 @@ function parseCanon(raw: unknown): Canon {
       throw new SwarmContractError("holon.canon.depth must be a non-negative integer");
     }
     canon.depth = raw.depth;
+  }
+  if (raw.relay !== undefined) {
+    if (!isRecord(raw.relay)) {
+      throw new SwarmContractError("holon.canon.relay must be a mapping { model, thinking }");
+    }
+    const relay: NonNullable<Canon["relay"]> = {};
+    for (const key of ["model", "thinking"] as const) {
+      const value = raw.relay[key];
+      if (value === undefined) {
+        continue;
+      }
+      if (typeof value !== "string" || !value.trim()) {
+        throw new SwarmContractError(`holon.canon.relay.${key} must be a non-empty string`);
+      }
+      relay[key] = value.trim();
+    }
+    canon.relay = relay;
   }
   return canon;
 }
@@ -275,6 +378,7 @@ export function parseHolon(yamlText: string, defaults: ContractDefaults = {}): H
   delete contractDoc.canon;
   delete contractDoc.recipe;
   delete contractDoc.plan;
+  delete contractDoc.participants;
   if (contractDoc.input === undefined && typeof doc.goal === "string") {
     contractDoc.input = doc.goal;
     delete contractDoc.goal;
@@ -282,9 +386,35 @@ export function parseHolon(yamlText: string, defaults: ContractDefaults = {}): H
   if (contractDoc.workers === undefined && doc.lanes !== undefined && isRecord(doc.lanes)) {
     contractDoc.workers = Object.fromEntries(Object.keys(doc.lanes).map((role) => [role, {}]));
   }
+  // ARCH §10a.3: a human participant's role is a route endpoint like a worker (its emits come
+  // through the relay); it is validated here and never gets a session of its own.
+  const participants = parseParticipants(doc.participants);
+  if (participants.length > 0 && isRecord(contractDoc.workers)) {
+    for (const p of participants) {
+      if (p.role in contractDoc.workers) {
+        throw new SwarmContractError(
+          `holon.participants role "${p.role}" is also a lane; pick one`,
+        );
+      }
+    }
+    contractDoc.workers = {
+      ...contractDoc.workers,
+      ...Object.fromEntries(participants.map((p) => [p.role, {}])),
+    };
+  }
   const contract = parseContract(YAML.stringify(contractDoc), defaults);
   // count > 1 is legal under v2 lanes (ARCH §4); the v1 parser only ever produced count 1.
-  const lanes = parseLanes(doc, contract.workers, defaults);
+  const humanRoles = new Set(participants.map((p) => p.role));
+  const lanes = parseLanes(
+    doc,
+    Object.fromEntries(Object.entries(contract.workers).filter(([r]) => !humanRoles.has(r))),
+    defaults,
+  );
+  if (lanes.some((l) => RESERVED_ROLES.has(l.role))) {
+    throw new SwarmContractError(
+      `holon.lanes: ${[...RESERVED_ROLES].join(", ")} are reserved names`,
+    );
+  }
   const workers: Record<string, WorkerSpec> = {};
   for (const lane of lanes) {
     workers[lane.role] = {
@@ -292,6 +422,19 @@ export function parseHolon(yamlText: string, defaults: ContractDefaults = {}): H
       model: lane.models[0],
       thinking: lane.thinking,
     };
+  }
+  for (const p of participants) {
+    workers[p.role] = { count: 1 };
+  }
+  const lead = parseLead(doc.lead);
+  const channels = new Set([
+    ...(lead.kind === "human" ? [lead.channel] : []),
+    ...participants.map((p) => p.channel),
+  ]);
+  if (channels.size > 1) {
+    throw new SwarmContractError(
+      `holon humans use ${[...channels].join(" and ")}; one holon has one group on one channel (ARCH §8.1)`,
+    );
   }
   // A template route that names a lane the holon does not declare would send work into a
   // session that can never emit. Template rows remap to the lead (it drives the next hop,
@@ -320,10 +463,11 @@ export function parseHolon(yamlText: string, defaults: ContractDefaults = {}): H
       : contract.routes;
   return {
     contract: { ...contract, workers, routes },
-    lead: parseLead(doc.lead),
+    lead,
     lanes,
     children: parseChildren(doc.children),
     canon: parseCanon(doc.canon),
+    participants,
     v1: false,
   };
 }
@@ -349,6 +493,7 @@ export function loadHolon(
     lanes: Object.entries(contract.workers).map(([role, spec]) => v1Lane(role, spec)),
     children: [],
     canon: { never: [], approve: [] },
+    participants: [],
     v1: true,
   };
 }
@@ -400,4 +545,23 @@ export function targetMembers(holon: Holon, to: string): string[] {
   return lane.count === 1
     ? [lane.role]
     : Array.from({ length: lane.count }, (_, i) => `${to}:${i + 1}`);
+}
+
+/** ARCH §10a.3: every human of a holon (lead first), with the role it speaks as. */
+export function humansOf(holon: Pick<Holon, "lead" | "participants">): Array<{
+  role: string;
+  who: string[];
+  channel: string;
+}> {
+  return [
+    ...(holon.lead.kind === "human"
+      ? [{ role: TASKMASTER, who: holon.lead.who, channel: holon.lead.channel }]
+      : []),
+    ...holon.participants.map((p) => ({ role: p.role, who: p.who, channel: p.channel })),
+  ];
+}
+
+/** True when `role` is a human in this holon (the lead when it is human, or a participant). */
+export function isHumanRole(holon: Pick<Holon, "lead" | "participants">, role: string): boolean {
+  return humansOf(holon).some((h) => h.role === role);
 }
