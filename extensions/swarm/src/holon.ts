@@ -158,7 +158,7 @@ function parseLane(role: string, raw: unknown, defaults: ContractDefaults): Lane
   };
 }
 
-function parseLead(raw: unknown): LeadSpec {
+export function parseLead(raw: unknown): LeadSpec {
   if (raw === undefined || raw === null) {
     return { kind: "agent" };
   }
