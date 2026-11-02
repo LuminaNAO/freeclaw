@@ -1,14 +1,11 @@
 import path from "node:path";
-<<<<<<< HEAD
-import { resolveStateDir, type OpenClawPluginApi } from "openclaw/plugin-sdk/swarm";
-=======
 import {
   resolveSignalAccount,
+  resolveStateDir,
   signalRpcRequest,
   type OpenClawConfig,
   type OpenClawPluginApi,
 } from "openclaw/plugin-sdk/swarm";
->>>>>>> feature/holon-steps-3-5-p3
 import { registerSwarmCli } from "./src/cli.js";
 import type { ContractDefaults, UpstreamChannel } from "./src/contract.js";
 import { SWARM_EMIT_TOOL, createSwarmEmitToolFactory } from "./src/emit.js";

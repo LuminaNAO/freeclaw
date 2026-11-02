@@ -180,9 +180,6 @@ function parseLane(role: string, raw: unknown, defaults: ContractDefaults): Lane
   };
 }
 
-<<<<<<< HEAD
-export function parseLead(raw: unknown): LeadSpec {
-=======
 /** Reserved participant names: never a lane or a human role (ARCH §10a.3). */
 export const RELAY_ROLE = "relay";
 const RESERVED_ROLES = new Set([TASKMASTER, "upstream", RELAY_ROLE, "lead", "parent", "swarm"]);
