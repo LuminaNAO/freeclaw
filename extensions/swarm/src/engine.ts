@@ -5,7 +5,8 @@ import { loadContract, type Contract, type ContractDefaults } from "./contract.j
 import { formatEnvelope, Mailbox, msgIdFor, type RunEnd, type RuntimeLike } from "./delivery.js";
 import { joinStatus, laneEmits } from "./fanout.js";
 import { noGroupAdapter, type SwarmGroupAdapter } from "./group.js";
-import { loadHolon, targetMembers, type Holon } from "./holon.js";
+import { loadHolon, RELAY_ROLE, isHumanRole, targetMembers, type Holon } from "./holon.js";
+import { HumanChannels, type HumanChannelsOptions } from "./humans.js";
 import { holonBranch, memberBranch, mergePartition } from "./partition.js";
 import { effectiveContract } from "./rounds.js";
 import {
@@ -46,6 +47,8 @@ export type EngineOptions = {
   channelSender?: ChannelSender;
   /** Optional per-task channel group (ARCH §1.5); defaults to the no-group adapter. */
   group?: SwarmGroupAdapter;
+  /** ARCH §3.3, §8, §10a.3: channel groups for holons with humans (none by default). */
+  humans?: HumanChannels | HumanChannelsOptions;
   /** Called after any event is appended; the wall deadline uses it to arm new tasks. */
   onEvent?: (taskId: string, event: SwarmEvent) => void;
 };
@@ -132,6 +135,9 @@ export class SwarmEngine {
   readonly defaults: ContractDefaults;
   readonly logger?: Logger;
   readonly group: SwarmGroupAdapter;
+  readonly humans: HumanChannels;
+  /** Set by relay.ts: emits from a holon's relay session (ARCH §10a.3). */
+  relayEmitHandler?: (taskId: string, input: EmitInput) => Promise<EmitResult>;
   private readonly channelSender?: ChannelSender;
   private readonly onEvent?: EngineOptions["onEvent"];
   /** Set by the hooks: exit enforcement and run errors when a run ends (ARCH §5, §7). */
@@ -146,6 +152,8 @@ export class SwarmEngine {
     this.channelSender = opts.channelSender;
     this.onEvent = opts.onEvent;
     this.group = opts.group ?? noGroupAdapter;
+    this.humans =
+      opts.humans instanceof HumanChannels ? opts.humans : new HumanChannels(opts.humans);
     this.mailbox = new Mailbox(opts.runtime, {
       lane: opts.lane,
       logger: opts.logger,
@@ -185,10 +193,38 @@ export class SwarmEngine {
 
   /** Called by swarm_emit. Identity (taskId, role) must come from the session key only. */
   async emit(taskId: string, from: string, input: EmitInput): Promise<EmitResult> {
+    if (from === RELAY_ROLE) {
+      // ARCH §10a.3: the relay speaks for a human; relay.ts turns its emit into exactly one
+      // routed event from that human's role (it takes the task lock itself).
+      if (!this.relayEmitHandler) {
+        return { ok: false, error: "no relay is attached to this swarm" };
+      }
+      return this.relayEmitHandler(taskId, input);
+    }
     return this.locks.run(taskId, () => this.emitLocked(taskId, from, input));
   }
 
-  private async emitLocked(taskId: string, from: string, input: EmitInput): Promise<EmitResult> {
+  /** Open tasks from the index (resume, inbound routing). */
+  openTaskIds(): string[] {
+    return Object.entries(readTasksIndex(this.stateDir))
+      .filter(([, entry]) => entry.status === "open")
+      .map(([id]) => id);
+  }
+
+  /**
+   * ARCH §10a.3: an event spoken by a human through the relay. Caller holds the task lock and
+   * has already checked the relay's rules (one event per reply).
+   */
+  async emitAsHuman(taskId: string, role: string, input: EmitInput): Promise<EmitResult> {
+    return this.emitLocked(taskId, role, input, { human: true });
+  }
+
+  private async emitLocked(
+    taskId: string,
+    from: string,
+    input: EmitInput,
+    opts: { human?: boolean } = {},
+  ): Promise<EmitResult> {
     let state: TaskState;
     try {
       state = this.loadState(taskId);
@@ -202,6 +238,13 @@ export class SwarmEngine {
     const isTaskmaster = from === TASKMASTER;
     if (!isTaskmaster && !state.contract.workers[laneRole]) {
       return { ok: false, error: `role "${from}" is not a worker of task ${taskId}` };
+    }
+    if (!opts.human && isHumanRole(state.holon, from)) {
+      // A human's role has no session of its own; only the relay speaks for it (§10a.3).
+      return {
+        ok: false,
+        error: `role "${from}" is a human in task ${taskId}; it speaks only through the relay`,
+      };
     }
     const wrongModel = modelMismatchFor(state.events, from);
     if (wrongModel) {
@@ -336,6 +379,11 @@ export class SwarmEngine {
       salt?: string;
     },
   ) {
+    const holon = state.holon ?? this.holonOrUndefined(taskId);
+    if (holon && isHumanRole(holon, msg.to)) {
+      // ARCH §3.3, §10a.3: a human gets one short plain line in the holon's group.
+      return this.humans.postToHuman(this, taskId, { ...this.loadState(taskId), holon }, msg);
+    }
     const msgId = msgIdFor(taskId, msg.seqs, msg.salt ?? msg.to);
     const brief = state.holon
       ? holonBriefFor(state.holon, [], msg.to)
@@ -354,6 +402,14 @@ export class SwarmEngine {
       extraSystemPrompt: msg.extraSystemPrompt ?? brief,
       urgent: msg.urgent,
     });
+  }
+
+  private holonOrUndefined(taskId: string): Holon | undefined {
+    try {
+      return loadHolon(this.stateDir, taskId, this.defaults);
+    } catch {
+      return undefined;
+    }
   }
 
   /** System notice to the taskmaster (exit enforcement, silence, unrouted, model mismatch). */
@@ -418,6 +474,12 @@ export class SwarmEngine {
     this.record(taskId, { kind: "system", event: "TASK_CLOSED", data: { status } });
     // A group is a convenience; failing to dispose it never affects the task.
     void this.group.dispose(taskId).catch(() => undefined);
+    // ARCH §8.1: a holon's human group is closed when the holon is done. Queued behind the
+    // task lock, so whatever the closing turn still posts (a confirmation, the CANCELLED
+    // line) reaches the group first.
+    void this.humans
+      .track(this.locks.run(taskId, () => this.humans.closeGroup(this, taskId)))
+      .catch(() => undefined);
   }
 
   /**
@@ -425,7 +487,7 @@ export class SwarmEngine {
    * A v1 holon has no lead key: the session keeps the gateway default model, as before (§11).
    */
   async applyLeadModel(taskId: string, holon: Holon): Promise<void> {
-    if (holon.v1 || (!holon.lead.model && !holon.lead.thinking)) {
+    if (holon.v1 || holon.lead.kind === "human" || (!holon.lead.model && !holon.lead.thinking)) {
       return;
     }
     const patch = (this.runtime.subagent as { patchSession?: unknown }).patchSession as
