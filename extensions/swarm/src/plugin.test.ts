@@ -58,9 +58,11 @@ describe("swarm gateway methods", () => {
     const engine = new SwarmEngine({ stateDir, runtime: makeStubRuntime() });
     const handlers = createSwarmMethods(() => engine);
     expect(Object.keys(handlers).toSorted()).toEqual([
+      "swarm.add",
       "swarm.answer",
       "swarm.cancel",
       "swarm.continue",
+      "swarm.lead",
       "swarm.list",
       "swarm.show",
       "swarm.spawn",
@@ -396,9 +398,11 @@ describe("swarm plugin registration", () => {
     expect(tools).toEqual([{ opts: { name: "swarm_emit" } }, { opts: { name: "swarm_holon" } }]);
     expect(hooks).toEqual(["llm_input"]);
     expect(methods.toSorted()).toEqual([
+      "swarm.add",
       "swarm.answer",
       "swarm.cancel",
       "swarm.continue",
+      "swarm.lead",
       "swarm.list",
       "swarm.show",
       "swarm.spawn",

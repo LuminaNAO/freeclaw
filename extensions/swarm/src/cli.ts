@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Command } from "commander";
 import { callGateway, GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "openclaw/plugin-sdk/swarm";
+import { isGatewayUnreachable, READ_METHODS } from "./offline.js";
 
 // `openclaw swarm ...`: a thin client over the swarm.* gateway methods. It never calls
 // runtime.subagent, which only exists inside the gateway process (ARCH §1.2, §9).
@@ -182,6 +183,23 @@ export function formatRounds(shown: Partial<Timeline> & { rounds?: RoundRow[] })
   return lines;
 }
 
+type TreeRow = { path: string[]; state: string; lead: string; ageMs: number; summary?: string };
+
+/** ARCH §9: one line per holon (path, state, lead, age), indented by depth. */
+export function formatTree(rows: TreeRow[] | undefined): string[] {
+  if (!rows || rows.length === 0) {
+    return [];
+  }
+  const lines = ["tree"];
+  for (const r of rows) {
+    const name = `${"  ".repeat(Math.max(0, r.path.length - 1))}${r.path.join("/")}`;
+    lines.push(
+      `  ${name.padEnd(32)} ${r.state.padEnd(9)} ${r.lead.padEnd(24)} ${formatAge(r.ageMs).padStart(6)}${r.summary ? `  ${r.summary}` : ""}`,
+    );
+  }
+  return lines;
+}
+
 function formatAge(ms: number): string {
   const min = Math.floor(ms / 60_000);
   return min < 60 ? `${min}m` : `${Math.floor(min / 60)}h${String(min % 60).padStart(2, "0")}m`;
@@ -194,6 +212,8 @@ export function registerSwarmCli(params: {
   fail?: () => void;
   call?: GatewayCaller;
   cwd?: () => string;
+  /** Reads from the state files when the gateway is unreachable (ARCH §9). */
+  readLocal?: (method: string, params: Record<string, unknown>) => Promise<unknown>;
 }): void {
   const log = params.log ?? ((line: string) => process.stdout.write(`${line}\n`));
   const error = params.error ?? ((line: string) => process.stderr.write(`${line}\n`));
@@ -203,7 +223,19 @@ export function registerSwarmCli(params: {
       process.exitCode = 1;
     });
   const cwd = params.cwd ?? (() => callerCwd());
-  const call = params.call ?? defaultGatewayCaller;
+  const gateway = params.call ?? defaultGatewayCaller;
+  // ARCH §9: reads work with the gateway down; the same handler reads the files in-process.
+  const readLocal = params.readLocal;
+  const call: GatewayCaller = async (method, opts, callParams) => {
+    try {
+      return await gateway(method, opts, callParams);
+    } catch (err) {
+      if (!readLocal || !READ_METHODS.has(method) || !isGatewayUnreachable(err)) {
+        throw err;
+      }
+      return readLocal(method, callParams as Record<string, unknown>);
+    }
+  };
   // Change 4: every action reports a failure as one line and a non-zero exit, never a throw.
   const guarded =
     <A extends unknown[]>(fn: (...args: A) => Promise<void>) =>
@@ -322,18 +354,22 @@ export function registerSwarmCli(params: {
   withClientOptions(
     swarm
       .command("show")
-      .description("Show one task's models and event log")
-      .argument("<taskId>")
-      .option("--limit <n>", "Only the last N events"),
+      .description("Show one holon's lead, models and event log (--tree: its whole tree)")
+      .argument("<taskId>", "Holon: <root>[/<child>...]")
+      .option("--limit <n>", "Only the last N events")
+      .option("--tree", "Also list every holon in its tree (ARCH §9)", false),
   ).action(
-    guarded(async (taskId: string, opts: CliOpts & { limit?: string }) => {
+    guarded(async (taskId: string, opts: CliOpts & { limit?: string; tree?: boolean }) => {
       const shown = (await call("swarm.show", opts, {
         taskId,
         ...(opts.limit && { limit: Number(opts.limit) }),
+        ...(opts.tree && { tree: true }),
       })) as {
         id: string;
         status: string;
         sha: string;
+        lead?: string;
+        tree?: TreeRow[];
         models: Record<string, { contract?: string; applied?: string; observed: string[] }>;
         events: EventRow[];
         rounds?: RoundRow[];
@@ -342,7 +378,12 @@ export function registerSwarmCli(params: {
         log(JSON.stringify(shown, null, 2));
         return;
       }
-      log(`${shown.id}  ${shown.status}  @ ${shown.sha}`);
+      log(
+        `${shown.id}  ${shown.status}  @ ${shown.sha}${shown.lead ? `  lead ${shown.lead}` : ""}`,
+      );
+      for (const line of formatTree(shown.tree)) {
+        log(line);
+      }
       for (const [role, m] of Object.entries(shown.models)) {
         log(
           `  ${role.padEnd(10)} contract=${m.contract ?? "-"} applied=${m.applied ?? "-"} observed=${m.observed.join(",") || "-"}`,
@@ -379,6 +420,58 @@ export function registerSwarmCli(params: {
         opts.json
           ? JSON.stringify(res, null, 2)
           : `${taskId}: ${res.status}${res.changed ? "" : " (unchanged)"}`,
+      );
+    }),
+  );
+
+  // ARCH §6.4, §9: `swarm add <holon> <file>`: queue more work to the holon's lead.
+  withClientOptions(
+    swarm
+      .command("add")
+      .description("Queue more work to a holon's lead; never interrupts (urgent: true steers)")
+      .argument("<holon>", "Holon: <root>[/<child>...]")
+      .argument("<file>", "Work file (plain text; optional front matter `urgent: true`)")
+      .option("--urgent", "Steer: stop the lead's current turn and give it this first", false),
+  ).action(
+    guarded(async (holon: string, file: string, opts: CliOpts & { urgent?: boolean }) => {
+      const res = (await call("swarm.add", opts, {
+        holon,
+        file: resolveContractPath(file, cwd()),
+        ...(opts.urgent && { urgent: true }),
+      })) as { holon: string; seq: number; urgent: boolean; delivery: string };
+      log(
+        opts.json
+          ? JSON.stringify(res, null, 2)
+          : `${res.holon}: WORK_ADDED seq ${res.seq} to the lead (${res.urgent ? "urgent, steered" : res.delivery})`,
+      );
+    }),
+  );
+
+  // ARCH §3.4, §9: `swarm lead <holon> <spec>`: the root owner overrides a holon's lead.
+  withClientOptions(
+    swarm
+      .command("lead")
+      .description("Change a holon's lead (root owner only)")
+      .argument("<holon>", "Holon: <root>[/<child>...]")
+      .argument(
+        "<spec>",
+        "agent[:<provider/model>[:<thinking>]] | human:<channel>:<who>[,<who>] | YAML mapping",
+      ),
+  ).action(
+    guarded(async (holon: string, spec: string, opts: CliOpts) => {
+      const res = (await call("swarm.lead", opts, { holon, spec })) as {
+        holon: string;
+        seq: number;
+        lead: { kind: string; model?: string; thinking?: string; channel?: string };
+      };
+      if (opts.json) {
+        log(JSON.stringify(res, null, 2));
+        return;
+      }
+      const l = res.lead;
+      const who = l.kind === "human" ? `human@${l.channel ?? "-"}` : (l.model ?? "default");
+      log(
+        `${res.holon}: lead is now ${who}${l.thinking ? ` (${l.thinking})` : ""} (seq ${res.seq})`,
       );
     }),
   );

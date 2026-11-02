@@ -348,6 +348,8 @@ export class SwarmEngine {
       seqs: number[];
       extraSystemPrompt?: string;
       urgent?: boolean;
+      /** ARCH §6.4: interrupt the current turn, keep everything queued (see Mailbox). */
+      steer?: boolean;
       salt?: string;
     },
   ) {
@@ -368,6 +370,7 @@ export class SwarmEngine {
       ),
       extraSystemPrompt: msg.extraSystemPrompt ?? brief,
       urgent: msg.urgent,
+      steer: msg.steer,
     });
   }
 

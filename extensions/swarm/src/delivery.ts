@@ -57,6 +57,12 @@ export type DeliveryRequest = {
   idempotencyKey: string;
   extraSystemPrompt?: string;
   urgent?: boolean;
+  /**
+   * ARCH §6.4 steer (`urgent: true` work): stop the session's current turn and deliver this
+   * message, together with anything already queued for the session, as its next turn. Unlike
+   * `urgent` (terminal stop), nothing queued is dropped.
+   */
+  steer?: boolean;
   /** Merged delivery: the queued entries it carries. */
   supersedes?: string[];
 };
@@ -145,6 +151,9 @@ export class Mailbox {
       this.pending.delete(req.targetSessionKey);
       return this.send(req);
     }
+    if (req.steer) {
+      return this.steer(req);
+    }
     if (this.active.has(req.targetSessionKey)) {
       const queue = this.pending.get(req.targetSessionKey) ?? [];
       queue.push(req);
@@ -152,6 +161,25 @@ export class Mailbox {
       return { status: "queued" };
     }
     return this.send(req);
+  }
+
+  /**
+   * ARCH §6.4: interrupt the current turn, then send this message first and everything that
+   * had queued behind the turn after it, as one merged message. Nothing is lost.
+   */
+  private async steer(req: DeliveryRequest): Promise<DeliveryResult> {
+    const key = req.targetSessionKey;
+    if (this.active.has(key)) {
+      await this.runtime.subagent.abortSession?.({ sessionKey: key });
+      this.active.delete(key);
+    }
+    const queued = this.pending.get(key) ?? [];
+    this.pending.delete(key);
+    if (queued.length === 0) {
+      return this.send(req);
+    }
+    this.pending.set(key, [req, ...queued]);
+    return (await this.flush(key)) ?? { status: "queued" };
   }
 
   /**

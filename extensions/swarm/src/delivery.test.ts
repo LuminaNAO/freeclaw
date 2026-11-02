@@ -158,6 +158,33 @@ describe("swarm mailbox", () => {
     expect(runtime.runs).toHaveLength(2);
   });
 
+  it("steer (ARCH §6.4 urgent work) stops the turn, sends it first, and keeps the queue", async () => {
+    const stateDir = freshState();
+    const runtime = makeStubRuntime();
+    const mailbox = new Mailbox(runtime);
+    await mailbox.deliver(request(stateDir, 1));
+    expect(await mailbox.deliver(request(stateDir, 2))).toEqual({ status: "queued" });
+    const res = await mailbox.deliver({ ...request(stateDir, 3), steer: true });
+    expect(res.status).toBe("delivered");
+    expect(runtime.aborts).toEqual(["agent:main:swarm:task-1:audit"]);
+    expect(runtime.runs).toHaveLength(2);
+    const merged = runtime.runs.at(-1)!.message;
+    expect(merged.indexOf("b3")).toBeGreaterThan(-1);
+    expect(merged.indexOf("b2")).toBeGreaterThan(merged.indexOf("b3"));
+    expect(mailbox.hasPending("agent:main:swarm:task-1:audit")).toBe(false);
+    expect(readOutbox(stateDir, "task-1").every((o) => o.acked)).toBe(true);
+  });
+
+  it("steer to an idle session is a plain send", async () => {
+    const stateDir = freshState();
+    const runtime = makeStubRuntime();
+    const mailbox = new Mailbox(runtime);
+    expect((await mailbox.deliver({ ...request(stateDir, 1), steer: true })).status).toBe(
+      "delivered",
+    );
+    expect(runtime.aborts).toEqual([]);
+  });
+
   it("releases the session only when the gateway reports the whole run settled", async () => {
     const stateDir = freshState();
     const runtime = makeStubRuntime();

@@ -4,10 +4,14 @@ import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/swarm";
 import { spawnChild } from "./children.js";
 import { continueTask } from "./continue.js";
 import type { SwarmEngine } from "./engine.js";
-import { answerTask, cancelTask, listTasks, showTask, startTask } from "./tasks.js";
+import { OPERATOR_CALLER, runOp, SWARM_OPS } from "./ops.js";
+import { answerTask, cancelTask, listTasks, startTask } from "./tasks.js";
 
 // Gateway methods swarm.start / list / show / cancel / answer (ARCH §5, §9),
-// swarm.continue (ARCH §12) and swarm.spawn (ARCH §5, §10a.1).
+// swarm.continue (ARCH §12) and swarm.spawn (ARCH §5, §10a.1). The steps 3-5 ops
+// (ARCH §10a: add, lead, show --tree, …) are one gateway method per SWARM_OPS row,
+// dispatched through runOp: the same function the lead tool calls. A gateway client is
+// the operator (the root owner, §3.4).
 
 type Handler = (opts: GatewayRequestHandlerOptions) => Promise<void>;
 
@@ -85,14 +89,6 @@ export function createSwarmMethods(
       return continueTask(engine, taskId, { followUpYaml, followUpPath });
     }),
     "swarm.list": guarded((engine) => ({ tasks: listTasks(engine.stateDir) })),
-    "swarm.show": guarded((engine, params) => {
-      const taskId = str(params, "taskId");
-      if (!taskId) {
-        throw new Error("swarm.show needs `taskId`");
-      }
-      const limit = typeof params.limit === "number" ? params.limit : undefined;
-      return showTask(engine, taskId, limit);
-    }),
     "swarm.cancel": guarded((engine, params) => {
       const taskId = str(params, "taskId");
       if (!taskId) {
@@ -125,5 +121,12 @@ export function createSwarmMethods(
       }
       return answerTask(engine, taskId, message);
     }),
+    // ARCH §10a: every op in the table, through the shared dispatch.
+    ...Object.fromEntries(
+      Object.entries(SWARM_OPS).map(([name, op]) => [
+        op.method,
+        guarded((engine, params) => runOp(name, engine, params, OPERATOR_CALLER)),
+      ]),
+    ),
   };
 }
