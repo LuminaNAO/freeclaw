@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
+import { spawnChild } from "./children.js";
 import { formatTree, registerSwarmCli } from "./cli.js";
 import { SwarmEngine } from "./engine.js";
 import { createSwarmHooks } from "./hooks.js";
@@ -430,26 +431,195 @@ describe("swarm_holon tool", () => {
   });
 });
 
+// ARCH §5 × §6.4, §9: the ops reach child holons through their §5 child folders.
+describe("ops over child holons (ARCH §5, §6.4, §8.2, §9)", () => {
+  const CHILD = (id: string) => `id: ${id}
+goal: one scope of the root
+done_when: the scope's tests pass
+lanes:
+  build: { count: 1, model: provider-a/model-a, thinking: "off" }
+`;
+
+  async function tree() {
+    const ctx = setup();
+    await startTask(ctx.engine, { contractYaml: HOLON("task-760") });
+    await ctx.runtime.endAll();
+    const lead = createSwarmHolonTool({
+      engine: ctx.engine,
+      callerSessionKey: key("task-760", "taskmaster"),
+    });
+    const spawned = (await lead.execute("c", { op: "spawn", holon: CHILD("lane-a") })).details;
+    expect(spawned).toMatchObject({ ok: true, result: { taskId: "task-760/lane-a" } });
+    await spawnChild(ctx.engine, ["task-760", "lane-a"], CHILD("leaf-a"));
+    await ctx.runtime.endAll();
+    return { ...ctx, lead };
+  }
+  const childLead = "agent:main:swarm:task-760:lane-a:taskmaster";
+
+  it("swarm add reaches a child's lead; a lead adds to its own child, not to itself or a grandchild", async () => {
+    const { runtime, engine, lead } = await tree();
+    const handlers = createSwarmMethods(() => engine);
+    const op = await callMethod(handlers, "swarm.add", { holon: "task-760/lane-a", text: "more" });
+    expect(op).toMatchObject({ ok: true, payload: { holon: "task-760/lane-a" } });
+    await runtime.endAll();
+    expect(runtime.runs.filter((r) => r.sessionKey === childLead).at(-1)?.message).toMatch(
+      /EVENT WORK_ADDED[\s\S]*more/,
+    );
+    const viaTool = (await lead.execute("c", { op: "add", holon: "task-760/lane-a", text: "x" }))
+      .details;
+    expect(viaTool).toMatchObject({ ok: true, result: { holon: "task-760/lane-a" } });
+    // The child's lead adds to its own child (two levels below the root).
+    const mid = createSwarmHolonTool({ engine, callerSessionKey: childLead });
+    expect(
+      (await mid.execute("c", { op: "add", holon: "task-760/lane-a/leaf-a", text: "y" })).details,
+    ).toMatchObject({ ok: true, result: { holon: "task-760/lane-a/leaf-a" } });
+    // The root lead may not skip a level.
+    const skip = (
+      await lead.execute("c", { op: "add", holon: "task-760/lane-a/leaf-a", text: "z" })
+    ).details as { ok: boolean; error: string };
+    expect(skip.ok).toBe(false);
+    expect(skip.error).toMatch(/only to its own child holons/);
+    expect(
+      readEvents(engine.stateDir, "task-760/lane-a").filter((e) => e.event === "WORK_ADDED"),
+    ).toHaveLength(2);
+  });
+
+  it("swarm lead changes a child's lead: root owner only, model applied to the child's lead session", async () => {
+    const { runtime, engine, lead } = await tree();
+    const handlers = createSwarmMethods(() => engine);
+    const res = await callMethod(handlers, "swarm.lead", {
+      holon: "task-760/lane-a",
+      spec: "agent:provider-c/model-c:low",
+    });
+    expect(res).toMatchObject({ ok: true, payload: { holon: "task-760/lane-a" } });
+    expect(runtime.patches.at(-1)).toMatchObject({
+      sessionKey: childLead,
+      model: "provider-c/model-c",
+      thinkingLevel: "low",
+    });
+    expect(showHolon(engine, ["task-760", "lane-a"]).lead).toBe("provider-c/model-c (low)");
+    // The root's upstream session is the root owner for every holon in the tree.
+    const owner = await overrideLead(engine, ["task-760", "lane-a"], "agent", {
+      caller: { kind: "session", sessionKey: UPSTREAM },
+    });
+    expect(owner.holon).toBe("task-760/lane-a");
+    // A lead is not the root owner.
+    const refused = (
+      await lead.execute("c", { op: "lead", holon: "task-760/lane-a", spec: "agent" })
+    ).details as { ok: boolean; error: string };
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toMatch(/only the root owner/);
+  });
+
+  it("swarm show <root> --tree walks the tree; a child is shown by its path", async () => {
+    const { engine, lead, stateDir } = await tree();
+    await spawnChild(engine, "task-760", CHILD("lane-b"));
+    const shown = showHolon(engine, ["task-760"], { tree: true });
+    expect(shown.tree?.map((r) => r.path.join("/"))).toEqual([
+      "task-760",
+      "task-760/lane-a",
+      "task-760/lane-a/leaf-a",
+      "task-760/lane-b",
+    ]);
+    // A child without a lead inherits its parent lead's model (§3.4).
+    expect(shown.tree?.[1]).toMatchObject({
+      state: "running",
+      lead: "provider-lead/model-lead (high)",
+    });
+    const sub = showHolon(engine, ["task-760", "lane-a"], { tree: true });
+    expect(sub.id).toBe("task-760/lane-a");
+    expect(sub.tree?.map((r) => r.path.join("/"))).toEqual([
+      "task-760/lane-a",
+      "task-760/lane-a/leaf-a",
+    ]);
+    // The lead reads its child (§8.2); the child's lead reads its parent.
+    expect(
+      (await lead.execute("c", { op: "showTree", holon: "task-760/lane-a" })).details,
+    ).toMatchObject({ ok: true, result: { id: "task-760/lane-a" } });
+    const mid = createSwarmHolonTool({ engine, callerSessionKey: childLead });
+    expect((await mid.execute("c", { op: "showTree", holon: "task-760" })).details).toMatchObject({
+      ok: true,
+    });
+    // Reads work with the gateway down, child paths included.
+    const offline = (await readOffline(stateDir, "swarm.show", {
+      taskId: "task-760",
+      tree: true,
+    })) as { tree: unknown[] };
+    expect(offline.tree).toHaveLength(4);
+    const lines = formatTree(shown.tree);
+    expect(lines.some((l) => /leaf-a/.test(l))).toBe(true);
+  });
+
+  it("a lead spawns only under its own holon; the operator names any parent", async () => {
+    const { engine, lead } = await tree();
+    const other = (
+      await lead.execute("c", {
+        op: "spawn",
+        parent: "task-999",
+        holon: CHILD("lane-z"),
+      })
+    ).details as { ok: boolean; error: string };
+    expect(other.ok).toBe(false);
+    expect(other.error).toMatch(/only under its own holon/);
+    const handlers = createSwarmMethods(() => engine);
+    expect(
+      await callMethod(handlers, "swarm.spawn", {
+        parent: "task-760/lane-a",
+        holon: CHILD("leaf-b"),
+      }),
+    ).toMatchObject({ ok: true, payload: { taskId: "task-760/lane-a/leaf-b" } });
+  });
+});
+
 // ARCH §10a parity gate: table-driven over SWARM_OPS, so every op another partition adds is
 // checked the moment it gets a row. The required rows are this build's ops.
 describe("parity gate (ARCH §10a)", () => {
-  const REQUIRED = ["add", "lead", "showTree"];
+  // Every new op of steps 3-5 (§10a.4): add, lead, show --tree, spawn, relay-emit, group
+  // open/close.
+  const REQUIRED = ["add", "lead", "showTree", "spawn", "relay", "group"];
   /** Minimal params per op that reach the op function (it may then refuse; that is fine). */
   const SAMPLE: Record<string, Record<string, unknown>> = {
     add: { holon: "task-740", text: "x" },
     lead: { holon: "task-740", spec: "agent" },
     showTree: { holon: "task-740", tree: true },
+    spawn: { parent: "task-740", holon: "id: child-a" },
+    relay: { taskId: "task-740", who: "human-1", message: "yes" },
+    group: { taskId: "task-740", action: "open" },
   };
   /** CLI argv per verb (positional args), so the verb can be run with --json. */
   const ARGV: Record<string, string[]> = {
     add: ["task-740", "work.md"],
     lead: ["task-740", "agent"],
     show: ["task-740"],
+    spawn: ["task-740", "--file", "child.yaml"],
+    relay: ["task-740", "yes", "--who", "human-1"],
+    group: ["open", "task-740"],
+  };
+  /** The method params each verb sends (the CLI is a thin client over the table op). */
+  const CLI_PARAMS: Record<string, Record<string, unknown>> = {
+    spawn: { parent: "task-740", file: path.join(tmp, "child.yaml") },
+    relay: { taskId: "task-740", who: "human-1", message: "yes" },
+    group: { taskId: "task-740", action: "open" },
   };
 
   it("has every op of this build", () => {
     for (const name of REQUIRED) {
       expect(SWARM_OPS[name], name).toBeDefined();
+    }
+    // Lead tool: the holarchy ops; a human's reply and the group are the operator's/channel's.
+    expect(leadToolOps()).toEqual(["add", "lead", "showTree", "spawn"]);
+  });
+
+  it("every op's method is served from the table, never a bespoke handler", async () => {
+    const { engine } = setup();
+    const handlers = createSwarmMethods(() => engine);
+    for (const [name, op] of Object.entries(SWARM_OPS)) {
+      const spy = vi.spyOn(op, "run").mockResolvedValue({ via: name });
+      expect(await callMethod(handlers, op.method, SAMPLE[name] ?? {}), name).toMatchObject({
+        ok: true,
+        payload: { via: name },
+      });
+      expect(spy, name).toHaveBeenCalledTimes(1);
     }
   });
 
@@ -467,6 +637,9 @@ describe("parity gate (ARCH §10a)", () => {
       const out = await runCli([op.cliVerb, ...argv, "--json"], { ok: true });
       expect(out.errors).toEqual([]);
       expect(out.call.mock.calls[0]?.[0]).toBe(op.method);
+      if (CLI_PARAMS[name]) {
+        expect(out.call.mock.calls[0]?.[2]).toEqual(CLI_PARAMS[name]);
+      }
       expect(JSON.parse(out.lines.join("\n"))).toEqual({ ok: true });
     },
   );
