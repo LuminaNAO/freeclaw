@@ -5,7 +5,6 @@ import type { ContractDefaults, UpstreamChannel } from "./src/contract.js";
 import { SWARM_EMIT_TOOL, createSwarmEmitToolFactory } from "./src/emit.js";
 import { SwarmEngine } from "./src/engine.js";
 import { resolveGroupAdapter } from "./src/group.js";
-import { createSwarmHolonToolFactory, SWARM_HOLON_TOOL } from "./src/holon-tool.js";
 import { createSwarmHooks } from "./src/hooks.js";
 import { createSwarmHolonToolFactory, SWARM_HOLON_TOOL } from "./src/lead-tool.js";
 import { createSwarmMethods } from "./src/methods.js";

@@ -16,7 +16,7 @@ import { registerSwarmCli } from "./cli.js";
 import { SwarmContractError, taskDirFor } from "./contract.js";
 import { createSwarmEmitTool } from "./emit.js";
 import { SwarmEngine } from "./engine.js";
-import { createSwarmHolonTool, createSwarmHolonToolFactory } from "./holon-tool.js";
+import { createSwarmHolonTool, createSwarmHolonToolFactory } from "./lead-tool.js";
 import { createSwarmMethods } from "./methods.js";
 import { resumeOpenTasks } from "./resume.js";
 import { parseSwarmSessionKey, sessionKeyFor } from "./sessions.js";
