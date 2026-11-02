@@ -46,6 +46,9 @@ export function joinStatus(
   passEvent: string,
   failEvent: string,
 ): JoinOutcome {
+  // §4.6.3: a member counts once per round (its latest verdict), so "every member reported"
+  // means every member, never one member twice.
+  emits = latestPerMember(emits);
   const passes = emits.filter((e) => e.event === passEvent);
   const fails = emits.filter((e) => e.event === failEvent);
   switch (lane.join.kind) {
@@ -102,6 +105,15 @@ export function joinStatus(
       return { settled: true, outcome: "pass", event: passes[0]! };
     }
   }
+}
+
+/** Each member's latest verdict, in log order. */
+export function latestPerMember(emits: SwarmEvent[]): SwarmEvent[] {
+  const latest = new Map<string, SwarmEvent>();
+  for (const e of emits.toSorted((a, b) => a.seq - b.seq)) {
+    latest.set(e.from ?? "", e);
+  }
+  return [...latest.values()].toSorted((a, b) => a.seq - b.seq);
 }
 
 const BULLET_RE = /^\s*(?:[-*+]|\d+[.)])\s+/;
