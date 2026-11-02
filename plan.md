@@ -12,7 +12,7 @@ House standard (§10a preamble): every new capability is an **engine/ops functio
 `swarm` CLI (`--json`), the lead tool and the relay call the same function. No person, number,
 group id, host or org path in code.
 
-Repo rules: `pnpm install --frozen-lockfile` first; PATH=/home/claude/.nvm/versions/node/v24.14.1/bin:$PATH;
+Repo rules: `pnpm install --frozen-lockfile` first; use the repo's pinned node (nvm v24.14.1) on PATH;
 never CI=true; never touch ports 40700-40799; no live gateways, no signal-cli, no real groups, no pushes.
 Commits: small, each naming its ARCH section; author `Lumina Nao <luminanao@duck.com>`, no trailers,
 no internal names/hosts/IPs/group ids/home paths. Tests: vitest, run the swarm suite
