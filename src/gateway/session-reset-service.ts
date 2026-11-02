@@ -316,6 +316,7 @@ export async function performGatewaySessionReset(params: {
       sendPolicy: currentEntry?.sendPolicy,
       ...pickQuietSessionSettings(currentEntry),
       label: currentEntry?.label,
+      displayName: currentEntry?.displayName,
       origin: snapshotSessionOrigin(currentEntry),
       lastChannel: currentEntry?.lastChannel,
       lastTo: currentEntry?.lastTo,
