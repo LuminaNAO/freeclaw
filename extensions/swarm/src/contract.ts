@@ -283,11 +283,40 @@ export function serializeContract(contract: Contract): string {
   return YAML.stringify(contract);
 }
 
-export function taskDirFor(stateDir: string, taskId: string): string {
-  if (!TASK_ID_RE.test(taskId)) {
-    throw new SwarmContractError(`invalid task id "${taskId}"`);
+/**
+ * ARCH §2, §5: a holon key is its path from the root, `<root>/<child>/<grandchild>`; a root
+ * holon's key is its id (every v1 task id is a root key). Each segment is a holon id.
+ */
+export const HOLON_KEY_SEPARATOR = "/";
+/** Folder under a holon that holds its child holons, one sub-folder per child id (ARCH §2). */
+export const CHILDREN_DIR = "children";
+
+/** The path segments of a holon key; throws on an invalid key. */
+export function holonKeySegments(key: string): string[] {
+  const segments = key.split(HOLON_KEY_SEPARATOR);
+  if (segments.length === 0 || segments.some((s) => !TASK_ID_RE.test(s))) {
+    throw new SwarmContractError(`invalid task id "${key}"`);
   }
-  return path.join(stateDir, "swarm", taskId);
+  return segments;
+}
+
+export function isHolonKey(key: string): boolean {
+  return key.split(HOLON_KEY_SEPARATOR).every((s) => TASK_ID_RE.test(s));
+}
+
+/** `root/c1/c2` → `root/c1`; a root has no parent. */
+export function parentKeyOf(key: string): string | undefined {
+  const at = key.lastIndexOf(HOLON_KEY_SEPARATOR);
+  return at > 0 ? key.slice(0, at) : undefined;
+}
+
+/**
+ * The folder of a holon: `<stateDir>/swarm/<root>` for a root, and
+ * `.../children/<child-id>` per level below it (ARCH §2, §5).
+ */
+export function taskDirFor(stateDir: string, taskId: string): string {
+  const [root, ...below] = holonKeySegments(taskId);
+  return path.join(stateDir, "swarm", root!, ...below.flatMap((id) => [CHILDREN_DIR, id]));
 }
 
 export function loadContract(

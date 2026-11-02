@@ -1,15 +1,16 @@
-import { TASK_ID_RE } from "./contract.js";
+import { HOLON_KEY_SEPARATOR, TASK_ID_RE } from "./contract.js";
 import { TASKMASTER } from "./routing.js";
 
-// Session keys (ARCH §1.2): agent:<agentId>:swarm:<task-id>:<role>.
-// A fan-out lane member is its own session (ARCH §2): <role>:<n>, n from 1 to the lane count.
+// Session keys (ARCH §1.2, §2): agent:<agentId>:swarm:<root>[:<path>]:<role>[:<n>].
+// A fan-out lane member is its own session: <role>:<n>, n from 1 to the lane count. A child
+// holon's key `root/c1/c2` (ARCH §5) becomes `root:c1:c2` in the session key.
 
 export const DEFAULT_AGENT_ID = "main";
 const SWARM_MARKER = ":swarm:";
-const MEMBER_RE = /^[a-z][a-z0-9_-]{0,31}(?::[1-9][0-9]*)?$/;
+const ROLE_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 
 export function sessionKeyFor(taskId: string, role: string, agentId = DEFAULT_AGENT_ID): string {
-  return `agent:${agentId}:swarm:${taskId}:${role}`;
+  return `agent:${agentId}:swarm:${taskId.split(HOLON_KEY_SEPARATOR).join(":")}:${role}`;
 }
 
 export type SwarmSessionRef = { agentId: string; taskId: string; role: string };
@@ -21,8 +22,9 @@ export function isSwarmSessionKey(sessionKey: string | undefined): boolean {
 
 /**
  * Split a session key. `role` keeps its member suffix (`audit:2`); callers that need the lane
- * role use `laneRoleOf`. A task id never contains a colon, so the key is exactly
- * agent:<agentId>:swarm:<taskId>:<role>.
+ * role use `laneRoleOf`. `taskId` is the holon key (`root` or `root/c1/c2`). Unambiguous:
+ * the role is always last (with an optional numeric member suffix), and a role starts with a
+ * letter while every holon segment is a holon id.
  */
 export function parseSwarmSessionKey(sessionKey: string | undefined): SwarmSessionRef | null {
   if (!isSwarmSessionKey(sessionKey)) {
@@ -33,12 +35,21 @@ export function parseSwarmSessionKey(sessionKey: string | undefined): SwarmSessi
   if (parts.length < 5 || parts[0] !== "agent" || parts[2] !== "swarm") {
     return null;
   }
-  const [agentId, , , taskId] = parts;
-  const role = parts.slice(4).join(":");
-  if (!agentId || !taskId || !role || !TASK_ID_RE.test(taskId) || !MEMBER_RE.test(role)) {
+  const agentId = parts[1];
+  const rest = parts.slice(3);
+  const member = /^[1-9][0-9]*$/.test(rest.at(-1) ?? "") ? 2 : 1;
+  const roleParts = rest.slice(-member);
+  const holon = rest.slice(0, -member);
+  const role = roleParts.join(":");
+  if (
+    !agentId ||
+    holon.length === 0 ||
+    !ROLE_RE.test(roleParts[0] ?? "") ||
+    holon.some((s) => !TASK_ID_RE.test(s))
+  ) {
     return null;
   }
-  return { agentId, taskId, role };
+  return { agentId, taskId: holon.join(HOLON_KEY_SEPARATOR), role };
 }
 
 export function isTaskmasterRole(role: string): boolean {
