@@ -225,6 +225,15 @@ async function resumeTask(engine: SwarmEngine, taskId: string, summary: ResumeSu
     });
     summary.redelivered += 1;
   }
+
+  // ARCH §4.7.1 on resume: a fanned-out lane left unsettled is re-checked once everything
+  // above is in flight; a lane with nobody running and no queued input stalls (or, when
+  // every member already has a verdict, settles, §4.6.3).
+  for (const lane of after.holon.lanes) {
+    if (lane.count > 1) {
+      await engine.recheckLane(taskId, lane.role);
+    }
+  }
 }
 
 /**

@@ -68,6 +68,7 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
       // Emitted = the role logged an emit after the delivery that started this run.
       const since = deliverySeqFor(state.events, end.runId) ?? 0;
       if (state.events.some((e) => e.kind === "emit" && e.from === ref.role && e.seq > since)) {
+        await recheckMemberLane(engine, ref);
         return;
       }
       if (ref.role === TASKMASTER) {
@@ -93,7 +94,17 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
         event: "WORKER_EXIT_WITHOUT_EMIT",
         body,
       });
+      await recheckMemberLane(engine, ref);
     });
+  }
+
+  /** ARCH §4.7.1: a fanned-out member's turn ended; nobody may be left waiting on nothing. */
+  async function recheckMemberLane(engine: SwarmEngine, ref: { taskId: string; role: string }) {
+    const lane = laneRoleOf(ref.role);
+    if (ref.role === TASKMASTER || lane === ref.role) {
+      return; // the lead, or a single-member lane: no join to wait on
+    }
+    await engine.recheckLane(ref.taskId, lane, { ending: ref.role });
   }
 
   /** If the taskmaster itself ends silently while an escalation is pending, escalate for it. */
