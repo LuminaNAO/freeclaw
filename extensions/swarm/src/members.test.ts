@@ -583,6 +583,25 @@ describe("signal group API (ARCH §10a.3), driven by a stub rpc: never a daemon"
     expect(calls[2]?.[1]).toMatchObject({ groupId: "gid-placeholder", name: "r · h [done]" });
   });
 
+  it("strips uuid: and signal: prefixes from member ids before updateGroup", async () => {
+    const calls: Array<[string, Record<string, unknown>]> = [];
+    const channel = createSignalHolonChannel({
+      rpc: async (method, params) => {
+        calls.push([method, params]);
+        return { groupId: "gid-placeholder" };
+      },
+    });
+    await channel.createGroup({
+      name: "n",
+      members: ["uuid:00000000-0000-4000-8000-000000000001", "signal:+10000000000", "+10000000001"],
+    });
+    expect(calls[0]?.[1].members).toEqual([
+      "00000000-0000-4000-8000-000000000001",
+      "+10000000000",
+      "+10000000001",
+    ]);
+  });
+
   it("a create without a group id is an error (the holon then escalates no channel)", async () => {
     const channel = createSignalHolonChannel({ rpc: async () => ({}) });
     await expect(channel.createGroup({ name: "n", members: [] })).rejects.toThrow(/no group id/);

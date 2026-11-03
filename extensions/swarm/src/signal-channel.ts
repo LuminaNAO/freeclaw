@@ -7,6 +7,14 @@ import type { HolonChannel } from "./members.js";
 
 export type SignalRpcCall = (method: string, params: Record<string, unknown>) => Promise<unknown>;
 
+/**
+ * signal-cli wants a bare uuid or a +E.164 number. Holon files may carry the channel prefixes freeclaw
+ * uses elsewhere (`uuid:…`, `signal:…`); strip them so a member id works the same in both places.
+ */
+export function signalRecipient(who: string): string {
+  return who.trim().replace(/^signal:/i, "").replace(/^uuid:/i, "");
+}
+
 export function createSignalHolonChannel(opts: {
   /** Resolves the account's endpoint and calls it; throws on any failure. */
   rpc: SignalRpcCall;
@@ -17,7 +25,11 @@ export function createSignalHolonChannel(opts: {
   return {
     kind: "signal",
     async createGroup({ name, members }) {
-      const result = (await opts.rpc("updateGroup", { ...base(), name, members })) as
+      const result = (await opts.rpc("updateGroup", {
+        ...base(),
+        name,
+        members: members.map(signalRecipient),
+      })) as
         | { groupId?: unknown }
         | undefined;
       const groupId = typeof result?.groupId === "string" ? result.groupId : "";
