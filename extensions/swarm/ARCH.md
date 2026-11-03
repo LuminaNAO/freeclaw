@@ -51,7 +51,7 @@ upstream: { sessionKey: <optional>, channel: <optional> }   # root only; childre
   `agent:<a>:swarm:<root>:<path>:<role>[:<n>]`; its `model`/`thinking` are applied to the session, never just
   mentioned.
 
-## 3. Leads (any model, or a human)
+## 3. Leads (any model, or a member over a channel, §10b)
 1. The lead owns the holon: plans its lanes/children within the canon, drives them, judges results, reports up.
    The v1 "taskmaster" is exactly an agent lead.
 2. **Agent lead:** any configured model, set per holon (`lead.model`, `lead.thinking`). No more dependence on the
@@ -187,6 +187,30 @@ file or the parent's canon.
    children finish and the root integrates; `add` mid-turn queues; resume after two gateway kills finishes every
    holon; parity gate: every new op has a CLI verb with `--json` and the lead/relay tool calls the same function;
    all existing swarm tests green. §12.2, §12.3 and §12.6 are the acceptance items for this build.
+
+## 10b. Members over a channel (operator, 2026-11-03)
+Pulling in a human or any other networked adaptive organism (another agent on its own gateway) is part of the
+swarm itself, not a separate mode. The swarm does not care what is on the other end of a channel: a person and
+another agent are the same thing to it, a **member reached over a channel**. Step 5 called this "human"; that word
+is retired.
+1. **One kind.** `lead: { kind: member, who: [<channel id>...], channel: <channel> }` and
+   `participants: [{ kind: member, who, channel, role }]`. Everything §3.3, §8 and §10a.3 say about a human applies
+   unchanged to a member: one channel group per holon with members, one short plain outbound line, one relay
+   session that turns each reply into exactly one routed event, `BLOCKED: no channel` when no channel exists.
+2. **Rename, no behaviour change.** Types, functions, files, event names, CLI/README wording, plugin config and
+   briefs say member, not human: e.g. `MemberLead`, `MemberParticipant`, `MemberChannels`, `membersOf`,
+   `members.ts`, `MEMBER_POSTED`, `MEMBER_POST_FAILED`, `MEMBER_REPLY`, `MEMBER_IGNORED`, `MEMBER_LINE_MAX`,
+   plugin config `members.channels` / `members.owners`, `swarm lead` spec `member:<channel>:<who>[,<who>]`.
+   Briefs and the relay brief speak of "the member", never assume a person.
+3. **Compatibility (§11).** Old input keeps working: `kind: human` in a holon file, `human:<channel>:<who>` lead
+   specs and plugin config `humans.*` are accepted as aliases of the member forms. Event logs already written
+   with `HUMAN_*` names are read as their `MEMBER_*` equivalents on resume, show and relay; new logs write
+   `MEMBER_*` only. No migration of files on disk.
+4. **Tests.** Every existing human test passes under the new names. Added: a holon file with `kind: human` loads as
+   a member and runs the same; a resume over an event log containing `HUMAN_POSTED`/`HUMAN_REPLY` behaves exactly
+   as before; an agent member (a fake channel whose replies come from a scripted agent, not a person) leads a
+   holon through plan approval to DONE; grep gate: no `human` left in `extensions/swarm` except the alias
+   handling, its tests, and this section.
 
 ## 11. Compatibility
 Every v1 contract, `continue` round and resume behaviour keeps working unchanged. v1 tests stay green. A v1
