@@ -66,10 +66,10 @@ describe("holon file (ARCH §2)", () => {
     expect(holon.lead).toEqual({ kind: "agent" });
   });
 
-  it("a human lead parses as a later build step, refused for now (§3.3)", () => {
+  it("a member lead without who is refused (§3.3, §10b)", () => {
     expect(() =>
       parseHolon(
-        V2.replace("kind: agent, model: provider-lead/model-lead", "kind: human, channel: chat"),
+        V2.replace("kind: agent, model: provider-lead/model-lead", "kind: member, channel: chat"),
       ),
     ).toThrow(SwarmContractError);
   });

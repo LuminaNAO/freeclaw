@@ -230,8 +230,8 @@ describe("swarm CLI", () => {
   });
 
   it("start prints and returns the taskId (change 3)", async () => {
-    const human = await run(["start", "--file", "c.yaml"], STARTED, { cwd: tmp });
-    expect(human.lines[0]).toBe("started task-1 @ init");
+    const plain = await run(["start", "--file", "c.yaml"], STARTED, { cwd: tmp });
+    expect(plain.lines[0]).toBe("started task-1 @ init");
     const json = await run(["start", "--file", "c.yaml", "--json"], STARTED, { cwd: tmp });
     expect(JSON.parse(json.lines.join("\n"))).toMatchObject({ taskId: "task-1" });
   });

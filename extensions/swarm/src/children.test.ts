@@ -380,7 +380,7 @@ describe("escalation climbs one level at a time (ARCH §5.4)", () => {
     expect(ctx.runtime.runs.filter((r) => r.sessionKey === UPSTREAM)).toHaveLength(0);
 
     // The root escalates to upstream.
-    await emitAs(ctx, ROOT, "taskmaster", "BLOCKED", "a human must restore the fixture");
+    await emitAs(ctx, ROOT, "taskmaster", "BLOCKED", "someone must restore the fixture");
     expect(ctx.runtime.runs.filter((r) => r.sessionKey === UPSTREAM)).toHaveLength(1);
   });
 

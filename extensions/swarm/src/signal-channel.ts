@@ -1,4 +1,4 @@
-import type { HolonChannel } from "./humans.js";
+import type { HolonChannel } from "./members.js";
 
 // Signal group API for holon groups (ARCH §10a.3): the existing signal-cli JSON-RPC
 // (`updateGroup` to create and rename, `send` to post, `quitGroup` to leave), always through

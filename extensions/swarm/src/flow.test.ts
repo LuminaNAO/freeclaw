@@ -167,7 +167,7 @@ describe("swarm end-to-end flow (scripted agents)", () => {
     expect(readTasksIndex(stateDir)[TASK]?.status).toBe("done");
   });
 
-  it("a gateway restart mid-task (audit run lost) resumes and finishes with no human action", async () => {
+  it("a gateway restart mid-task (audit run lost) resumes and finishes with no operator action", async () => {
     const { stateDir, runtime, engine } = setup();
     await startTask(engine, { contractYaml: CONTRACT });
     // First gateway lifetime: build finishes, audit receives work, then the gateway dies.

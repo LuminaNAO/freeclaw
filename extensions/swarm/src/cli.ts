@@ -455,7 +455,7 @@ export function registerSwarmCli(params: {
       .argument("<holon>", "Holon: <root>[/<child>...]")
       .argument(
         "<spec>",
-        "agent[:<provider/model>[:<thinking>]] | human:<channel>:<who>[,<who>] | YAML mapping",
+        "agent[:<provider/model>[:<thinking>]] | member:<channel>:<who>[,<who>] | YAML mapping",
       ),
   ).action(
     guarded(async (holon: string, spec: string, opts: CliOpts) => {
@@ -469,7 +469,7 @@ export function registerSwarmCli(params: {
         return;
       }
       const l = res.lead;
-      const who = l.kind === "human" ? `human@${l.channel ?? "-"}` : (l.model ?? "default");
+      const who = l.kind === "member" ? `member@${l.channel ?? "-"}` : (l.model ?? "default");
       log(
         `${res.holon}: lead is now ${who}${l.thinking ? ` (${l.thinking})` : ""} (seq ${res.seq})`,
       );
@@ -496,7 +496,7 @@ export function registerSwarmCli(params: {
     }),
   );
 
-  // ARCH §10a.3: humans over a channel. Thin verbs over swarm.group / swarm.relay.
+  // ARCH §10a.3, §10b: members over a channel. Thin verbs over swarm.group / swarm.relay.
   withClientOptions(
     swarm
       .command("group")
@@ -524,11 +524,11 @@ export function registerSwarmCli(params: {
     swarm
       .command("relay")
       .description(
-        "Hand a human's reply to a holon's relay, as if written in its group (ARCH §3.3)",
+        "Hand a member's reply to a holon's relay, as if written in its group (ARCH §3.3)",
       )
       .argument("<taskId>")
       .argument("<message>")
-      .requiredOption("--who <id>", "the human's channel id, as in the holon file"),
+      .requiredOption("--who <id>", "the member's channel id, as in the holon file"),
   ).action(
     guarded(async (taskId: string, message: string, opts: CliOpts & { who: string }) => {
       const res = (await call("swarm.relay", opts, { taskId, who: opts.who, message })) as

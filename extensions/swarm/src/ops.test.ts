@@ -583,7 +583,7 @@ describe("parity gate (ARCH §10a)", () => {
     lead: { holon: "task-740", spec: "agent" },
     showTree: { holon: "task-740", tree: true },
     spawn: { parent: "task-740", holon: "id: child-a" },
-    relay: { taskId: "task-740", who: "human-1", message: "yes" },
+    relay: { taskId: "task-740", who: "member-1", message: "yes" },
     group: { taskId: "task-740", action: "open" },
   };
   /** CLI argv per verb (positional args), so the verb can be run with --json. */
@@ -592,13 +592,13 @@ describe("parity gate (ARCH §10a)", () => {
     lead: ["task-740", "agent"],
     show: ["task-740"],
     spawn: ["task-740", "--file", "child.yaml"],
-    relay: ["task-740", "yes", "--who", "human-1"],
+    relay: ["task-740", "yes", "--who", "member-1"],
     group: ["open", "task-740"],
   };
   /** The method params each verb sends (the CLI is a thin client over the table op). */
   const CLI_PARAMS: Record<string, Record<string, unknown>> = {
     spawn: { parent: "task-740", file: path.join(tmp, "child.yaml") },
-    relay: { taskId: "task-740", who: "human-1", message: "yes" },
+    relay: { taskId: "task-740", who: "member-1", message: "yes" },
     group: { taskId: "task-740", action: "open" },
   };
 
@@ -606,7 +606,7 @@ describe("parity gate (ARCH §10a)", () => {
     for (const name of REQUIRED) {
       expect(SWARM_OPS[name], name).toBeDefined();
     }
-    // Lead tool: the holarchy ops; a human's reply and the group are the operator's/channel's.
+    // Lead tool: the holarchy ops; a member's reply and the group are the operator's/channel's.
     expect(leadToolOps()).toEqual(["add", "lead", "showTree", "spawn"]);
   });
 

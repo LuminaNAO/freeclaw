@@ -443,7 +443,7 @@ export type HolonTreeRow = {
   depth: number;
   status: TaskStatus;
   state: HolonState;
-  /** `agent <model>` / `agent (default)` / a human lead's description. */
+  /** `agent <model>` / `agent (default)` / a member lead's description. */
   lead: string;
   ageMs: number;
 };

@@ -3,7 +3,7 @@ import { compareHolonKeys, reconcileChildReports, reportToParent, TO_PARENT } fr
 import { parentKeyOf } from "./contract.js";
 import { msgIdFor } from "./delivery.js";
 import { lastInputSeqFor, type SwarmEngine, type TaskState } from "./engine.js";
-import { resumeHumans } from "./relay.js";
+import { resumeMembers } from "./relay.js";
 import { currentRoundEvents } from "./rounds.js";
 import { TASKMASTER } from "./routing.js";
 import { appendOutbox, readOutbox, readTasksIndex, type OutboxEntry } from "./store.js";
@@ -254,11 +254,11 @@ async function resumeTask(engine: SwarmEngine, taskId: string, summary: ResumeSu
     }
   }
 
-  // ARCH §7, §10a.3: the human side resumes too: unposted lines are posted again and an
-  // unanswered human reply goes back to the relay.
-  const humans = await resumeHumans(engine, taskId);
-  summary.resent += humans.reposted;
-  summary.redelivered += humans.relayed;
+  // ARCH §7, §10a.3: the member side resumes too: unposted lines are posted again and an
+  // unanswered member reply goes back to the relay.
+  const memberSide = await resumeMembers(engine, taskId);
+  summary.resent += memberSide.reposted;
+  summary.redelivered += memberSide.relayed;
 }
 
 /**

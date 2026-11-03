@@ -1,14 +1,16 @@
 import type { DeliveryResult } from "./delivery.js";
 import type { SwarmEngine, TaskState } from "./engine.js";
-import { humansOf, type Holon } from "./holon.js";
+import { membersOf, type Holon } from "./holon.js";
 import { TASKMASTER } from "./routing.js";
 import type { SwarmEvent } from "./store.js";
 
-// Humans over a channel (ARCH §3.3, §8, §10a.3). One channel group per holon that has a
-// human lead or participant: opened on first need, closed (renamed `[done]`, left) when the
-// holon is done. Events addressed to a human become one short plain line in that group; the
-// human's replies go to the holon's relay session (relay.ts). Agent-only holons never get a
-// group. No person, number or group id lives in code: humans come from the holon file, the
+// Members over a channel (ARCH §3.3, §8, §10a.3, §10b). A member is whoever is on the other end
+// of a channel: a person or another agent, the swarm does not care which. One channel group
+// per holon that has a member lead or participant: opened on first need, closed (renamed
+// `[done]`, left) when the holon is done. Events addressed to a member become one short plain
+// line in that group; the member's replies go to the holon's relay session (relay.ts).
+// Agent-only holons never get a group. No person, agent, number or group id lives in code:
+// members come from the holon file, the
 // root owner from plugin config, the group id from the channel and is kept in the events.
 
 /** A channel's group API, as the swarm needs it. One per channel kind (fake, signal, …). */
@@ -22,28 +24,28 @@ export interface HolonChannel {
   closeGroup(groupId: string, opts: { name: string }): Promise<void>;
 }
 
-export type HumanChannelsOptions = {
+export type MemberChannelsOptions = {
   /** Channel kind → group API. A kind missing here is "no channel" for that holon (§8.3). */
   channels?: Record<string, HolonChannel>;
   /** Channel kind → the root owner's channel ids (always a member of a holon's group, §8.1). */
   owners?: Record<string, string[]>;
 };
 
-/** One line of at most this many characters goes to a human (ARCH §3.3 "short"). */
-export const HUMAN_LINE_MAX = 280;
+/** One line of at most this many characters goes to a member (ARCH §3.3 "short"). */
+export const MEMBER_LINE_MAX = 280;
 
 export const GROUP_OPENED = "GROUP_OPENED";
 export const GROUP_CLOSED = "GROUP_CLOSED";
 export const GROUP_UNAVAILABLE = "GROUP_UNAVAILABLE";
-export const HUMAN_POSTED = "HUMAN_POSTED";
-export const HUMAN_POST_FAILED = "HUMAN_POST_FAILED";
+export const MEMBER_POSTED = "MEMBER_POSTED";
+export const MEMBER_POST_FAILED = "MEMBER_POST_FAILED";
 
 /** `<root> · <holon id>` (ARCH §8.1). */
 export function groupNameFor(rootId: string, holonId: string): string {
   return `${rootId} · ${holonId}`;
 }
 
-/** What a human is asked to do for an event, in plain words (ARCH §3.3: what is needed). */
+/** What a member is asked to do for an event, in plain words (ARCH §3.3: what is needed). */
 function neededFor(event: string, to: string): string {
   switch (event) {
     case "TASK_STARTED":
@@ -70,10 +72,10 @@ function neededFor(event: string, to: string): string {
 }
 
 /**
- * ARCH §3.3, §10a.3: one short plain line for a human: what happened, what is needed, the sha.
+ * ARCH §3.3, §10a.3: one short plain line for a member: what happened, what is needed, the sha.
  * Never a multi-line envelope; the full text stays in events.jsonl (`swarm show`).
  */
-export function humanLine(msg: {
+export function memberLine(msg: {
   event: string;
   from: string;
   to: string;
@@ -89,7 +91,7 @@ export function humanLine(msg: {
     .join(": ");
   const head = `${msg.event} from ${msg.from}${sha}`;
   const need = `Needed: ${neededFor(msg.event, msg.to)}.`;
-  const room = HUMAN_LINE_MAX - head.length - need.length - 4;
+  const room = MEMBER_LINE_MAX - head.length - need.length - 4;
   const said =
     what && room > 8 ? `: ${what.length > room ? `${what.slice(0, room - 1)}…` : what}` : "";
   return `${head}${said}. ${need}`;
@@ -134,16 +136,16 @@ export type GroupStatus =
   | { ok: false; reason: string };
 
 /**
- * Channel groups for holons with humans. Lives on the engine; every frontend (CLI, method,
+ * Channel groups for holons with members. Lives on the engine; every frontend (CLI, method,
  * inbound hook, the fake channel) calls these same functions (ARCH §10a house standard).
  */
-export class HumanChannels {
+export class MemberChannels {
   readonly channels: Map<string, HolonChannel>;
   readonly owners: Record<string, string[]>;
   /** In-flight group work (opens, closes); tests and shutdown await it. */
   private readonly inflight = new Set<Promise<unknown>>();
 
-  constructor(opts: HumanChannelsOptions = {}) {
+  constructor(opts: MemberChannelsOptions = {}) {
     this.channels = new Map(Object.entries(opts.channels ?? {}));
     this.owners = opts.owners ?? {};
   }
@@ -174,8 +176,8 @@ export class HumanChannels {
     taskId: string,
     state: Pick<TaskState, "holon" | "events" | "sha" | "contract">,
   ): Promise<GroupStatus> {
-    const humans = humansOf(state.holon);
-    if (humans.length === 0) {
+    const members = membersOf(state.holon);
+    if (members.length === 0) {
       return { ok: false, reason: "agent-only holon: no group (ARCH §8.1)" };
     }
     const events = engine.loadState(taskId).events;
@@ -186,20 +188,22 @@ export class HumanChannels {
     if (events.some((e) => e.kind === "system" && e.event === GROUP_CLOSED)) {
       return { ok: false, reason: "the holon's group is closed" };
     }
-    const kind = humans[0]!.channel;
+    const kind = members[0]!.channel;
     const channel = this.channels.get(kind);
     const name = groupNameFor(rootIdOf(taskId), state.holon.contract.id);
     if (!channel) {
       await this.noChannel(engine, taskId, state, `no ${kind} channel is configured`);
       return { ok: false, reason: `no channel: ${kind}` };
     }
-    const members = [...new Set([...humans.flatMap((h) => h.who), ...(this.owners[kind] ?? [])])];
+    const groupMembers = [
+      ...new Set([...members.flatMap((m) => m.who), ...(this.owners[kind] ?? [])]),
+    ];
     try {
-      const { groupId } = await channel.createGroup({ name, members });
+      const { groupId } = await channel.createGroup({ name, members: groupMembers });
       engine.record(taskId, {
         kind: "system",
         event: GROUP_OPENED,
-        data: { channel: kind, groupId, name, members: members.length },
+        data: { channel: kind, groupId, name, members: groupMembers.length },
       });
       return { ok: true, groupId, channel: kind, name, opened: true };
     } catch (err) {
@@ -213,7 +217,7 @@ export class HumanChannels {
     }
   }
 
-  /** ARCH §8.3: humans are unreachable; the holon escalates one level up, once. */
+  /** ARCH §8.3: members are unreachable; the holon escalates one level up, once. */
   private async noChannel(
     engine: SwarmEngine,
     taskId: string,
@@ -225,8 +229,8 @@ export class HumanChannels {
       return;
     }
     engine.record(taskId, { kind: "system", event: GROUP_UNAVAILABLE, data: { reason } });
-    const body = `BLOCKED: no channel. ${reason}; the humans of ${state.holon.contract.id} cannot be reached.`;
-    if (state.holon.lead.kind === "human") {
+    const body = `BLOCKED: no channel. ${reason}; the members of ${state.holon.contract.id} cannot be reached.`;
+    if (state.holon.lead.kind === "member") {
       // The lead itself is unreachable: one level up is the parent (the root's upstream).
       await engine.toUpstream(
         taskId,
@@ -236,27 +240,27 @@ export class HumanChannels {
       );
       return;
     }
-    // A human participant under an agent lead: one level up is that lead.
+    // A member participant under an agent lead: one level up is that lead.
     await engine.notify(taskId, state, { event: "BLOCKED", body });
   }
 
   /**
-   * An event addressed to a human (lead or participant) becomes one plain line in the
-   * holon's group. Never a session run; logged as HUMAN_POSTED (or HUMAN_POST_FAILED, which
+   * An event addressed to a member (lead or participant) becomes one plain line in the
+   * holon's group. Never a session run; logged as MEMBER_POSTED (or MEMBER_POST_FAILED, which
    * resume posts again).
    */
-  async postToHuman(
+  async postToMember(
     engine: SwarmEngine,
     taskId: string,
     state: Pick<TaskState, "holon" | "events" | "sha" | "contract">,
     msg: { to: string; from: string; event: string; sha: string; body: string; seqs: number[] },
   ): Promise<DeliveryResult> {
-    const line = humanLine(msg);
+    const line = memberLine(msg);
     const group = await this.ensureGroup(engine, taskId, state);
     if (!group.ok) {
       engine.record(taskId, {
         kind: "send",
-        event: HUMAN_POST_FAILED,
+        event: MEMBER_POST_FAILED,
         to: msg.to,
         sha: msg.sha,
         body: line,
@@ -291,7 +295,7 @@ export class HumanChannels {
       const error = err instanceof Error ? err.message : String(err);
       engine.record(taskId, {
         kind: "send",
-        event: HUMAN_POST_FAILED,
+        event: MEMBER_POST_FAILED,
         to,
         sha: meta.sha,
         body: line,
@@ -301,13 +305,13 @@ export class HumanChannels {
     }
     const rec = engine.record(taskId, {
       kind: "send",
-      event: HUMAN_POSTED,
+      event: MEMBER_POSTED,
       to,
       sha: meta.sha,
       body: line,
       data: { seqs: meta.seqs, groupId: group.groupId, event: meta.event, from: meta.from },
     });
-    return { status: "delivered", runId: `human-${rec.seq}` };
+    return { status: "delivered", runId: `member-${rec.seq}` };
   }
 
   /** ARCH §8.1: closed when the holon is done: renamed `[done]`, then left. */
@@ -355,10 +359,10 @@ export class HumanChannels {
     return undefined;
   }
 
-  /** Roles a sender speaks as in a holon: the human lead first, then participants. */
+  /** Roles a sender speaks as in a holon: the member lead first, then participants. */
   rolesOf(holon: Pick<Holon, "lead" | "participants">, who: string): string[] {
     const me = normalizeWho(who);
-    return humansOf(holon)
+    return membersOf(holon)
       .filter((h) => h.who.some((w) => normalizeWho(w) === me))
       .map((h) => h.role);
   }
@@ -379,11 +383,11 @@ export async function openHolonGroup(engine: SwarmEngine, taskId: string): Promi
     if (state.status !== "open") {
       return { ok: false, reason: `holon ${taskId} is ${state.status}` };
     }
-    return engine.humans.ensureGroup(engine, taskId, state);
+    return engine.memberChannels.ensureGroup(engine, taskId, state);
   });
 }
 
 /** Ops: close a holon's group (rename `[done]`, leave). CLI `swarm group close` calls this. */
 export async function closeHolonGroup(engine: SwarmEngine, taskId: string): Promise<GroupStatus> {
-  return engine.locks.run(taskId, () => engine.humans.closeGroup(engine, taskId));
+  return engine.locks.run(taskId, () => engine.memberChannels.closeGroup(engine, taskId));
 }

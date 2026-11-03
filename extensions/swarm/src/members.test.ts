@@ -8,10 +8,10 @@ import { SwarmEngine } from "./engine.js";
 import { FakeChannel } from "./fake-channel.js";
 import { parseHolon } from "./holon.js";
 import { createSwarmHooks } from "./hooks.js";
-import { HumanChannels, groupNameFor, humanLine, HUMAN_LINE_MAX } from "./humans.js";
-import * as humansOps from "./humans.js";
+import { MemberChannels, groupNameFor, memberLine, MEMBER_LINE_MAX } from "./members.js";
+import * as membersOps from "./members.js";
 import { createSwarmMethods } from "./methods.js";
-import { attachRelay, relayHumanReply } from "./relay.js";
+import { attachRelay, relayMemberReply } from "./relay.js";
 import * as relayOps from "./relay.js";
 import { resumeOpenTasks } from "./resume.js";
 import { createSignalHolonChannel } from "./signal-channel.js";
@@ -19,23 +19,23 @@ import { readEvents, readTasksIndex } from "./store.js";
 import { startTask } from "./tasks.js";
 import { makeStubRuntime } from "./test-runtime.js";
 
-// ARCH §3.3, §8, §10a.3, §10a.4, §12.6: humans over a channel. Fake loopback channel only:
+// ARCH §3.3, §8, §10a.3, §10a.4, §12.6: members over a channel. Fake loopback channel only:
 // no daemon, no real group, nobody is messaged. Ids are generic placeholders.
 
-const tmp = fs.mkdtempSync(path.join(tmpdir(), "swarm-humans-test-"));
+const tmp = fs.mkdtempSync(path.join(tmpdir(), "swarm-members-test-"));
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-const HUMAN = "human-lead-0001";
-const REVIEWER = "human-reviewer-0002";
+const MEMBER = "member-lead-0001";
+const REVIEWER = "member-reviewer-0002";
 const OWNER = "root-owner-0003";
 const STRANGER = "someone-else-0004";
 const MODEL = "cb-sonnet/claude-sonnet-5-5";
 
-const HUMAN_LEAD = (id: string, extra = "") => `id: ${id}
+const MEMBER_LEAD = (id: string, extra = "") => `id: ${id}
 kind: build
 goal: add a greeting
 done_when: the unit test passes
-lead: { kind: human, who: [${HUMAN}], channel: fake }
+lead: { kind: member, who: [${MEMBER}], channel: fake }
 lanes:
   build: { model: ${MODEL}, thinking: "off" }
   audit: { model: ${MODEL}, thinking: "off" }
@@ -55,70 +55,70 @@ function setup(name: string, opts: { channel?: boolean } = {}) {
   fs.mkdirSync(stateDir, { recursive: true });
   const runtime = makeStubRuntime();
   const fake = new FakeChannel();
-  const humans = new HumanChannels({
+  const memberChannels = new MemberChannels({
     channels: opts.channel === false ? {} : { fake },
     owners: { fake: [OWNER] },
   });
-  const engine = new SwarmEngine({ stateDir, runtime, humans });
+  const engine = new SwarmEngine({ stateDir, runtime, memberChannels });
   const hooks = createSwarmHooks(() => engine);
   hooks.attach(engine);
   attachRelay(engine);
-  fake.inbound = (msg) => relayHumanReply(engine, msg);
+  fake.inbound = (msg) => relayMemberReply(engine, msg);
   const events = (task: string) => readEvents(stateDir, task);
   const settle = async () => {
     await runtime.drain();
-    await engine.humans.idle();
+    await engine.memberChannels.idle();
     await runtime.drain();
   };
   return { stateDir, runtime, fake, engine, hooks, events, settle };
 }
 
-describe("holon file: human lead and participants (ARCH §10a.3)", () => {
-  it("parses a human lead and participants; v1 and agent leads are unchanged", () => {
+describe("holon file: member lead and participants (ARCH §10a.3)", () => {
+  it("parses a member lead and participants; v1 and agent leads are unchanged", () => {
     const holon = parseHolon(
-      HUMAN_LEAD(
-        "humans-parse",
-        `participants:\n  - { kind: human, who: ${REVIEWER}, channel: fake, role: review }\n`,
+      MEMBER_LEAD(
+        "members-parse",
+        `participants:\n  - { kind: member, who: ${REVIEWER}, channel: fake, role: review }\n`,
       ),
     );
-    expect(holon.lead).toEqual({ kind: "human", who: [HUMAN], channel: "fake" });
+    expect(holon.lead).toEqual({ kind: "member", who: [MEMBER], channel: "fake" });
     expect(holon.participants).toEqual([
-      { kind: "human", who: [REVIEWER], channel: "fake", role: "review" },
+      { kind: "member", who: [REVIEWER], channel: "fake", role: "review" },
     ]);
     expect(holon.canon.relay).toEqual({ model: MODEL, thinking: "off" });
     expect(holon.contract.workers.review).toEqual({ count: 1 });
     expect(holon.lanes.map((l) => l.role)).toEqual(["build", "audit", "test"]);
   });
 
-  it("refuses a human lead without who or channel, a model on a human, and two channels", () => {
+  it("refuses a member lead without who or channel, a model on a member, and two channels", () => {
     const bad = (lead: string, extra = "") =>
-      HUMAN_LEAD("humans-bad", extra).replace(/lead: .*\n/, `lead: ${lead}\n`);
-    expect(() => parseHolon(bad("{ kind: human, channel: fake }"))).toThrow(/lead\.who/);
-    expect(() => parseHolon(bad(`{ kind: human, who: [${HUMAN}] }`))).toThrow(/lead\.channel/);
+      MEMBER_LEAD("members-bad", extra).replace(/lead: .*\n/, `lead: ${lead}\n`);
+    expect(() => parseHolon(bad("{ kind: member, channel: fake }"))).toThrow(/lead\.who/);
+    expect(() => parseHolon(bad(`{ kind: member, who: [${MEMBER}] }`))).toThrow(/lead\.channel/);
     expect(() =>
-      parseHolon(bad(`{ kind: human, who: [${HUMAN}], channel: fake, model: ${MODEL} }`)),
-    ).toThrow(/lead\.model is not a field of a human lead/);
+      parseHolon(bad(`{ kind: member, who: [${MEMBER}], channel: fake, model: ${MODEL} }`)),
+    ).toThrow(/lead\.model is not a field of a member lead/);
     expect(() =>
       parseHolon(
-        HUMAN_LEAD(
-          "humans-two",
-          `participants:\n  - { kind: human, who: ${REVIEWER}, channel: other, role: review }\n`,
+        MEMBER_LEAD(
+          "members-two",
+          `participants:\n  - { kind: member, who: ${REVIEWER}, channel: other, role: review }\n`,
         ),
       ),
     ).toThrow(/one group on one channel/);
     expect(() =>
       parseHolon(
-        HUMAN_LEAD(
-          "humans-clash",
-          `participants:\n  - { kind: human, who: ${REVIEWER}, channel: fake, role: build }\n`,
+        MEMBER_LEAD(
+          "members-clash",
+          `participants:\n  - { kind: member, who: ${REVIEWER}, channel: fake, role: build }\n`,
         ),
       ),
     ).toThrow(/also a lane/);
     expect(() =>
       parseHolon(
-        HUMAN_LEAD(
-          "humans-reserved",
-          `participants:\n  - { kind: human, who: ${REVIEWER}, channel: fake, role: relay }\n`,
+        MEMBER_LEAD(
+          "members-reserved",
+          `participants:\n  - { kind: member, who: ${REVIEWER}, channel: fake, role: relay }\n`,
         ),
       ),
     ).toThrow(/not a usable role/);
@@ -127,7 +127,7 @@ describe("holon file: human lead and participants (ARCH §10a.3)", () => {
 
 describe("one short plain line per event (ARCH §3.3)", () => {
   it("says what happened, what is needed and the sha, on one short line", () => {
-    const line = humanLine({
+    const line = memberLine({
       event: "PLAN",
       from: "build",
       to: "taskmaster",
@@ -135,24 +135,24 @@ describe("one short plain line per event (ARCH §3.3)", () => {
       body: `plan for approval\n${"split into three steps ".repeat(30)}`,
     });
     expect(line).not.toContain("\n");
-    expect(line.length).toBeLessThanOrEqual(HUMAN_LINE_MAX);
+    expect(line.length).toBeLessThanOrEqual(MEMBER_LINE_MAX);
     expect(line).toMatch(/^PLAN from build @ 0123456789: plan for approval: split into three/);
     expect(line).toMatch(/…\. Needed: approve, or say what to change\.$/);
     expect(line).not.toMatch(/TASK |MSG /);
   });
 });
 
-describe("human lead over the fake channel (ARCH §10a.4, §12.6)", () => {
-  it("a human lead approves a plan in plain words; the relay emits APPROVED once and the holon proceeds", async () => {
+describe("member lead over the fake channel (ARCH §10a.4, §12.6)", () => {
+  it("a member lead approves a plan in plain words; the relay emits APPROVED once and the holon proceeds", async () => {
     const { runtime, fake, engine, events, settle } = setup("approve");
-    const T = "humans-approve";
-    await startTask(engine, { contractYaml: HUMAN_LEAD(T) });
+    const T = "members-approve";
+    await startTask(engine, { contractYaml: MEMBER_LEAD(T) });
     await settle();
-    // No session for a human lead: build got its brief, the lead got one line in the group.
+    // No session for a member lead: build got its brief, the lead got one line in the group.
     expect(runtime.runs.map((r) => r.sessionKey)).toEqual([key(T, "build")]);
     const [group] = [...fake.groups.values()];
     expect(group?.name).toBe(groupNameFor(T, T));
-    expect(group?.members.toSorted()).toEqual([HUMAN, OWNER].toSorted());
+    expect(group?.members.toSorted()).toEqual([MEMBER, OWNER].toSorted());
     expect(events(T).find((e) => e.event === "GROUP_OPENED")?.data).toMatchObject({
       channel: "fake",
       groupId: group?.groupId,
@@ -173,8 +173,8 @@ describe("human lead over the fake channel (ARCH §10a.4, §12.6)", () => {
       /^PLAN from build: plan for approval: three steps: parser.*Needed: approve/,
     );
 
-    // The human answers in plain words; the reply goes to the relay session.
-    const relayed = await fake.reply(group!.groupId, HUMAN, "looks good, go ahead");
+    // The member answers in plain words; the reply goes to the relay session.
+    const relayed = await fake.reply(group!.groupId, MEMBER, "looks good, go ahead");
     expect(relayed).toMatchObject({ ok: true, role: "taskmaster" });
     await settle();
     const relayRun = runtime.runs.at(-1)!;
@@ -214,14 +214,14 @@ describe("human lead over the fake channel (ARCH §10a.4, §12.6)", () => {
 
   it("an unclear reply gets exactly one question; the next reply is turned into one event", async () => {
     const { runtime, fake, engine, events, settle } = setup("unclear");
-    const T = "humans-unclear";
-    await startTask(engine, { contractYaml: HUMAN_LEAD(T) });
+    const T = "members-unclear";
+    await startTask(engine, { contractYaml: MEMBER_LEAD(T) });
     await engine.emit(T, "build", { event: "PLAN", sha: "init", body: "two options: A or B" });
     await runtime.end(key(T, "build"));
     await settle();
     const group = [...fake.groups.values()][0]!;
 
-    await fake.reply(group.groupId, HUMAN, "hmm");
+    await fake.reply(group.groupId, MEMBER, "hmm");
     await settle();
     const asked = await engine.emit(T, "relay", {
       event: "ASK",
@@ -240,7 +240,7 @@ describe("human lead over the fake channel (ARCH §10a.4, §12.6)", () => {
     expect(events(T).filter((e) => e.event === "RELAY_ASKED")).toHaveLength(1);
     expect(events(T).some((e) => e.kind === "emit" && e.from === "taskmaster")).toBe(false);
 
-    await fake.reply(group.groupId, HUMAN, "yes approve it");
+    await fake.reply(group.groupId, MEMBER, "yes approve it");
     await settle();
     expect(runtime.runs.at(-1)?.message).toContain("You already asked once: do not ask again.");
     const third = await engine.emit(T, "relay", { event: "ASK", sha: "init", body: "sure?" });
@@ -255,31 +255,31 @@ describe("human lead over the fake channel (ARCH §10a.4, §12.6)", () => {
     expect(events(T).filter((e) => e.kind === "emit" && e.event === "APPROVED")).toHaveLength(1);
   });
 
-  it("a stranger's message never reaches the relay; a human emits only through the relay", async () => {
+  it("a stranger's message never reaches the relay; a member emits only through the relay", async () => {
     const { runtime, fake, engine, events, settle } = setup("stranger");
-    const T = "humans-stranger";
-    await startTask(engine, { contractYaml: HUMAN_LEAD(T) });
+    const T = "members-stranger";
+    await startTask(engine, { contractYaml: MEMBER_LEAD(T) });
     await settle();
     const group = [...fake.groups.values()][0]!;
     const runs = runtime.runs.length;
     expect(await fake.reply(group.groupId, STRANGER, "approve")).toMatchObject({ ok: false });
-    expect(await fake.reply("fake-group-999", HUMAN, "approve")).toMatchObject({ ok: false });
+    expect(await fake.reply("fake-group-999", MEMBER, "approve")).toMatchObject({ ok: false });
     await settle();
     expect(runtime.runs).toHaveLength(runs);
-    expect(events(T).filter((e) => e.event === "HUMAN_IGNORED")).toHaveLength(1);
-    // Nothing can emit as the human lead but the relay; the relay needs a reply to answer.
+    expect(events(T).filter((e) => e.event === "MEMBER_IGNORED")).toHaveLength(1);
+    // Nothing can emit as the member lead but the relay; the relay needs a reply to answer.
     expect(await engine.emit(T, "relay", { event: "DONE", sha: "init", body: "x" })).toMatchObject({
       ok: false,
     });
   });
 
-  it("a silent relay turn is re-prompted once, then BLOCKED with the human's words; never quiet", async () => {
+  it("a silent relay turn is re-prompted once, then BLOCKED with the member's words; never quiet", async () => {
     const { runtime, fake, engine, events, settle } = setup("silent");
-    const T = "humans-silent";
-    await startTask(engine, { contractYaml: HUMAN_LEAD(T) });
+    const T = "members-silent";
+    await startTask(engine, { contractYaml: MEMBER_LEAD(T) });
     await settle();
     const group = [...fake.groups.values()][0]!;
-    await fake.reply(group.groupId, HUMAN, "whatever you think");
+    await fake.reply(group.groupId, MEMBER, "whatever you think");
     await settle();
     await runtime.end(key(T, "relay"));
     await settle();
@@ -287,7 +287,7 @@ describe("human lead over the fake channel (ARCH §10a.4, §12.6)", () => {
     expect(runtime.runs.at(-1)?.message).toMatch(/ended without swarm_emit/);
     await runtime.end(key(T, "relay"));
     await settle();
-    // BLOCKED from a human lead goes up one level: to upstream (the root's parent).
+    // BLOCKED from a member lead goes up one level: to upstream (the root's parent).
     const up = runtime.runs.filter((r) => r.sessionKey === "agent:main:up");
     expect(up.at(-1)?.message).toMatch(/EVENT BLOCKED[\s\S]*whatever you think/);
     expect(events(T).filter((e) => e.event === "RELAY_SILENT")).toHaveLength(2);
@@ -295,7 +295,7 @@ describe("human lead over the fake channel (ARCH §10a.4, §12.6)", () => {
 
   it("the relay has no tools except swarm_emit", () => {
     const { hooks } = setup("tools");
-    const relayKey = key("humans-tools", "relay");
+    const relayKey = key("members-tools", "relay");
     expect(
       hooks.onBeforeToolCall(
         { toolName: "exec", params: {} },
@@ -311,19 +311,19 @@ describe("human lead over the fake channel (ARCH §10a.4, §12.6)", () => {
     expect(
       hooks.onBeforeToolCall(
         { toolName: "exec", params: {} },
-        { sessionKey: key("humans-tools", "build"), toolName: "exec" },
+        { sessionKey: key("members-tools", "build"), toolName: "exec" },
       ),
     ).toBeUndefined();
   });
 
   it("a channel message hook in the holon's group reaches the relay (inbound path)", async () => {
     const { runtime, fake, engine, hooks, settle } = setup("hook");
-    const T = "humans-hook";
-    await startTask(engine, { contractYaml: HUMAN_LEAD(T) });
+    const T = "members-hook";
+    await startTask(engine, { contractYaml: MEMBER_LEAD(T) });
     await settle();
     const group = [...fake.groups.values()][0]!;
     await hooks.onMessageReceived(
-      { from: `group:${group.groupId}`, content: "ok", metadata: { senderId: HUMAN } },
+      { from: `group:${group.groupId}`, content: "ok", metadata: { senderId: MEMBER } },
       { channelId: "fake", conversationId: `group:${group.groupId}` },
     );
     await settle();
@@ -331,7 +331,7 @@ describe("human lead over the fake channel (ARCH §10a.4, §12.6)", () => {
     // A message in any other conversation is ignored.
     const before = runtime.runs.length;
     await hooks.onMessageReceived(
-      { from: "x", content: "ok", metadata: { senderId: HUMAN } },
+      { from: "x", content: "ok", metadata: { senderId: MEMBER } },
       { channelId: "fake", conversationId: "group:other" },
     );
     expect(runtime.runs).toHaveLength(before);
@@ -349,10 +349,10 @@ describe("human lead over the fake channel (ARCH §10a.4, §12.6)", () => {
 });
 
 describe("group lifecycle (ARCH §8.1, §8.3)", () => {
-  it("the group closes [done] when the human lead says done; the close is in the events", async () => {
+  it("the group closes [done] when the member lead says done; the close is in the events", async () => {
     const { runtime, fake, engine, events, settle } = setup("done");
-    const T = "humans-done";
-    await startTask(engine, { contractYaml: HUMAN_LEAD(T) });
+    const T = "members-done";
+    await startTask(engine, { contractYaml: MEMBER_LEAD(T) });
     await engine.emit(T, "build", { event: "BUILD_DONE", sha: "abc", body: "built" });
     await engine.emit(T, "audit", { event: "AUDIT_PASS", sha: "abc", body: "fine" });
     await engine.emit(T, "test", { event: "TEST_PASS", sha: "abc", body: "green" });
@@ -360,7 +360,7 @@ describe("group lifecycle (ARCH §8.1, §8.3)", () => {
     await settle();
     const group = [...fake.groups.values()][0]!;
     expect(group.posts.at(-1)).toMatch(/^TEST_PASS from test @ abc.*Needed: say done/);
-    await fake.reply(group.groupId, HUMAN, "great, that's done");
+    await fake.reply(group.groupId, MEMBER, "great, that's done");
     await settle();
     expect(
       await engine.emit(T, "relay", { event: "DONE", sha: "abc", body: "Marked done." }),
@@ -379,7 +379,7 @@ describe("group lifecycle (ARCH §8.1, §8.3)", () => {
   it("agent-only holons get no group", async () => {
     const { fake, engine, settle } = setup("agents");
     await startTask(engine, {
-      contractYaml: HUMAN_LEAD("agents-only").replace(/lead: .*\n/, "lead: { kind: agent }\n"),
+      contractYaml: MEMBER_LEAD("agents-only").replace(/lead: .*\n/, "lead: { kind: agent }\n"),
     });
     await settle();
     expect(fake.groups.size).toBe(0);
@@ -387,8 +387,8 @@ describe("group lifecycle (ARCH §8.1, §8.3)", () => {
 
   it("no channel: everything still runs and the holon escalates BLOCKED: no channel one level up, once", async () => {
     const { runtime, engine, events, settle } = setup("nochan", { channel: false });
-    const T = "humans-nochan";
-    await startTask(engine, { contractYaml: HUMAN_LEAD(T) });
+    const T = "members-nochan";
+    await startTask(engine, { contractYaml: MEMBER_LEAD(T) });
     await settle();
     expect(runtime.runs.some((r) => r.sessionKey === key(T, "build"))).toBe(true);
     const up = runtime.runs.filter((r) => r.sessionKey === "agent:main:up");
@@ -397,15 +397,15 @@ describe("group lifecycle (ARCH §8.1, §8.3)", () => {
     await engine.emit(T, "build", { event: "PLAN", sha: "init", body: "plan" });
     await settle();
     expect(runtime.runs.filter((r) => r.sessionKey === "agent:main:up")).toHaveLength(1);
-    expect(events(T).filter((e) => e.event === "HUMAN_POST_FAILED")).toHaveLength(2);
+    expect(events(T).filter((e) => e.event === "MEMBER_POST_FAILED")).toHaveLength(2);
   });
 
-  it("a human participant under an agent lead: no channel → BLOCKED to that lead", async () => {
+  it("a member participant under an agent lead: no channel → BLOCKED to that lead", async () => {
     const { runtime, engine, settle } = setup("nochan-part", { channel: false });
-    const T = "humans-part";
-    const yaml = HUMAN_LEAD(
+    const T = "members-part";
+    const yaml = MEMBER_LEAD(
       T,
-      `participants:\n  - { kind: human, who: ${REVIEWER}, channel: fake, role: review }\n`,
+      `participants:\n  - { kind: member, who: ${REVIEWER}, channel: fake, role: review }\n`,
     ).replace(/lead: .*\n/, `lead: { kind: agent, model: ${MODEL} }\n`);
     await startTask(engine, { contractYaml: yaml });
     await settle();
@@ -424,11 +424,11 @@ describe("group lifecycle (ARCH §8.1, §8.3)", () => {
   });
 });
 
-describe("resume over the human side (ARCH §7, §10a.4)", () => {
+describe("resume over the member side (ARCH §7, §10a.4)", () => {
   it("after two gateway kills, an unposted line is posted and an unanswered reply reaches the relay; the holon finishes", async () => {
     const first = setup("resume");
-    const T = "humans-resume";
-    await startTask(first.engine, { contractYaml: HUMAN_LEAD(T) });
+    const T = "members-resume";
+    await startTask(first.engine, { contractYaml: MEMBER_LEAD(T) });
     await first.settle();
     const group = [...first.fake.groups.values()][0]!;
     // The channel drops the next post; the gateway dies before anything else happens.
@@ -441,16 +441,16 @@ describe("resume over the human side (ARCH §7, §10a.4)", () => {
     const engine2 = new SwarmEngine({
       stateDir: first.stateDir,
       runtime: runtime2,
-      humans: new HumanChannels({ channels: { fake: first.fake } }),
+      memberChannels: new MemberChannels({ channels: { fake: first.fake } }),
     });
     createSwarmHooks(() => engine2).attach(engine2);
     attachRelay(engine2);
-    first.fake.inbound = (msg) => relayHumanReply(engine2, msg);
+    first.fake.inbound = (msg) => relayMemberReply(engine2, msg);
     await resumeOpenTasks(engine2);
     await runtime2.drain();
     expect(group.posts.filter((p) => p.startsWith("PLAN"))).toHaveLength(1);
-    // The human answers; the gateway dies again before the relay's turn ends.
-    await first.fake.reply(group.groupId, HUMAN, "approved");
+    // The member answers; the gateway dies again before the relay's turn ends.
+    await first.fake.reply(group.groupId, MEMBER, "approved");
     await runtime2.drain();
     expect(runtime2.runs.at(-1)?.sessionKey).toBe(key(T, "relay"));
 
@@ -459,7 +459,7 @@ describe("resume over the human side (ARCH §7, §10a.4)", () => {
     const engine3 = new SwarmEngine({
       stateDir: first.stateDir,
       runtime: runtime3,
-      humans: new HumanChannels({ channels: { fake: first.fake } }),
+      memberChannels: new MemberChannels({ channels: { fake: first.fake } }),
     });
     createSwarmHooks(() => engine3).attach(engine3);
     attachRelay(engine3);
@@ -476,17 +476,17 @@ describe("resume over the human side (ARCH §7, §10a.4)", () => {
     await engine3.emit(T, "audit", { event: "AUDIT_PASS", sha: "abc", body: "ok" });
     await engine3.emit(T, "test", { event: "TEST_PASS", sha: "abc", body: "ok" });
     await runtime3.settleAll();
-    await engine3.humans.idle();
-    await first.fake.reply(group.groupId, HUMAN, "done");
+    await engine3.memberChannels.idle();
+    await first.fake.reply(group.groupId, MEMBER, "done");
     await runtime3.drain();
     await engine3.emit(T, "relay", { event: "DONE", sha: "abc", body: "Done." });
-    await engine3.humans.idle();
+    await engine3.memberChannels.idle();
     expect(readTasksIndex(first.stateDir)[T]?.status).toBe("done");
     expect(group.closed).toBe(true);
   });
 });
 
-describe("parity: every human op has a CLI verb with --json over the same function (ARCH §10a)", () => {
+describe("parity: every member op has a CLI verb with --json over the same function (ARCH §10a)", () => {
   async function callMethod(engine: SwarmEngine, method: string, params: Record<string, unknown>) {
     let out: { ok: boolean; payload: unknown } | undefined;
     await createSwarmMethods(() => engine)[method]!({
@@ -504,21 +504,21 @@ describe("parity: every human op has a CLI verb with --json over the same functi
       argv: ["group", "open", "task-1", "--json"],
       method: "swarm.group",
       params: { taskId: "task-1", action: "open" },
-      fn: [humansOps, "openHolonGroup"] as const,
+      fn: [membersOps, "openHolonGroup"] as const,
     },
     {
       op: "group close",
       argv: ["group", "close", "task-1", "--json"],
       method: "swarm.group",
       params: { taskId: "task-1", action: "close" },
-      fn: [humansOps, "closeHolonGroup"] as const,
+      fn: [membersOps, "closeHolonGroup"] as const,
     },
     {
       op: "relay reply",
-      argv: ["relay", "task-1", "approved", "--who", HUMAN, "--json"],
+      argv: ["relay", "task-1", "approved", "--who", MEMBER, "--json"],
       method: "swarm.relay",
-      params: { taskId: "task-1", who: HUMAN, message: "approved" },
-      fn: [relayOps, "relayHumanReply"] as const,
+      params: { taskId: "task-1", who: MEMBER, message: "approved" },
+      fn: [relayOps, "relayMemberReply"] as const,
     },
   ];
 
@@ -549,14 +549,14 @@ describe("parity: every human op has a CLI verb with --json over the same functi
 
   it("the channel hook, the fake channel and swarm.relay reach the same relay function", async () => {
     const { engine, fake, hooks } = setup("parity-paths");
-    const spy = vi.spyOn(relayOps, "relayHumanReply");
-    fake.inbound = (msg) => relayOps.relayHumanReply(engine, msg);
-    await fake.reply("fake-group-1", HUMAN, "x");
+    const spy = vi.spyOn(relayOps, "relayMemberReply");
+    fake.inbound = (msg) => relayOps.relayMemberReply(engine, msg);
+    await fake.reply("fake-group-1", MEMBER, "x");
     await hooks.onMessageReceived(
-      { from: "x", content: "x", metadata: { senderId: HUMAN } },
+      { from: "x", content: "x", metadata: { senderId: MEMBER } },
       { channelId: "fake", conversationId: "group:fake-group-1" },
     );
-    await callMethod(engine, "swarm.relay", { taskId: "none-1", who: HUMAN, message: "x" });
+    await callMethod(engine, "swarm.relay", { taskId: "none-1", who: MEMBER, message: "x" });
     expect(spy).toHaveBeenCalledTimes(3);
     spy.mockRestore();
   });
@@ -572,14 +572,14 @@ describe("signal group API (ARCH §10a.3), driven by a stub rpc: never a daemon"
         return method === "updateGroup" && !params.groupId ? { groupId: "gid-placeholder" } : {};
       },
     });
-    expect(await channel.createGroup({ name: "r · h", members: [HUMAN] })).toEqual({
+    expect(await channel.createGroup({ name: "r · h", members: [MEMBER] })).toEqual({
       groupId: "gid-placeholder",
     });
     await channel.post("gid-placeholder", "line");
     await channel.closeGroup("gid-placeholder", { name: "r · h [done]" });
     expect(calls.map(([m]) => m)).toEqual(["updateGroup", "send", "updateGroup", "quitGroup"]);
     expect(calls.every(([, p]) => p.account === "account-placeholder")).toBe(true);
-    expect(calls[0]?.[1]).toMatchObject({ name: "r · h", members: [HUMAN] });
+    expect(calls[0]?.[1]).toMatchObject({ name: "r · h", members: [MEMBER] });
     expect(calls[2]?.[1]).toMatchObject({ groupId: "gid-placeholder", name: "r · h [done]" });
   });
 

@@ -30,12 +30,12 @@ export const DEFAULT_BUILD_ROUTES: readonly RouteRow[] = Object.freeze([
   { on: "TEST_FAIL", from: TASKMASTER, to: "build", message: "repro + failing test" },
   { on: "TEST_PASS", from: "test", to: TASKMASTER, message: "gate passed {{sha}}" },
   { on: "DONE", from: TASKMASTER, to: UPSTREAM, message: "done" },
-  { on: "BLOCKED", from: TASKMASTER, to: UPSTREAM, message: "human needed" },
+  { on: "BLOCKED", from: TASKMASTER, to: UPSTREAM, message: "help needed" },
   { on: "BLOCKED", from: ANY, to: TASKMASTER, message: "blocked" },
   { on: "FAILED", from: TASKMASTER, to: UPSTREAM, message: "failed" },
   { on: "RETRY", from: TASKMASTER, to: ROLE_PLACEHOLDER, message: "re-prompt" },
   // ARCH §3.3, §10a.3: a plan goes to the lead for a yes; the lead's APPROVED (an agent's, or a
-  // human's through the relay) goes back to the role that asked.
+  // member's through the relay) goes back to the role that asked.
   { on: "PLAN", from: ANY, to: TASKMASTER, message: "plan for approval" },
   { on: "APPROVED", from: TASKMASTER, to: ROLE_PLACEHOLDER, message: "approved: go on" },
 ]);
