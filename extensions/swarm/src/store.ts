@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { taskDirFor } from "./contract.js";
+import { canonicalEventName } from "./member-aliases.js";
 
 // On-disk task state (ARCH §1.6, §3, §8).
 
@@ -163,7 +164,8 @@ export function updateTaskIndexEntry(
 
 /**
  * Normalize events written by older tooling or hand-written fixtures: accept `at` (ISO)
- * for `ts`, and assign a seq by position when missing.
+ * for `ts`, assign a seq by position when missing, and read step-5 event names as their
+ * member names (ARCH §10b.3: no migration on disk; every reader goes through here).
  */
 export function readEvents(stateDir: string, taskId: string): SwarmEvent[] {
   const file = eventsPath(stateDir, taskId);
@@ -177,7 +179,7 @@ export function readEvents(stateDir: string, taskId: string): SwarmEvent[] {
     ts: typeof e.ts === "number" ? e.ts : e.at ? Date.parse(e.at) : 0,
     taskId: e.taskId ?? taskId,
     kind: e.kind ?? "emit",
-    event: e.event ?? "UNKNOWN",
+    event: e.event ? canonicalEventName(e.event) : "UNKNOWN",
   }));
 }
 

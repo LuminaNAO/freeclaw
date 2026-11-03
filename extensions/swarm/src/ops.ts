@@ -12,8 +12,9 @@ import {
   type Holon,
   type HolonState,
 } from "./holon.js";
-import { closeHolonGroup, openHolonGroup } from "./humans.js";
-import { relayHumanReply } from "./relay.js";
+import { isMemberKind } from "./member-aliases.js";
+import { closeHolonGroup, openHolonGroup } from "./members.js";
+import { relayMemberReply } from "./relay.js";
 import { TASKMASTER } from "./routing.js";
 import { parseSwarmSessionKey } from "./sessions.js";
 import { readEvents, readTasksIndex, writeFileAtomic } from "./store.js";
@@ -189,8 +190,9 @@ function callerHolonPath(caller: Extract<OpCaller, { kind: "session" }>): string
 
 /**
  * A lead spec on the command line: a YAML/JSON mapping (`{ kind: agent, model: p/m }`), or the
- * short forms `agent`, `agent:<provider/model>[:<thinking>]`, `human:<channel>:<who>[,<who>…]`.
- * Validation is the holon file's own (parseLead), so the CLI accepts exactly what a file does.
+ * short forms `agent`, `agent:<provider/model>[:<thinking>]`, `member:<channel>:<who>[,<who>…]`
+ * (§10b.3: the step-5 spelling is accepted as an alias, see member-aliases.ts). Validation is the holon file's own (parseLead), so
+ * the CLI accepts exactly what a file does.
  */
 export function parseLeadSpec(spec: string): Holon["lead"] {
   const raw = spec.trim();
@@ -215,16 +217,16 @@ export function parseLeadSpec(spec: string): Holon["lead"] {
       ...(thinking && { thinking }),
     });
   }
-  if (kind === "human") {
+  if (kind && isMemberKind(kind)) {
     const [channel, who] = rest;
     return parseLead({
-      kind: "human",
+      kind: "member",
       ...(channel && { channel }),
       ...(who && { who: who.split(",").map((w) => w.trim()) }),
     });
   }
   throw new SwarmContractError(
-    `lead spec "${raw}" is not agent[:<provider/model>[:<thinking>]], human:<channel>:<who> or a mapping`,
+    `lead spec "${raw}" is not agent[:<provider/model>[:<thinking>]], member:<channel>:<who> or a mapping`,
   );
 }
 
@@ -241,8 +243,8 @@ export function describeLead(lead: Holon["lead"] | undefined): string {
     return "default";
   }
   const l = lead as { kind: string; model?: string; thinking?: string; channel?: string };
-  if (l.kind === "human") {
-    return `human${l.channel ? `@${l.channel}` : ""}`;
+  if (l.kind === "member") {
+    return `member${l.channel ? `@${l.channel}` : ""}`;
   }
   return `${l.model ?? "default"}${l.thinking ? ` (${l.thinking})` : ""}`;
 }
@@ -544,8 +546,8 @@ export const SWARM_OPS: Record<string, SwarmOp> = {
       return spawnChild(engine, parseHolonRef(parent), holonYaml ?? fs.readFileSync(file!, "utf8"));
     },
   },
-  // ARCH §3.3, §10a.3: hand a human's reply to a holon's relay (as if written in its group).
-  // Operator only: a human's words come from the channel, never from an agent's tool.
+  // ARCH §3.3, §10a.3: hand a member's reply to a holon's relay (as if written in its group).
+  // Operator only: a member's words come from the channel, never from an agent's tool.
   relay: {
     method: "swarm.relay",
     cliVerb: "relay",
@@ -555,9 +557,9 @@ export const SWARM_OPS: Record<string, SwarmOp> = {
       const who = str(params, "who");
       const message = str(params, "message") ?? str(params, "text");
       if (!ref || !who || !message) {
-        throw new Error("swarm.relay needs `taskId`, `who` (a human's channel id) and `message`");
+        throw new Error("swarm.relay needs `taskId`, `who` (a member's channel id) and `message`");
       }
-      return relayHumanReply(engine, {
+      return relayMemberReply(engine, {
         taskId: holonPathKey(parseHolonRef(ref)),
         who,
         text: message,

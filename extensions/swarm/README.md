@@ -102,7 +102,7 @@ openclaw swarm show <holon> --tree [--json]                # the holon plus one 
 
 - `lead` (ARCH §3.4): only the root owner (the operator through the gateway, or the root's
   upstream session) may change a lead; anyone else is refused with who may. `<spec>` is
-  `agent`, `agent:<provider/model>[:<thinking>]`, `human:<channel>:<who>[,<who>]`, or a YAML
+  `agent`, `agent:<provider/model>[:<thinking>]`, `member:<channel>:<who>[,<who>]`, or a YAML
   mapping as in the holon file. The new model is applied to the lead session first (a refused
   model changes nothing), then `holon.yaml` is rewritten, `LEAD_CHANGED` is logged and the lead
   is told.
@@ -119,7 +119,7 @@ openclaw swarm show <holon> --tree [--json]                # the holon plus one 
 - `show` includes the handover timeline from `events.jsonl`: `handovers` (each routed event
   with `seq`, `ts` in unix ms, `event`, `from`, `to`, `sha`, `sinceStartMs`, `sincePrevMs`),
   `startedAt`, `endedAt` (null while open), `durationMs`, and `activeMs` per role (time from a
-  delivery to that role until its next emit). The human output prints it as a table.
+  delivery to that role until its next emit). The plain (non-`--json`) output prints it as a table.
 
 - `show` reports the repo head as the task sha.
 - `answer` is the only operator side channel: it appends an `OPERATOR` event to `events.jsonl`
@@ -178,30 +178,32 @@ upstream stay as they are.
 - `--file` resolves like `start --file`. `swarm list` shows the round (`r2`); `swarm show`
   returns `round` and `rounds` (one handover timeline per round) and prints them grouped.
 
-## Humans over a channel (ARCH §3.3, §8, §10a.3)
+## Members over a channel (ARCH §3.3, §8, §10a.3, §10b)
 
-A holon may have a human lead or human participants:
+A member is whoever is on the other end of a channel: a person or another agent on its own
+gateway. The swarm treats both the same. A holon may have a member lead or member
+participants:
 
 ```yaml
-lead: { kind: human, who: [<channel id>], channel: signal }
+lead: { kind: member, who: [<channel id>], channel: signal }
 participants:
-  - { kind: human, who: [<channel id>], channel: signal, role: review }
+  - { kind: member, who: [<channel id>], channel: signal, role: review }
 canon:
   relay: { model: provider/model } # optional; default the lead model
 ```
 
-- On first need the swarm opens one channel group per holon with humans, named
-  `<root> · <holon id>`, with those humans and the root owner (plugin config
-  `humans.owners.<channel>`). The group id is recorded as `GROUP_OPENED` in the holon's
+- On first need the swarm opens one channel group per holon with members, named
+  `<root> · <holon id>`, with those members and the root owner (plugin config
+  `members.owners.<channel>`). The group id is recorded as `GROUP_OPENED` in the holon's
   events. When the holon is done the group is renamed `… [done]` and left (`GROUP_CLOSED`).
   Agent-only holons never get a group.
-- An event addressed to a human becomes one short plain line in that group: what happened,
+- An event addressed to a member becomes one short plain line in that group: what happened,
   what is needed, the sha.
-- A human's reply goes to the holon's relay session (`<task>:relay`), which turns it into
-  exactly one routed event from that human's role (e.g. `APPROVED`, `RETRY`, `BLOCKED`,
+- A member's reply goes to the holon's relay session (`<task>:relay`), which turns it into
+  exactly one routed event from that member's role (e.g. `APPROVED`, `RETRY`, `BLOCKED`,
   `DONE`) and confirms in one line. Unclear replies get one question (`ASK`), never two. The
   relay has no tool but `swarm_emit`; a relay turn without an emit is re-prompted once, then
-  reported `BLOCKED` with the human's words.
+  reported `BLOCKED` with the member's words.
 - No channel configured or the group cannot be created: everything else runs, and the holon
   reports `BLOCKED: no channel` one level up, once.
 
@@ -209,7 +211,7 @@ canon:
 {
   "swarm": {
     "config": {
-      "humans": {
+      "members": {
         "channels": { "signal": { "accountId": "default" } },
         "owners": { "signal": ["<owner channel id>"] }
       }
@@ -220,9 +222,14 @@ canon:
 
 `fake` is an in-process loopback channel for tests and dry runs; it never leaves the process.
 
+Older input keeps working (ARCH §10b.3): the step-5 spellings of `kind: member`, of the
+`member:` lead spec and of the `members` plugin config are accepted as aliases, and event
+logs written with the step-5 event names are read as `MEMBER_POSTED`, `MEMBER_POST_FAILED`,
+`MEMBER_REPLY` and `MEMBER_IGNORED`. Nothing on disk is migrated; new logs write `MEMBER_*`.
+
 ```bash
 openclaw swarm group open|close <task-id> [--json]           # same op the engine uses
-openclaw swarm relay <task-id> <message> --who <id> [--json] # a human reply, as if in the group
+openclaw swarm relay <task-id> <message> --who <id> [--json] # a member reply, as if in the group
 ```
 
 ## How a task flows

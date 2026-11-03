@@ -1,8 +1,8 @@
-import type { HolonChannel } from "./humans.js";
+import type { HolonChannel } from "./members.js";
 
 // Fake loopback channel (ARCH §10a.4): an in-memory group API for tests and dry runs. It never
 // leaves the process: no daemon, no network, no real group, nobody is messaged. A test plays
-// the humans by calling `reply`, which feeds the same inbound function a real channel's
+// the members by calling `reply`, which feeds the same inbound function a real channel's
 // message hook calls.
 
 export type FakeGroup = {
@@ -73,7 +73,7 @@ export class FakeChannel implements HolonChannel {
     group.closed = true;
   }
 
-  /** A human writes in a group (loopback inbound). */
+  /** A member writes in a group (loopback inbound). */
   async reply(groupId: string, who: string, text: string): Promise<unknown> {
     if (!this.inbound) {
       throw new Error("fake channel has no inbound handler");

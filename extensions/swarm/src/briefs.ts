@@ -75,8 +75,8 @@ export function taskmasterBrief(contract: Contract): string {
             "RETRY (role: X). If told to escalate, call swarm_emit BLOCKED with the reason.",
         ]
       : []),
-    "- On BLOCKED from a worker: resolve it if you can (RETRY with guidance); if a human is " +
-      "needed, call swarm_emit BLOCKED.",
+    "- On BLOCKED from a worker: resolve it if you can (RETRY with guidance); if someone above " +
+      "you is needed, call swarm_emit BLOCKED.",
     "- On OPERATOR: that is the operator answering; act on it.",
     `Events you may emit upstream: ${upstreamEvents.join(", ")}.`,
     REPEAT_RULE,

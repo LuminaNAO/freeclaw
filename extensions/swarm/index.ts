@@ -13,11 +13,16 @@ import { SwarmEngine } from "./src/engine.js";
 import { FakeChannel } from "./src/fake-channel.js";
 import { resolveGroupAdapter } from "./src/group.js";
 import { createSwarmHooks } from "./src/hooks.js";
-import { HumanChannels, type HolonChannel } from "./src/humans.js";
 import { createSwarmHolonToolFactory, SWARM_HOLON_TOOL } from "./src/lead-tool.js";
+import {
+  memberConfigOf,
+  type LegacyMemberConfig,
+  type MemberPluginConfig,
+} from "./src/member-aliases.js";
+import { MemberChannels, type HolonChannel } from "./src/members.js";
 import { createSwarmMethods } from "./src/methods.js";
 import { readOffline } from "./src/offline.js";
-import { attachRelay, relayHumanReply } from "./src/relay.js";
+import { attachRelay, relayMemberReply } from "./src/relay.js";
 import { resumeOpenTasks } from "./src/resume.js";
 import { createSignalHolonChannel } from "./src/signal-channel.js";
 import { createRuntimeChannelSender } from "./src/upstream.js";
@@ -35,19 +40,16 @@ type SwarmPluginConfig = {
   budget?: { wall?: string; step_silence?: string };
   group?: { kind?: string };
   /**
-   * ARCH §3.3, §8, §10a.3: channels that carry holon groups for humans, and the root owner's
-   * ids per channel (a member of every holon group). Nothing here → humans are unreachable and
+   * ARCH §3.3, §8, §10a.3, §10b: channels that carry holon groups for members, and the root
+   * owner's ids per channel (in every holon group). Nothing here → members are unreachable and
    * their holons escalate `BLOCKED: no channel`.
    */
-  humans?: {
-    channels?: Record<string, { accountId?: string }>;
-    owners?: Record<string, string[]>;
-  };
-};
+  members?: MemberPluginConfig;
+} & LegacyMemberConfig;
 
 /** Group APIs for the configured channel kinds. `fake` is the in-process loopback (§10a.4). */
 export function holonChannelsFrom(
-  cfg: SwarmPluginConfig["humans"],
+  cfg: SwarmPluginConfig["members"],
   gatewayConfig: unknown,
 ): Record<string, HolonChannel> {
   const out: Record<string, HolonChannel> = {};
@@ -101,8 +103,9 @@ export default function register(api: OpenClawPluginApi) {
 
   const hooks = createSwarmHooks(getEngine);
   api.on("llm_input", hooks.onLlmInput);
-  // ARCH §10a.3: human replies in holon groups reach the relay; the relay has only swarm_emit.
-  if (Object.keys(cfg.humans?.channels ?? {}).length > 0) {
+  const memberCfg = memberConfigOf(cfg);
+  // ARCH §10a.3: member replies in holon groups reach the relay; the relay has only swarm_emit.
+  if (Object.keys(memberCfg?.channels ?? {}).length > 0) {
     api.on("message_received", hooks.onMessageReceived);
     api.on("message_sending", hooks.onMessageSending);
     api.on("before_tool_call", hooks.onBeforeToolCall);
@@ -136,17 +139,17 @@ export default function register(api: OpenClawPluginApi) {
         logger: api.logger,
         channelSender: createRuntimeChannelSender(api.runtime.channel),
         group: resolveGroupAdapter(cfg.group?.kind),
-        humans: new HumanChannels({
-          channels: holonChannelsFrom(cfg.humans, api.config),
-          owners: cfg.humans?.owners,
+        memberChannels: new MemberChannels({
+          channels: holonChannelsFrom(memberCfg, api.config),
+          owners: memberCfg?.owners,
         }),
       });
       hooks.attach(engine);
       attachRelay(engine);
       const current = engine;
-      for (const channel of current.humans.channels.values()) {
+      for (const channel of current.memberChannels.channels.values()) {
         if (channel instanceof FakeChannel) {
-          channel.inbound = (msg) => relayHumanReply(current, msg);
+          channel.inbound = (msg) => relayMemberReply(current, msg);
         }
       }
       const summary = await resumeOpenTasks(engine);

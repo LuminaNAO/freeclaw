@@ -55,6 +55,43 @@
           "kind": { "type": "string", "enum": ["none"] }
         }
       },
+      "members": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "channels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "accountId": { "type": "string" } }
+            }
+          },
+          "owners": {
+            "type": "object",
+            "additionalProperties": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      },
+      "humans": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Alias of members (ARCH §10b.3).",
+        "properties": {
+          "channels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "accountId": { "type": "string" } }
+            }
+          },
+          "owners": {
+            "type": "object",
+            "additionalProperties": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      },
       "budget": {
         "type": "object",
         "additionalProperties": false,

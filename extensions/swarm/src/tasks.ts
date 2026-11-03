@@ -556,13 +556,13 @@ async function cancelOne(
     engine.close(taskId, "cancelled");
     const rec = engine.record(taskId, { kind: "system", event: "CANCELLED", body: reason });
     const members = state.holon.lanes.flatMap((l) => targetMembers(state.holon, l.role));
-    // ARCH §10a.3: the relay is stopped (no run of its own to brief); humans get the line.
+    // ARCH §10a.3: the relay is stopped (no run of its own to brief); members get the line.
     const relayKey = engine.sessionKey(taskId, RELAY_ROLE);
     if (engine.mailbox.isBusy(relayKey)) {
       await engine.runtime.subagent.abortSession?.({ sessionKey: relayKey });
     }
-    const humanRoles = state.holon.participants.map((p) => p.role);
-    for (const role of [TASKMASTER, ...members, ...humanRoles]) {
+    const participantRoles = state.holon.participants.map((p) => p.role);
+    for (const role of [TASKMASTER, ...members, ...participantRoles]) {
       await engine.sendTo(taskId, state, {
         to: role,
         from: UPSTREAM,

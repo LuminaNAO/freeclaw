@@ -11,7 +11,7 @@ import type { RunEnd } from "./delivery.js";
 import { SWARM_EMIT_TOOL } from "./emit.js";
 import { lastInputSeqFor, type SwarmEngine, type TaskState } from "./engine.js";
 import { RELAY_ROLE } from "./holon.js";
-import { onRelayRunEnd, relayHumanReply, relayModelOf } from "./relay.js";
+import { onRelayRunEnd, relayMemberReply, relayModelOf } from "./relay.js";
 import { TASKMASTER } from "./routing.js";
 import { isSwarmSessionKey, laneRoleOf, parseSwarmSessionKey } from "./sessions.js";
 import type { SwarmEvent } from "./store.js";
@@ -277,7 +277,7 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
   }
 
   /**
-   * ARCH §3.3: a message in a channel group. When the group is a holon's group, the human's
+   * ARCH §3.3: a message in a channel group. When the group is a holon's group, the member's
    * reply goes to that holon's relay; any other message is none of the swarm's business.
    */
   async function onMessageReceived(
@@ -286,32 +286,32 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
   ) {
     const engine = getEngine();
     const conversation = ctx.conversationId ?? "";
-    if (!engine || engine.humans.channels.size === 0 || !conversation) {
+    if (!engine || engine.memberChannels.channels.size === 0 || !conversation) {
       return;
     }
     const channel = (ctx.channelId ?? "").toLowerCase();
-    if (!engine.humans.channels.has(channel)) {
+    if (!engine.memberChannels.channels.has(channel)) {
       return;
     }
     const groupId = conversation.replace(/^group:/i, "");
     const meta = event.metadata ?? {};
     const who = typeof meta.senderId === "string" && meta.senderId ? meta.senderId : event.from;
-    await relayHumanReply(engine, { channel, groupId, who, text: event.content ?? "" });
+    await relayMemberReply(engine, { channel, groupId, who, text: event.content ?? "" });
   }
 
   /**
    * ARCH §3.3, §8.1: a holon's group carries only the swarm's lines (posted through the
-   * channel's group API, not this path) and the humans' replies. An ordinary agent reply into
+   * channel's group API, not this path) and the members' replies. An ordinary agent reply into
    * an open holon group would bypass the relay, so it is cancelled.
    */
   function onMessageSending(event: PluginHookMessageSendingEvent, ctx: PluginHookMessageContext) {
     const engine = getEngine();
     const channel = (ctx.channelId ?? "").toLowerCase();
-    if (!engine || !engine.humans.channels.has(channel)) {
+    if (!engine || !engine.memberChannels.channels.has(channel)) {
       return undefined;
     }
     const groupId = (event.to ?? "").replace(/^[a-z]+:(?=group:)/i, "").replace(/^group:/i, "");
-    if (!groupId || !engine.humans.findHolonByGroup(engine, channel, groupId)) {
+    if (!groupId || !engine.memberChannels.findHolonByGroup(engine, channel, groupId)) {
       return undefined;
     }
     return { cancel: true };

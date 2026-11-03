@@ -6,21 +6,21 @@ import {
   type SwarmEngine,
   type TaskState,
 } from "./engine.js";
-import { humansOf, RELAY_ROLE, type Holon } from "./holon.js";
-import { HUMAN_POSTED, openGroupOf } from "./humans.js";
+import { membersOf, RELAY_ROLE, type Holon } from "./holon.js";
+import { MEMBER_POST_FAILED, MEMBER_POSTED, openGroupOf } from "./members.js";
 import { ROLE_PLACEHOLDER, resolveRoute, TASKMASTER } from "./routing.js";
 import type { SwarmEvent } from "./store.js";
 
-// The relay (ARCH §3.3, §10a.3): one small session per holon with humans. It reads each human
+// The relay (ARCH §3.3, §10a.3): one small session per holon with members. It reads each member
 // reply in the holon's group and emits exactly one routed event for it, then confirms back in
 // one line what it understood. Unclear → it asks once. It never decides on its own and has no
 // tools except swarm_emit (the confirmation and the question are the emit's body, posted to
 // the group by the engine). Every frontend (the channel's inbound hook, the fake channel, the
-// `swarm relay` CLI verb) calls `relayHumanReply`; the relay session's swarm_emit calls
+// `swarm relay` CLI verb) calls `relayMemberReply`; the relay session's swarm_emit calls
 // `relayEmit`.
 
-export const HUMAN_REPLY = "HUMAN_REPLY";
-export const HUMAN_IGNORED = "HUMAN_IGNORED";
+export const MEMBER_REPLY = "MEMBER_REPLY";
+export const MEMBER_IGNORED = "MEMBER_IGNORED";
 export const RELAY_ROUTED = "RELAY_ROUTED";
 export const RELAY_ASKED = "RELAY_ASKED";
 export const RELAY_REFUSED = "RELAY_REFUSED";
@@ -43,13 +43,13 @@ export function relayModelOf(holon: Pick<Holon, "canon" | "lead">): {
   };
 }
 
-/** Human replies the relay has not answered yet, oldest first. */
+/** Member replies the relay has not answered yet, oldest first. */
 export function pendingReplies(events: SwarmEvent[]): SwarmEvent[] {
   const lastAction = events.findLast(
     (e) => e.kind === "system" && (e.event === RELAY_ROUTED || e.event === RELAY_ASKED),
   );
   return events.filter(
-    (e) => e.kind === "system" && e.event === HUMAN_REPLY && e.seq > (lastAction?.seq ?? 0),
+    (e) => e.kind === "system" && e.event === MEMBER_REPLY && e.seq > (lastAction?.seq ?? 0),
   );
 }
 
@@ -61,12 +61,12 @@ function askedLast(events: SwarmEvent[]): boolean {
   return lastAction?.event === RELAY_ASKED;
 }
 
-/** The last line the swarm posted to a human role: what the human is answering. */
+/** The last line the swarm posted to a member role: what the member is answering. */
 function lastPostTo(events: SwarmEvent[], role: string): SwarmEvent | undefined {
-  return events.findLast((e) => e.kind === "send" && e.event === HUMAN_POSTED && e.to === role);
+  return events.findLast((e) => e.kind === "send" && e.event === MEMBER_POSTED && e.to === role);
 }
 
-/** The events a human role may speak, from the holon's routes (for the relay brief). */
+/** The events a member role may speak, from the holon's routes (for the relay brief). */
 export function eventsForRole(holon: Pick<Holon, "contract">, role: string): string[] {
   return [
     ...new Set(
@@ -76,44 +76,47 @@ export function eventsForRole(holon: Pick<Holon, "contract">, role: string): str
 }
 
 export function relayBrief(holon: Pick<Holon, "contract" | "lead" | "participants">): string {
-  const humans = humansOf(holon)
-    .map((h) => {
-      const as = h.role === TASKMASTER ? "the lead" : `the ${h.role} participant`;
-      return `- ${as} (role ${h.role}) may say: ${eventsForRole(holon, h.role).join(", ") || "BLOCKED"}`;
+  const members = membersOf(holon)
+    .map((m) => {
+      const as = m.role === TASKMASTER ? "the lead" : `the ${m.role} participant`;
+      return `- ${as} (role ${m.role}) may say: ${eventsForRole(holon, m.role).join(", ") || "BLOCKED"}`;
     })
     .join("\n");
   return [
-    `You are the relay of swarm holon ${holon.contract.id}. Humans answer the holon in plain chat;`,
+    `You are the relay of swarm holon ${holon.contract.id}. Members answer the holon in plain chat;`,
     "you turn each reply into exactly one swarm event. You never decide anything yourself.",
+    "A member may be a person or another agent; treat every member the same way.",
     `Goal of the holon: ${holon.contract.input}`,
-    "Humans in this holon:",
-    humans,
-    "For every message (it shows the line the human was answering and their reply):",
+    "Members in this holon:",
+    members,
+    "For every message (it shows the line the member was answering and their reply):",
     "- If the reply clearly means one of the events above, call swarm_emit once with that",
     "  event, the sha from the message, and as body ONE short line saying what you understood",
     '  (e.g. "Approved the plan; build goes on."). For APPROVED or RETRY set `role` to the',
     "  role being answered (shown in the message) when it is not obvious.",
     `- If it is unclear, call swarm_emit once with event ${ASK} and as body ONE short question.`,
     "  You may ask only once; after an answer to your question, pick the closest event, or",
-    "  BLOCKED with the human's words.",
-    "- Never invent an instruction the human did not give. Never call any other tool.",
+    "  BLOCKED with the member's words.",
+    "- Never invent an instruction the member did not give. Never call any other tool.",
     "End EVERY turn with exactly one swarm_emit.",
   ].join("\n");
 }
 
 /**
- * A human wrote in a holon's group (ARCH §3.3). The reply is logged and handed to the relay
+ * A member wrote in a holon's group (ARCH §3.3). The reply is logged and handed to the relay
  * session (queued behind its current turn, principle 4). Messages from people who are not a
- * human of the holon are logged as ignored and never reach the relay.
+ * member of the holon are logged as ignored and never reach the relay.
  */
-export async function relayHumanReply(
+export async function relayMemberReply(
   engine: SwarmEngine,
   msg:
     | { channel: string; groupId: string; who: string; text: string }
     | { taskId: string; who: string; text: string },
 ): Promise<RelayReplyResult> {
   const taskId =
-    "taskId" in msg ? msg.taskId : engine.humans.findHolonByGroup(engine, msg.channel, msg.groupId);
+    "taskId" in msg
+      ? msg.taskId
+      : engine.memberChannels.findHolonByGroup(engine, msg.channel, msg.groupId);
   if (!taskId) {
     return { ok: false, reason: "not a swarm group" };
   }
@@ -126,18 +129,18 @@ export async function relayHumanReply(
     if (state.status !== "open") {
       return { ok: false, reason: `holon ${taskId} is ${state.status}` };
     }
-    const role = engine.humans.rolesOf(state.holon, msg.who)[0];
+    const role = engine.memberChannels.rolesOf(state.holon, msg.who)[0];
     if (!role || !text) {
       engine.record(taskId, {
         kind: "system",
-        event: HUMAN_IGNORED,
-        data: { reason: role ? "empty" : "not a human of this holon" },
+        event: MEMBER_IGNORED,
+        data: { reason: role ? "empty" : "not a member of this holon" },
       });
-      return { ok: false, reason: role ? "empty message" : "sender is not a human of this holon" };
+      return { ok: false, reason: role ? "empty message" : "sender is not a member of this holon" };
     }
     const rec = engine.record(taskId, {
       kind: "system",
-      event: HUMAN_REPLY,
+      event: MEMBER_REPLY,
       from: role,
       to: RELAY_ROLE,
       sha: state.sha,
@@ -148,7 +151,7 @@ export async function relayHumanReply(
     const result = await engine.sendTo(taskId, state, {
       to: RELAY_ROLE,
       from: role,
-      event: HUMAN_REPLY,
+      event: MEMBER_REPLY,
       sha: state.sha,
       body: [
         `Speaker: ${role === TASKMASTER ? "the lead" : role} (role ${role})`,
@@ -157,7 +160,7 @@ export async function relayHumanReply(
               `Answering: ${answering.body ?? ""}`,
               `That line came from role ${String(answering.data?.from ?? "?")}.`,
             ]
-          : ["Answering: nothing yet (the human wrote first)"]),
+          : ["Answering: nothing yet (the member wrote first)"]),
         `Reply: ${text}`,
         ...(askedLast(state.events) ? ["You already asked once: do not ask again."] : []),
       ].join("\n"),
@@ -211,9 +214,9 @@ async function applyRelayModel(engine: SwarmEngine, taskId: string, state: TaskS
 }
 
 /**
- * The relay session called swarm_emit (ARCH §10a.3). Exactly one routed event per human
+ * The relay session called swarm_emit (ARCH §10a.3). Exactly one routed event per member
  * reply: an emit with no unanswered reply is refused; ASK is posted to the group (once); any
- * other event is routed as the human's own (from the human's role), and the relay's one-line
+ * other event is routed as the member's own (from the member's role), and the relay's one-line
  * confirmation goes back to the group.
  */
 export async function relayEmit(
@@ -250,11 +253,11 @@ export async function relayEmit(
         kind: "system",
         event: RELAY_REFUSED,
         from: RELAY_ROLE,
-        data: { event, reason: "no unanswered human reply" },
+        data: { event, reason: "no unanswered member reply" },
       });
       return {
         ok: false,
-        error: "refused: every human reply already has its one event; wait for the next reply",
+        error: "refused: every member reply already has its one event; wait for the next reply",
       };
     }
     const role = reply.from;
@@ -265,7 +268,7 @@ export async function relayEmit(
         return {
           ok: false,
           error:
-            "refused: you already asked once; emit the closest event, or BLOCKED with the human's words",
+            "refused: you already asked once; emit the closest event, or BLOCKED with the member's words",
         };
       }
       const rec = engine.record(taskId, {
@@ -277,7 +280,7 @@ export async function relayEmit(
         data: { reply: reply.seq },
       });
       if (group) {
-        await engine.humans.postLine(engine, taskId, group, role, `Question: ${confirm}`, {
+        await engine.memberChannels.postLine(engine, taskId, group, role, `Question: ${confirm}`, {
           seqs: [rec.seq],
           event: ASK,
           from: RELAY_ROLE,
@@ -285,7 +288,7 @@ export async function relayEmit(
       }
       return { ok: true, seq: rec.seq, routedTo: role, notice: "question posted to the group" };
     }
-    // APPROVED / RETRY answer the role whose line the human was answering, unless named.
+    // APPROVED / RETRY answer the role whose line the member was answering, unless named.
     let target = input.role;
     const route = resolveRoute(state.contract.routes, { event, from: role });
     if (!target && route?.to === ROLE_PLACEHOLDER) {
@@ -304,13 +307,13 @@ export async function relayEmit(
       data: { reply: reply.seq, event },
     });
     if (group && confirm) {
-      await engine.humans.postLine(engine, taskId, group, role, `Understood: ${confirm}`, {
+      await engine.memberChannels.postLine(engine, taskId, group, role, `Understood: ${confirm}`, {
         seqs: [marker.seq],
         event,
         from: RELAY_ROLE,
       });
     }
-    const result = await engine.emitAsHuman(taskId, role, {
+    const result = await engine.emitAsMember(taskId, role, {
       event,
       sha: input.sha || state.sha,
       body: `${words}\n(relay: ${confirm})`.trim(),
@@ -326,7 +329,7 @@ export async function relayEmit(
       });
       engine.record(taskId, {
         kind: "system",
-        event: HUMAN_REPLY,
+        event: MEMBER_REPLY,
         from: role,
         to: RELAY_ROLE,
         sha: reply.sha,
@@ -349,8 +352,8 @@ function firstLine(text: string): string {
 
 /**
  * Exit enforcement for the relay (ARCH §6.3): a relay turn that ends with a reply still
- * unanswered is re-prompted once; a second silent turn reports BLOCKED from the human's role
- * with the human's own words, so nothing goes quiet.
+ * unanswered is re-prompted once; a second silent turn reports BLOCKED from the member's role
+ * with the member's own words, so nothing goes quiet.
  */
 export async function onRelayRunEnd(engine: SwarmEngine, taskId: string, end: RunEnd) {
   if (end.status === "aborted") {
@@ -387,7 +390,7 @@ export async function onRelayRunEnd(engine: SwarmEngine, taskId: string, end: Ru
         event: "RETRY",
         sha: state.sha,
         body:
-          "Your turn ended without swarm_emit. Turn the human's reply into exactly one event " +
+          "Your turn ended without swarm_emit. Turn the member's reply into exactly one event " +
           `(or ${ASK} once), now.\nReply: ${pending.map((p) => p.body ?? "").join("\n")}`,
         seqs: [reply.seq],
         salt: `relay-retry-${reply.seq}`,
@@ -403,10 +406,10 @@ export async function onRelayRunEnd(engine: SwarmEngine, taskId: string, end: Ru
       to: reply.from,
       data: { reply: reply.seq, event: "BLOCKED", escalated: true },
     });
-    const body = `the relay could not turn a human reply into an event; the human said: ${words}`;
+    const body = `the relay could not turn a member reply into an event; the member said: ${words}`;
     const route = resolveRoute(state.contract.routes, { event: "BLOCKED", from: reply.from });
     if (route) {
-      await engine.emitAsHuman(taskId, reply.from, { event: "BLOCKED", sha: state.sha, body });
+      await engine.emitAsMember(taskId, reply.from, { event: "BLOCKED", sha: state.sha, body });
     } else {
       await engine.notify(taskId, state, { event: "BLOCKED", body });
     }
@@ -414,26 +417,26 @@ export async function onRelayRunEnd(engine: SwarmEngine, taskId: string, end: Ru
 }
 
 /**
- * Resume (ARCH §7) for the human side of a holon: lines that could not be posted are posted
- * again, and a human reply left unanswered with nothing queued for the relay goes to it again.
+ * Resume (ARCH §7) for the member side of a holon: lines that could not be posted are posted
+ * again, and a member reply left unanswered with nothing queued for the relay goes to it again.
  */
-export async function resumeHumans(
+export async function resumeMembers(
   engine: SwarmEngine,
   taskId: string,
 ): Promise<{ reposted: number; relayed: number }> {
   const out = { reposted: 0, relayed: 0 };
   const state = engine.loadState(taskId);
-  if (state.status !== "open" || humansOf(state.holon).length === 0) {
+  if (state.status !== "open" || membersOf(state.holon).length === 0) {
     return out;
   }
   const posted = new Set(
     state.events
-      .filter((e) => e.kind === "send" && e.event === HUMAN_POSTED)
+      .filter((e) => e.kind === "send" && e.event === MEMBER_POSTED)
       .map((e) => `${e.to}|${JSON.stringify(e.data?.seqs ?? [])}`),
   );
   const failed = new Map<string, SwarmEvent>();
   for (const e of state.events) {
-    if (e.kind === "send" && e.event === "HUMAN_POST_FAILED") {
+    if (e.kind === "send" && e.event === MEMBER_POST_FAILED) {
       const key = `${e.to}|${JSON.stringify(e.data?.seqs ?? [])}`;
       if (!posted.has(key)) {
         failed.set(key, e);
@@ -442,11 +445,11 @@ export async function resumeHumans(
   }
   for (const e of failed.values()) {
     const seqs = Array.isArray(e.data?.seqs) ? (e.data.seqs as number[]) : [];
-    const group = await engine.humans.ensureGroup(engine, taskId, state);
+    const group = await engine.memberChannels.ensureGroup(engine, taskId, state);
     if (!group.ok || !e.to) {
       break;
     }
-    const res = await engine.humans.postLine(engine, taskId, group, e.to, e.body ?? "", {
+    const res = await engine.memberChannels.postLine(engine, taskId, group, e.to, e.body ?? "", {
       seqs,
       event: String(e.data?.event ?? "RESEND"),
       from: String(e.data?.from ?? "swarm"),
@@ -463,7 +466,7 @@ export async function resumeHumans(
     const result = await engine.sendTo(taskId, state, {
       to: RELAY_ROLE,
       from: reply.from,
-      event: HUMAN_REPLY,
+      event: MEMBER_REPLY,
       sha: state.sha,
       body: [
         "[gateway restarted before you answered this reply]",
