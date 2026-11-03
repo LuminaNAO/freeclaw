@@ -122,6 +122,15 @@ describe("sessions tools", () => {
               displayName: "discord:g-dev",
             },
             {
+              key: "agent:main:subagent:5b6f3f0e-aaaa-4bbb-8ccc-0123456789ab",
+              kind: "other",
+              sessionId: "s-sub",
+              updatedAt: 12,
+              spawnedBy: "agent:main:main",
+              label: "audit-pass",
+              displayName: "Ops Room › audit-pass",
+            },
+            {
               key: "cron:job-1",
               kind: "direct",
               sessionId: "s-cron",
@@ -157,10 +166,15 @@ describe("sessions tools", () => {
       sessions?: Array<{
         key?: string;
         channel?: string;
+        displayName?: string;
         messages?: Array<{ role?: string }>;
       }>;
     };
-    expect(details.sessions).toHaveLength(3);
+    expect(details.sessions).toHaveLength(4);
+    // ARCH subagent-session-names §3: the list shows the name from the entry.
+    expect(details.sessions?.find((s) => s.key?.includes(":subagent:"))?.displayName).toBe(
+      "Ops Room › audit-pass",
+    );
     const main = details.sessions?.find((s) => s.key === "main");
     expect(main?.channel).toBe("whatsapp");
     expect(main?.messages?.length).toBe(1);

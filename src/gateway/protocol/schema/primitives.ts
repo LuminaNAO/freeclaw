@@ -6,7 +6,10 @@ import {
   SECRET_PROVIDER_ALIAS_PATTERN,
 } from "../../../secrets/ref-contract.js";
 import { INPUT_PROVENANCE_KIND_VALUES } from "../../../sessions/input-provenance.js";
-import { SESSION_LABEL_MAX_LENGTH } from "../../../sessions/session-label.js";
+import {
+  SESSION_DISPLAY_NAME_MAX_LENGTH,
+  SESSION_LABEL_MAX_LENGTH,
+} from "../../../sessions/session-label.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 
 export const NonEmptyString = Type.String({ minLength: 1 });
@@ -18,6 +21,10 @@ export const ChatSendSessionKeyString = Type.String({
 export const SessionLabelString = Type.String({
   minLength: 1,
   maxLength: SESSION_LABEL_MAX_LENGTH,
+});
+export const SessionDisplayNameString = Type.String({
+  minLength: 1,
+  maxLength: SESSION_DISPLAY_NAME_MAX_LENGTH,
 });
 export const InputProvenanceSchema = Type.Object(
   {

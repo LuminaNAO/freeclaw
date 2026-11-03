@@ -1,4 +1,5 @@
 export const SESSION_LABEL_MAX_LENGTH = 64;
+export const SESSION_DISPLAY_NAME_MAX_LENGTH = 128;
 
 export type ParsedSessionLabel = { ok: true; label: string } | { ok: false; error: string };
 

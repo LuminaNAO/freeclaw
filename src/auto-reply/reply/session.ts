@@ -34,7 +34,7 @@ import { resolveConversationIdFromTargets } from "../../infra/outbound/conversat
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import { isSubagentSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { pickQuietSessionSettings } from "../../sessions/quiet-settings.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -457,7 +457,8 @@ export async function initSessionState(params: {
     sessionEntry.chatType = "direct";
   }
   const threadLabel = ctx.ThreadLabel?.trim();
-  if (threadLabel) {
+  // ARCH §2: a spawned session keeps the name given at spawn.
+  if (threadLabel && !(isSubagentSessionKey(sessionKey) && sessionEntry.displayName?.trim())) {
     sessionEntry.displayName = threadLabel;
   }
   const parentSessionKey = ctx.ParentSessionKey?.trim();

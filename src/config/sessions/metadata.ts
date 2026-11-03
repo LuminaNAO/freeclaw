@@ -3,6 +3,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
@@ -135,14 +136,19 @@ export function deriveGroupSessionPatch(params: {
     patch.space = space;
   }
 
-  const displayName = buildGroupDisplayName({
-    provider: channel,
-    subject: nextSubject ?? params.existing?.subject,
-    groupChannel: nextGroupChannel ?? params.existing?.groupChannel,
-    space: space ?? params.existing?.space,
-    id: resolution.id,
-    key: params.sessionKey,
-  });
+  // ARCH §2: a spawned session keeps the name given at spawn.
+  const keepSpawnName =
+    isSubagentSessionKey(params.sessionKey) && Boolean(params.existing?.displayName?.trim());
+  const displayName = keepSpawnName
+    ? undefined
+    : buildGroupDisplayName({
+        provider: channel,
+        subject: nextSubject ?? params.existing?.subject,
+        groupChannel: nextGroupChannel ?? params.existing?.groupChannel,
+        space: space ?? params.existing?.space,
+        id: resolution.id,
+        key: params.sessionKey,
+      });
   if (displayName) {
     patch.displayName = displayName;
   }
