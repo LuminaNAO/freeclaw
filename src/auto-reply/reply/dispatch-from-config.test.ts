@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -61,8 +64,9 @@ const ttsMocks = vi.hoisted(() => {
       ) {
         return {
           ...params.payload,
-          // Like the real implementation: already-delivered text becomes the spoken transcript.
-          ...(params.textDelivered ? { textIsTranscript: true } : {}),
+          // Like the real implementation: already-delivered text is not repeated as a caption
+          // (voice ARCH §5.3).
+          ...(params.textDelivered ? { text: undefined } : {}),
           mediaUrl: "https://example.com/tts-synth.opus",
           audioAsVoice: true,
         };
@@ -73,6 +77,12 @@ const ttsMocks = vi.hoisted(() => {
       typeof value === "string" ? value : undefined,
     ),
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+    shouldTtsDisableBlockStreaming: vi.fn(
+      (params: { cfg: OpenClawConfig; sessionAuto?: string; inboundAudio?: boolean }) => {
+        const auto = params.sessionAuto ?? params.cfg.messages?.tts?.auto ?? "off";
+        return auto === "always" || (auto === "inbound" && params.inboundAudio === true);
+      },
+    ),
   };
 });
 
@@ -146,6 +156,11 @@ vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+  shouldTtsDisableBlockStreaming: (params: {
+    cfg: OpenClawConfig;
+    sessionAuto?: string;
+    inboundAudio?: boolean;
+  }) => ttsMocks.shouldTtsDisableBlockStreaming(params),
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
@@ -235,6 +250,7 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
     ttsMocks.resolveTtsConfig.mockClear();
+    ttsMocks.shouldTtsDisableBlockStreaming.mockClear();
     ttsMocks.resolveTtsConfig.mockReturnValue({
       mode: "final",
     });
@@ -525,7 +541,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(sent[1]?.text).toBeUndefined();
   });
 
-  it("sends block-streamed TTS audio with the block text as its transcript (voice ARCH §2.1)", async () => {
+  it("sends block-streamed TTS audio with no caption after the streamed text (voice ARCH §5.3)", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
     const dispatcher = createDispatcher();
@@ -542,13 +558,158 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "final", textDelivered: true }),
+    );
     const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as ReplyPayload | undefined;
-    expect(finalPayload).toMatchObject({
-      text: "Streamed answer.",
-      textIsTranscript: true,
+    expect(finalPayload).toEqual({
       mediaUrl: "https://example.com/tts-synth.opus",
       audioAsVoice: true,
+    });
+    expect(finalPayload?.text).toBeUndefined();
+  });
+
+  describe("voice replies switch off block streaming (voice ARCH §5)", () => {
+    const sessionKey = "agent:main:signal:group:voice-test";
+
+    // Session store on disk with the given ttsAuto, so the real session lookup feeds the rule.
+    const withSessionTtsAuto = async (
+      ttsAuto: string | undefined,
+      run: (cfg: OpenClawConfig) => Promise<void>,
+    ) => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "voice-stream-"));
+      try {
+        const storePath = path.join(root, "sessions.json");
+        writeFileSync(
+          storePath,
+          JSON.stringify({
+            [sessionKey]: {
+              sessionId: "s-1",
+              updatedAt: Date.now(),
+              ...(ttsAuto ? { ttsAuto } : {}),
+            },
+          }),
+          "utf8",
+        );
+        await run({ session: { store: storePath } } as OpenClawConfig);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    };
+
+    // Behaves like the real resolver: streams blocks unless block streaming is disabled, in
+    // which case the whole reply is the final payload.
+    const streamingResolver = (seen: Array<GetReplyOptions | undefined>) => {
+      return async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        seen.push(opts);
+        if (opts?.disableBlockStreaming === true) {
+          return { text: "The whole answer." } satisfies ReplyPayload;
+        }
+        await opts?.onBlockReply?.({ text: "The whole answer." });
+        return undefined;
+      };
+    };
+
+    const run = async (params: {
+      ttsAuto?: string;
+      inboundAudio?: boolean;
+      callerDisableBlockStreaming?: boolean;
+    }) => {
+      setNoAbort();
+      ttsMocks.state.synthesizeFinalAudio = true;
+      const dispatcher = createDispatcher();
+      const seen: Array<GetReplyOptions | undefined> = [];
+      await withSessionTtsAuto(params.ttsAuto, async (cfg) => {
+        const ctx = buildTestCtx({
+          Provider: "signal",
+          Surface: "signal",
+          ChatType: "group",
+          SessionKey: sessionKey,
+          ...(params.inboundAudio
+            ? { MediaType: "audio/ogg", MediaPath: "/tmp/in.ogg", Body: "<media:audio>" }
+            : { Body: "hello" }),
+        });
+        await dispatchReplyFromConfig({
+          ctx,
+          cfg,
+          dispatcher,
+          replyResolver: streamingResolver(seen),
+          ...(params.callerDisableBlockStreaming !== undefined
+            ? { replyOptions: { disableBlockStreaming: params.callerDisableBlockStreaming } }
+            : {}),
+        });
+      });
+      const finals = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls.map(
+        (call) => call[0] as ReplyPayload,
+      );
+      const blocks = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls.map(
+        (call) => call[0] as ReplyPayload,
+      );
+      return { opts: seen[0], finals, blocks };
+    };
+
+    it("ttsAuto=always with streaming on by default: one payload (audio + transcript), no blocks", async () => {
+      const { opts, finals, blocks } = await run({ ttsAuto: "always" });
+
+      expect(opts?.disableBlockStreaming).toBe(true);
+      expect(blocks).toHaveLength(0);
+      expect(finals).toHaveLength(1);
+      expect(finals[0]).toMatchObject({
+        text: "The whole answer.",
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+      });
+    });
+
+    it("always: an explicit caller disableBlockStreaming=false does not override it", async () => {
+      const { opts, finals, blocks } = await run({
+        ttsAuto: "always",
+        callerDisableBlockStreaming: false,
+      });
+
+      expect(opts?.disableBlockStreaming).toBe(true);
+      expect(blocks).toHaveLength(0);
+      expect(finals).toHaveLength(1);
+    });
+
+    it("inbound with inbound audio: streaming off, one payload", async () => {
+      const { opts, finals, blocks } = await run({ ttsAuto: "inbound", inboundAudio: true });
+
+      expect(opts?.disableBlockStreaming).toBe(true);
+      expect(blocks).toHaveLength(0);
+      expect(finals).toHaveLength(1);
+      expect(finals[0]?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    });
+
+    it("inbound without inbound audio: streaming unchanged", async () => {
+      const { opts, blocks } = await run({ ttsAuto: "inbound", inboundAudio: false });
+
+      expect(opts?.disableBlockStreaming).toBeUndefined();
+      expect(blocks).toHaveLength(1);
+    });
+
+    it.each(["tagged", "off"])("%s: streaming unchanged", async (ttsAuto) => {
+      const { opts, blocks } = await run({ ttsAuto });
+
+      expect(opts?.disableBlockStreaming).toBeUndefined();
+      expect(blocks).toHaveLength(1);
+    });
+
+    it("tagged/off keep an explicit caller choice", async () => {
+      const off = await run({ ttsAuto: "off", callerDisableBlockStreaming: false });
+      expect(off.opts?.disableBlockStreaming).toBe(false);
+      const tagged = await run({ ttsAuto: "tagged", callerDisableBlockStreaming: true });
+      expect(tagged.opts?.disableBlockStreaming).toBe(true);
+    });
+
+    it("decides once per turn from the session ttsAuto", async () => {
+      await run({ ttsAuto: "always" });
+
+      expect(ttsMocks.shouldTtsDisableBlockStreaming).toHaveBeenCalledTimes(1);
+      expect(ttsMocks.shouldTtsDisableBlockStreaming).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionAuto: "always", inboundAudio: false }),
+      );
     });
   });
 
@@ -1449,9 +1610,9 @@ describe("dispatchReplyFromConfig", () => {
     const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
-    // voice ARCH §2.1: the audio carries its transcript as the body.
-    expect(finalPayload?.text).toBe("Hello from ACP streaming.");
-    expect(finalPayload?.textIsTranscript).toBe(true);
+    // voice ARCH §5.3: the text was streamed above; the audio goes out with no caption.
+    expect(finalPayload?.text).toBeUndefined();
+    expect(finalPayload?.textIsTranscript).toBeUndefined();
     expect(finalPayload?.audioAsVoice).toBe(true);
   });
 

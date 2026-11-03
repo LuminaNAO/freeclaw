@@ -78,6 +78,7 @@ const {
   getTtsProvider,
   setTtsProvider,
   isTtsProviderConfigured,
+  shouldTtsDisableBlockStreaming,
 } = tts;
 
 const {
@@ -1075,7 +1076,21 @@ sys.exit(7)
         }
       };
 
-      it("on Signal: opus voice note whose body is the spoken text when the text was already sent", async () => {
+      it("on Signal: opus voice note whose body is the spoken text", async () => {
+        const { result, spoken } = await runAuto({
+          payload: { text: "[[tts:text]]Here is **the** answer.[[/tts:text]]" },
+          kind: "final",
+          channel: "signal",
+        });
+
+        expect(result.mediaUrl).toMatch(/\.opus$/);
+        expect(result.audioAsVoice).toBe(true);
+        expect(spoken).toBe("Here is the answer.");
+        expect(result.text).toBe("Here is the answer.");
+        expect(result.textIsTranscript).toBe(true);
+      });
+
+      it("textDelivered: the voice note goes out with no caption (voice ARCH §5.3)", async () => {
         const { result, spoken } = await runAuto({
           payload: { text: "Here is **the** answer." },
           kind: "final",
@@ -1086,8 +1101,8 @@ sys.exit(7)
         expect(result.mediaUrl).toMatch(/\.opus$/);
         expect(result.audioAsVoice).toBe(true);
         expect(spoken).toBe("Here is the answer.");
-        expect(result.text).toBe("Here is the answer.");
-        expect(result.textIsTranscript).toBe(true);
+        expect(result.text).toBeUndefined();
+        expect(result.textIsTranscript).toBeUndefined();
       });
 
       it("the agent's own reply text wins when it is delivered with the audio", async () => {
@@ -1121,7 +1136,11 @@ sys.exit(7)
         );
         const original = `Long reply. ${"Lots of detail here. ".repeat(10)}`;
         const { result, spoken } = await runAuto(
-          { payload: { text: original }, kind: "final", channel: "signal", textDelivered: true },
+          {
+            payload: { text: `[[tts:text]]${original}[[/tts:text]]` },
+            kind: "final",
+            channel: "signal",
+          },
           { maxLength: 100, summarize: true },
         );
 
@@ -1130,6 +1149,79 @@ sys.exit(7)
         expect(result.text).toBe("A short spoken summary.");
         expect(result.text).not.toBe(original.trim());
         expect(result.textIsTranscript).toBe(true);
+      });
+    });
+  });
+
+  describe("shouldTtsDisableBlockStreaming (voice ARCH §5.1)", () => {
+    const withPrefs = <T>(prefs: unknown, run: (cfgPrefsPath: string) => T): T => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "tts-stream-"));
+      try {
+        const prefsPath = path.join(root, "prefs.json");
+        if (prefs !== undefined) {
+          writeFileSync(prefsPath, JSON.stringify(prefs), "utf8");
+        }
+        return run(prefsPath);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    };
+    const cfgWith = (prefsPath: string, auto?: string): OpenClawConfig =>
+      ({
+        messages: { tts: { prefsPath, ...(auto ? { auto } : {}) } },
+      }) as OpenClawConfig;
+
+    it("always: streaming off for every turn", () => {
+      withPrefs(undefined, (prefsPath) => {
+        const cfg = cfgWith(prefsPath);
+        expect(shouldTtsDisableBlockStreaming({ cfg, sessionAuto: "always" })).toBe(true);
+        expect(
+          shouldTtsDisableBlockStreaming({ cfg, sessionAuto: "always", inboundAudio: true }),
+        ).toBe(true);
+      });
+    });
+
+    it("inbound: streaming off only when the inbound message contained audio", () => {
+      withPrefs(undefined, (prefsPath) => {
+        const cfg = cfgWith(prefsPath);
+        expect(
+          shouldTtsDisableBlockStreaming({ cfg, sessionAuto: "inbound", inboundAudio: true }),
+        ).toBe(true);
+        expect(
+          shouldTtsDisableBlockStreaming({ cfg, sessionAuto: "inbound", inboundAudio: false }),
+        ).toBe(false);
+        expect(shouldTtsDisableBlockStreaming({ cfg, sessionAuto: "inbound" })).toBe(false);
+      });
+    });
+
+    it("tagged and off: streaming unchanged", () => {
+      withPrefs(undefined, (prefsPath) => {
+        const cfg = cfgWith(prefsPath);
+        for (const sessionAuto of ["tagged", "off"]) {
+          expect(shouldTtsDisableBlockStreaming({ cfg, sessionAuto, inboundAudio: true })).toBe(
+            false,
+          );
+        }
+        expect(shouldTtsDisableBlockStreaming({ cfg })).toBe(false);
+      });
+    });
+
+    it("resolves session ttsAuto, then prefs, then config auto", () => {
+      withPrefs({ tts: { auto: "always" } }, (prefsPath) => {
+        expect(shouldTtsDisableBlockStreaming({ cfg: cfgWith(prefsPath, "off") })).toBe(true);
+        expect(
+          shouldTtsDisableBlockStreaming({ cfg: cfgWith(prefsPath), sessionAuto: "off" }),
+        ).toBe(false);
+      });
+      withPrefs(undefined, (prefsPath) => {
+        expect(shouldTtsDisableBlockStreaming({ cfg: cfgWith(prefsPath, "always") })).toBe(true);
+        expect(
+          shouldTtsDisableBlockStreaming({
+            cfg: cfgWith(prefsPath, "inbound"),
+            inboundAudio: true,
+          }),
+        ).toBe(true);
+        expect(shouldTtsDisableBlockStreaming({ cfg: cfgWith(prefsPath, "tagged") })).toBe(false);
       });
     });
   });
