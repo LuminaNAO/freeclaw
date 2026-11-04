@@ -197,8 +197,10 @@ canon:
   `members.owners.<channel>`). The group id is recorded as `GROUP_OPENED` in the holon's
   events. When the holon is done the group is renamed `… [done]` and left (`GROUP_CLOSED`).
   Agent-only holons never get a group.
-- An event addressed to a member becomes one short plain line in that group: what happened,
-  what is needed, the sha.
+- An event addressed to a member becomes one plain line in that group: the sender's own
+  words only (no event name, role, sha or route note; folded to one line, cut at 280
+  characters with `…`). The event, role and sha stay in the events (`swarm show`). Lead
+  briefs say to write member-addressed bodies as one plain line for that member (ARCH §10b.5).
 - A member's reply goes to the holon's relay session (`<task>:relay`), which turns it into
   exactly one routed event from that member's role (e.g. `APPROVED`, `RETRY`, `BLOCKED`,
   `DONE`) and confirms in one line. Unclear replies get one question (`ASK`), never two. The

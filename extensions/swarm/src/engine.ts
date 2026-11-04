@@ -345,6 +345,7 @@ export class SwarmEngine {
           event,
           sha: input.sha,
           body: message,
+          words: input.body,
           seqs: [emitted.seq],
           salt: member,
         });
@@ -368,6 +369,7 @@ export class SwarmEngine {
       event,
       sha: input.sha,
       body: message,
+      words: input.body,
       seqs: [emitted.seq],
     });
     return {
@@ -390,6 +392,8 @@ export class SwarmEngine {
       event: string;
       sha: string;
       body: string;
+      /** ARCH §10b.5: the sender's own words (the body without the route note), for a member. */
+      words?: string;
       seqs: number[];
       extraSystemPrompt?: string;
       urgent?: boolean;
@@ -400,7 +404,8 @@ export class SwarmEngine {
   ) {
     const holon = state.holon ?? this.holonOrUndefined(taskId);
     if (holon && isMemberRole(holon, msg.to)) {
-      // ARCH §3.3, §10a.3: a member gets one short plain line in the holon's group.
+      // ARCH §3.3, §10a.3, §10b.5: a member gets one plain line in the holon's group: the
+      // sender's words only; the event, role and sha stay in the events.
       return this.memberChannels.postToMember(
         this,
         taskId,
@@ -581,6 +586,7 @@ export class SwarmEngine {
         event,
         sha: input.sha,
         body: message,
+        words: input.body,
         seqs: [emitted.seq],
       });
       return { ok: true, seq: emitted.seq, routedTo: to };

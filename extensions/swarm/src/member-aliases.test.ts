@@ -272,7 +272,7 @@ describe("§10b.3: event logs written with the step-5 names", () => {
     const now = await resumeTrace("log-new", false);
     const old = await resumeTrace("log-old", true);
     // The unposted PLAN line is posted again and the unanswered reply reaches the relay.
-    expect(now.posts.filter((p) => p.startsWith("PLAN"))).toHaveLength(1);
+    expect(now.posts.filter((p) => p === "the plan")).toHaveLength(1);
     expect(now.relayRuns.at(-1)).toMatch(/gateway restarted[\s\S]*Reply: approved/);
     expect(now.approved).toMatchObject({ ok: true, routedTo: "build" });
     expect(old).toEqual(now);
@@ -347,10 +347,11 @@ class ScriptedAgentChannel extends FakeChannel {
 describe("§10b.4: an agent member leads a holon over the fake channel", () => {
   it("a scripted agent approves the plan and then says done; the holon is DONE", async () => {
     const agent = new ScriptedAgentChannel(AGENT_ID, (line) => {
-      if (/Needed: approve/.test(line) && line.startsWith("PLAN")) {
+      // ARCH §10b.5: the agent sees only the sender's words, as a person would.
+      if (line === "two steps") {
         return "Plan accepted. Proceed.";
       }
-      if (/Needed: say done/.test(line)) {
+      if (line === "green") {
         return "All checks green. Finished.";
       }
       return undefined;

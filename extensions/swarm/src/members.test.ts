@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { leadBrief, MEMBER_BODY_RULE, taskmasterBrief } from "./briefs.js";
 import { registerSwarmCli } from "./cli.js";
 import { SwarmEngine } from "./engine.js";
 import { FakeChannel } from "./fake-channel.js";
@@ -125,20 +126,87 @@ describe("holon file: member lead and participants (ARCH §10a.3)", () => {
   });
 });
 
-describe("one short plain line per event (ARCH §3.3)", () => {
-  it("says what happened, what is needed and the sha, on one short line", () => {
+describe("§10b.5: member lines carry only the sender's words", () => {
+  it("one plain line: no event, role, sha, route note or Needed suffix", () => {
     const line = memberLine({
-      event: "PLAN",
-      from: "build",
-      to: "taskmaster",
-      sha: "0123456789abcdef",
-      body: `plan for approval\n${"split into three steps ".repeat(30)}`,
+      body: "re-prompt\nthis morning, which of the two layouts do you prefer?",
+      words: "  this morning,\n  which of the two layouts\n\n do you prefer?  ",
     });
+    expect(line).toBe("this morning, which of the two layouts do you prefer?");
+    // A notice with no words of its own is sent as its body, folded the same way.
+    expect(memberLine({ body: "Task started;\nbuild has the brief." })).toBe(
+      "Task started; build has the brief.",
+    );
+  });
+
+  it("a long body is cut at the cap with …", () => {
+    const words = "split into three steps ".repeat(30);
+    const line = memberLine({ body: `plan for approval\n${words}`, words });
     expect(line).not.toContain("\n");
-    expect(line.length).toBeLessThanOrEqual(MEMBER_LINE_MAX);
-    expect(line).toMatch(/^PLAN from build @ 0123456789: plan for approval: split into three/);
-    expect(line).toMatch(/…\. Needed: approve, or say what to change\.$/);
-    expect(line).not.toMatch(/TASK |MSG /);
+    expect(line).toHaveLength(MEMBER_LINE_MAX);
+    expect(line.endsWith("…")).toBe(true);
+    expect(line.startsWith("split into three steps split")).toBe(true);
+    expect(line).not.toMatch(/plan for approval|PLAN|Needed/);
+  });
+
+  it("a RETRY with a route note reaches the fake channel as the sender's words; the relay maps the reply to one event", async () => {
+    const { runtime, fake, engine, events, settle } = setup("plain-retry");
+    const T = "members-plain";
+    const yaml = MEMBER_LEAD(
+      T,
+      `participants:\n  - { kind: member, who: ${REVIEWER}, channel: fake, role: review }\n`,
+    ).replace(/lead: .*\n/, `lead: { kind: agent, model: ${MODEL} }\n`);
+    await startTask(engine, { contractYaml: yaml });
+    await settle();
+    const words = "Do you want the greeting in English or in Spanish?";
+    const sent = await engine.emit(T, "taskmaster", {
+      event: "RETRY",
+      sha: "1234567890abcdef",
+      body: words,
+      role: "review",
+    });
+    expect(sent).toMatchObject({ ok: true, routedTo: "review" });
+    await settle();
+    const group = [...fake.groups.values()][0]!;
+    expect(group.posts).toEqual([words]);
+    expect(group.posts[0]).not.toMatch(/RETRY|taskmaster|1234567890|re-prompt|Needed/);
+    // The event, role and sha stay in the events.
+    const posted = events(T).find((e) => e.event === "MEMBER_POSTED");
+    expect(posted).toMatchObject({ to: "review", sha: "1234567890abcdef", body: words });
+    expect(posted?.data).toMatchObject({ event: "RETRY", from: "taskmaster" });
+
+    // The member answers; the relay gets the context and turns it into exactly one event.
+    await fake.reply(group.groupId, REVIEWER, "English please");
+    await settle();
+    const relayRun = runtime.runs.at(-1)!;
+    expect(relayRun.sessionKey).toBe(key(T, "relay"));
+    expect(relayRun.message).toContain(`Answering: ${words}`);
+    expect(relayRun.message).toContain("It carried event RETRY @ 1234567890abcdef.");
+    expect(relayRun.message).toContain("Reply: English please");
+    expect(
+      await engine.emit(T, "relay", {
+        event: "BLOCKED",
+        sha: "1234567890abcdef",
+        body: "The reviewer wants the greeting in English.",
+      }),
+    ).toMatchObject({ ok: true, routedTo: "taskmaster" });
+    expect(
+      await engine.emit(T, "relay", { event: "PLAN", sha: "1234567890abcdef", body: "x" }),
+    ).toMatchObject({ ok: false });
+    const fromReview = events(T).filter((e) => e.kind === "emit" && e.from === "review");
+    expect(fromReview.map((e) => e.event)).toEqual(["BLOCKED"]);
+  });
+
+  it("the lead brief tells the lead to write member-addressed bodies as one plain line", () => {
+    const holon = parseHolon(MEMBER_LEAD("members-brief"));
+    for (const brief of [
+      taskmasterBrief(holon.contract),
+      leadBrief(holon.contract, holon.lanes),
+      leadBrief(holon.contract, [{ ...holon.lanes[0]!, count: 2 }]),
+    ]) {
+      expect(brief).toContain(MEMBER_BODY_RULE);
+      expect(brief).toMatch(/one plain question or statement in everyday words/);
+    }
   });
 });
 
@@ -158,7 +226,7 @@ describe("member lead over the fake channel (ARCH §10a.4, §12.6)", () => {
       groupId: group?.groupId,
     });
     expect(group?.posts).toHaveLength(1);
-    expect(group?.posts[0]).toMatch(/^TASK_STARTED from upstream/);
+    expect(group?.posts[0]).toMatch(/^Task started; build has the brief/);
 
     // build asks the lead to approve its plan.
     const planned = await engine.emit(T, "build", {
@@ -169,9 +237,7 @@ describe("member lead over the fake channel (ARCH §10a.4, §12.6)", () => {
     expect(planned).toMatchObject({ ok: true, routedTo: "taskmaster" });
     await runtime.end(key(T, "build"));
     await settle();
-    expect(group?.posts.at(-1)).toMatch(
-      /^PLAN from build: plan for approval: three steps: parser.*Needed: approve/,
-    );
+    expect(group?.posts.at(-1)).toBe("three steps: parser, greet(), unit test");
 
     // The member answers in plain words; the reply goes to the relay session.
     const relayed = await fake.reply(group!.groupId, MEMBER, "looks good, go ahead");
@@ -359,7 +425,7 @@ describe("group lifecycle (ARCH §8.1, §8.3)", () => {
     await runtime.settleAll();
     await settle();
     const group = [...fake.groups.values()][0]!;
-    expect(group.posts.at(-1)).toMatch(/^TEST_PASS from test @ abc.*Needed: say done/);
+    expect(group.posts.at(-1)).toBe("green");
     await fake.reply(group.groupId, MEMBER, "great, that's done");
     await settle();
     expect(
@@ -434,7 +500,7 @@ describe("resume over the member side (ARCH §7, §10a.4)", () => {
     // The channel drops the next post; the gateway dies before anything else happens.
     first.fake.failNext.post = 1;
     await first.engine.emit(T, "build", { event: "PLAN", sha: "init", body: "the plan" });
-    expect(group.posts.some((p) => p.startsWith("PLAN"))).toBe(false);
+    expect(group.posts.some((p) => p === "the plan")).toBe(false);
 
     // Restart 1: a fresh engine on the same state dir and the same (still existing) group.
     const runtime2 = makeStubRuntime();
@@ -448,7 +514,7 @@ describe("resume over the member side (ARCH §7, §10a.4)", () => {
     first.fake.inbound = (msg) => relayMemberReply(engine2, msg);
     await resumeOpenTasks(engine2);
     await runtime2.drain();
-    expect(group.posts.filter((p) => p.startsWith("PLAN"))).toHaveLength(1);
+    expect(group.posts.filter((p) => p === "the plan")).toHaveLength(1);
     // The member answers; the gateway dies again before the relay's turn ends.
     await first.fake.reply(group.groupId, MEMBER, "approved");
     await runtime2.drain();
@@ -468,7 +534,7 @@ describe("resume over the member side (ARCH §7, §10a.4)", () => {
     const relayRun = runtime3.runs.find((r) => r.sessionKey === key(T, "relay"));
     expect(relayRun?.message).toMatch(/gateway restarted[\s\S]*Reply: approved/);
     // A second resume never posts the PLAN line twice.
-    expect(group.posts.filter((p) => p.startsWith("PLAN"))).toHaveLength(1);
+    expect(group.posts.filter((p) => p === "the plan")).toHaveLength(1);
     expect(
       await engine3.emit(T, "relay", { event: "APPROVED", sha: "init", body: "Approved." }),
     ).toMatchObject({ ok: true, routedTo: "build" });

@@ -159,6 +159,10 @@ export async function relayMemberReply(
           ? [
               `Answering: ${answering.body ?? ""}`,
               `That line came from role ${String(answering.data?.from ?? "?")}.`,
+              // ARCH §10b.5: the member saw only the words; the event behind them is here.
+              ...(answering.data?.event
+                ? [`It carried event ${String(answering.data.event)} @ ${answering.sha ?? "?"}.`]
+                : []),
             ]
           : ["Answering: nothing yet (the member wrote first)"]),
         `Reply: ${text}`,

@@ -8,7 +8,7 @@ import type { SwarmEvent } from "./store.js";
 // of a channel: a person or another agent, the swarm does not care which. One channel group
 // per holon that has a member lead or participant: opened on first need, closed (renamed
 // `[done]`, left) when the holon is done. Events addressed to a member become one short plain
-// line in that group; the member's replies go to the holon's relay session (relay.ts).
+// line in that group, the sender's words only (§10b.5); the member's replies go to the holon's relay session (relay.ts).
 // Agent-only holons never get a group. No person, agent, number or group id lives in code:
 // members come from the holon file, the
 // root owner from plugin config, the group id from the channel and is kept in the events.
@@ -45,56 +45,22 @@ export function groupNameFor(rootId: string, holonId: string): string {
   return `${rootId} · ${holonId}`;
 }
 
-/** What a member is asked to do for an event, in plain words (ARCH §3.3: what is needed). */
-function neededFor(event: string, to: string): string {
-  switch (event) {
-    case "TASK_STARTED":
-    case "ROUND_STARTED":
-    case "LANE_WAITING":
-    case "LANE_SETTLED":
-      return "nothing yet; I will write when there is something to decide";
-    case "TEST_PASS":
-      return "say done if it is finished, or what is still missing";
-    case "BLOCKED":
-    case "LANE_STALLED":
-    case "WORKER_EXIT_WITHOUT_EMIT":
-    case "LANE_MERGE_CONFLICT":
-    case "UNROUTED":
-      return "tell me how to go on, or say stop";
-    case "CANCELLED":
-      return "nothing; the work is stopped";
-    case "AUDIT_FAIL":
-    case "TEST_FAIL":
-      return "say retry to send it back to build, or how to go on";
-    default:
-      return to === TASKMASTER ? "approve, or say what to change" : "reply with what you decide";
-  }
-}
-
 /**
- * ARCH §3.3, §10a.3: one short plain line for a member: what happened, what is needed, the sha.
- * Never a multi-line envelope; the full text stays in events.jsonl (`swarm show`).
+ * ARCH §3.3, §10a.3, §10b.5: the line a member gets is the sender's own words to them, and
+ * nothing else: no event name, role, sha, route note or "Needed:" suffix. The words are trimmed,
+ * folded onto one line and cut at MEMBER_LINE_MAX with `…`. The event, role and sha stay in
+ * events.jsonl (`swarm show`). `words` is the sender's body without the route note; a message
+ * with no words of its own (a system notice) is sent as its body.
  */
-export function memberLine(msg: {
-  event: string;
-  from: string;
-  to: string;
-  sha: string;
-  body: string;
-}): string {
-  const sha = msg.sha && msg.sha !== "init" ? ` @ ${msg.sha.slice(0, 10)}` : "";
-  // The whole body folded onto one line (route note, then the sender's words), then cut.
-  const what = msg.body
+export function memberLine(msg: { body: string; words?: string }): string {
+  const own = msg.words?.trim() ? msg.words : msg.body;
+  const line = own
     .split("\n")
-    .map((l) => l.trim().replace(/[.!?:;,\s]+$/, ""))
+    .map((l) => l.trim())
     .filter((l) => l.length > 0)
-    .join(": ");
-  const head = `${msg.event} from ${msg.from}${sha}`;
-  const need = `Needed: ${neededFor(msg.event, msg.to)}.`;
-  const room = MEMBER_LINE_MAX - head.length - need.length - 4;
-  const said =
-    what && room > 8 ? `: ${what.length > room ? `${what.slice(0, room - 1)}…` : what}` : "";
-  return `${head}${said}. ${need}`;
+    .join(" ")
+    .replace(/\s+/g, " ");
+  return line.length > MEMBER_LINE_MAX ? `${line.slice(0, MEMBER_LINE_MAX - 1).trimEnd()}…` : line;
 }
 
 /** Normalise a channel id for matching (`signal:+1…`, `uuid:…` and case do not matter). */
@@ -253,7 +219,15 @@ export class MemberChannels {
     engine: SwarmEngine,
     taskId: string,
     state: Pick<TaskState, "holon" | "events" | "sha" | "contract">,
-    msg: { to: string; from: string; event: string; sha: string; body: string; seqs: number[] },
+    msg: {
+      to: string;
+      from: string;
+      event: string;
+      sha: string;
+      body: string;
+      words?: string;
+      seqs: number[];
+    },
   ): Promise<DeliveryResult> {
     const line = memberLine(msg);
     const group = await this.ensureGroup(engine, taskId, state);
