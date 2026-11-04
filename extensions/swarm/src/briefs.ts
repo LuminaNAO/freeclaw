@@ -25,6 +25,15 @@ const REPEAT_RULE =
   "Every message carries a `MSG <id>` line. A message whose MSG id you already handled, or one " +
   "marked [RESEND of seq N] for work you already reported, is a repeat: do not redo the work.";
 
+/**
+ * ARCH §10b.5: a member sees only the body the lead wrote to them (no event, role, sha or route
+ * note), so a member-addressed body must stand on its own as one plain line for that member.
+ */
+export const MEMBER_BODY_RULE =
+  "- Anything you address to a member (a person or agent in the holon's channel group) reaches " +
+  "them as your body alone: no event name, role, sha or note. Write that body as one plain " +
+  "question or statement in everyday words, written for that member; one line, nothing else.";
+
 export function workerBrief(contract: Contract, role: string): string {
   const canEmit = eventsFrom(contract, role);
   const commitRule =
@@ -78,6 +87,7 @@ export function taskmasterBrief(contract: Contract): string {
     "- On BLOCKED from a worker: resolve it if you can (RETRY with guidance); if someone above " +
       "you is needed, call swarm_emit BLOCKED.",
     "- On OPERATOR: that is the operator answering; act on it.",
+    MEMBER_BODY_RULE,
     `Events you may emit upstream: ${upstreamEvents.join(", ")}.`,
     REPEAT_RULE,
   ].join("\n");
