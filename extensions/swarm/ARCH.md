@@ -212,6 +212,15 @@ is retired.
    holon through plan approval to DONE; grep gate: no `human` left in `extensions/swarm` except the alias
    handling, its tests, and this section.
 
+5. **Member lines are written for the member (operator, 2026-11-04).** Live run cb-mimo-deepseek-1: Steve got
+   `RETRY from taskmaster @ 1215796213: re-prompt: Steve: this morning … Needed: reply with what you decide.` A member
+   must only ever see the sender's own words to them: no event name, no role, no sha, no route note (`re-prompt:`,
+   `plan for approval:` and the like), no "Needed:" suffix. The taskmaster/lead brief says: anything addressed to a
+   member is one plain question or statement in everyday words, written for that member. `memberLine` sends exactly
+   that text (trimmed, folded to one line, cut at MEMBER_LINE_MAX with `…`); the event, role and sha stay in
+   events.jsonl for `swarm show`. Tests: a RETRY with a route note reaches the fake channel as the sender's words only;
+   a long body is cut at the cap; the relay still maps the member's reply to exactly one event.
+
 ## 11. Compatibility
 Every v1 contract, `continue` round and resume behaviour keeps working unchanged. v1 tests stay green. A v1
 contract is a root holon whose lead is the gateway default model (as today) unless `lead` is given.
