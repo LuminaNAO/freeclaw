@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
-import { clearFocusState, setFocusState } from "../../infra/focus-mode.js";
+import { clearAllFocus, setSessionFocus } from "../../infra/focus-mode.js";
 import { listStack } from "../../infra/session-stack.js";
 import { markGatewayDraining, resetAllLanes } from "../../process/command-queue.js";
 import { agentHandlers } from "./agent.js";
@@ -441,15 +441,15 @@ describe("gateway agent handler", () => {
     expect(stored).toBeDefined();
   });
 
-  it("focus mode: agent ingress is not gated; a non-target session runs while focused (focus-mode ARCH §3.3)", async () => {
+  it("focus mode: agent ingress is not gated; a non-target session runs while focused (focus-mode ARCH §3.3, §7.2)", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
-    setFocusState({ target: "agent:main:some-other-session", by: "op" });
+    setSessionFocus({ sessionKey: "agent:main:some-other-session", tier: "hyper", by: "op" });
     try {
       await runMainAgent("not gated", "test-focus-agent");
       await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalledTimes(1));
     } finally {
-      clearFocusState();
+      clearAllFocus();
     }
   });
 

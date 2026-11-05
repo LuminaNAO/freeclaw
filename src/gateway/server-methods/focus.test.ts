@@ -1,10 +1,10 @@
 // Gateway method `focus` (focus-mode ARCH §4): operator authority only.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  clearFocusState,
+  clearAllFocus,
   readFocusState,
   registerFocusReplayer,
-  setFocusState,
+  setSessionFocus,
 } from "../../infra/focus-mode.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -17,7 +17,7 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 }));
 
 afterEach(() => {
-  clearFocusState();
+  clearAllFocus();
   registerFocusReplayer(undefined);
 });
 
@@ -64,13 +64,20 @@ describe("gateway focus method (focus-mode ARCH §4)", () => {
     const set = await call({ action: "set", target: "main" }, admin);
     expect(set).toHaveBeenCalledWith(
       true,
-      { focus: expect.objectContaining({ target: "agent:main:main", by: "cli" }) },
+      {
+        focus: expect.objectContaining({ target: "agent:main:main", tier: "normal", by: "cli" }),
+        replaying: 0,
+      },
       undefined,
     );
     const status = await call({ action: "status" }, admin);
     expect(status).toHaveBeenCalledWith(
       true,
-      { focus: expect.objectContaining({ target: "agent:main:main" }), waiting: [] },
+      {
+        active: "normal",
+        sessions: [expect.objectContaining({ sessionKey: "agent:main:main", tier: "normal" })],
+        waiting: [],
+      },
       undefined,
     );
     const replayer = vi.fn(() => ({ sessions: 2, done: Promise.resolve() }));
@@ -78,7 +85,10 @@ describe("gateway focus method (focus-mode ARCH §4)", () => {
     const off = await call({ action: "off" }, admin);
     expect(off).toHaveBeenCalledWith(
       true,
-      { ended: expect.objectContaining({ target: "agent:main:main" }), replaying: 2 },
+      {
+        ended: { "agent:main:main": expect.objectContaining({ tier: "normal" }) },
+        replaying: 2,
+      },
       undefined,
     );
     expect(replayer).toHaveBeenCalledTimes(1);
@@ -86,7 +96,7 @@ describe("gateway focus method (focus-mode ARCH §4)", () => {
   });
 
   it("off clears the state before the replay starts (§5.1)", async () => {
-    setFocusState({ target: "agent:main:main", by: "op" });
+    setSessionFocus({ sessionKey: "agent:main:main", by: "op" });
     let seenDuringReplay: unknown = "unset";
     registerFocusReplayer(() => {
       seenDuringReplay = readFocusState();

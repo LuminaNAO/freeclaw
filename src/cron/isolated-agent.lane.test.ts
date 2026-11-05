@@ -1,7 +1,7 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { clearFocusState, readFocusState, setFocusState } from "../infra/focus-mode.js";
+import { clearAllFocus, readFocusState, setSessionFocus } from "../infra/focus-mode.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
@@ -63,14 +63,14 @@ describe("runCronIsolatedAgentTurn lane selection", () => {
     });
   });
 
-  it("focus mode: a cron turn is not gated while focused away (focus-mode ARCH §3.3)", async () => {
+  it("focus mode: a cron turn is not gated while focused away (focus-mode ARCH §3.3, §7.2)", async () => {
     await withTempCronHome(async (home) => {
-      setFocusState({ target: "agent:main:some-other-session", by: "op" });
+      setSessionFocus({ sessionKey: "agent:main:some-other-session", tier: "hyper", by: "op" });
       try {
-        expect(readFocusState()?.target).toBe("agent:main:some-other-session");
+        expect(readFocusState()?.sessions["agent:main:some-other-session"]?.tier).toBe("hyper");
         expect(await runLaneCase(home, "cron")).toBe("nested");
       } finally {
-        clearFocusState();
+        clearAllFocus();
       }
     });
   });

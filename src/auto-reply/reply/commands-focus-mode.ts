@@ -40,7 +40,7 @@ export const handleFocusModeCommand: CommandHandler = async (params, allowTextCo
       if (result.action !== "off") {
         return null;
       }
-      if (!result.ended) {
+      if (Object.keys(result.ended).length === 0) {
         return { shouldContinue: false, reply: { text: "Focus mode is already off." } };
       }
       return {
@@ -60,7 +60,7 @@ export const handleFocusModeCommand: CommandHandler = async (params, allowTextCo
     }
     return {
       shouldContinue: false,
-      reply: { text: `Focus mode on ${result.focus.target}. Other sessions' messages wait.` },
+      reply: { text: `Focus mode on ${result.sessionKey}. Other sessions' messages wait.` },
     };
   } catch (err) {
     logVerbose(`/focusmode failed: ${String(err)}`);

@@ -3,10 +3,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import {
-  clearFocusState,
+  clearAllFocus,
   FOCUS_COMBINED_HEADER,
   holdFocusFiles,
-  setFocusState,
+  setSessionFocus,
   takeHeldFocusFiles,
 } from "../infra/focus-mode.js";
 import {
@@ -339,15 +339,15 @@ describe("session prompt stack: stale replay guards (stale replay ARCH §2, §3,
   });
 });
 
-describe("focus mode: startup replay and the combined replay (focus-mode ARCH §5)", () => {
+describe("focus mode: startup replay and the combined replay (focus-mode ARCH §5, §7.3)", () => {
   beforeEach(() => {
     calls.length = 0;
-    clearFocusState();
+    clearAllFocus();
     takeHeldFocusFiles();
   });
 
   it("§5.4: while focused, non-target inbound files are held; agent files and the target replay as usual", async () => {
-    setFocusState({ target: "agent:main:focus-target", by: "op" });
+    setSessionFocus({ sessionKey: "agent:main:focus-target", by: "op" });
     const other = "agent:main:focus-other";
     const heldA = writeStackFile({ sessionKey: other, ...inboundEntry(other, "fa") });
     const agentFile = writeStackFile({
@@ -373,7 +373,7 @@ describe("focus mode: startup replay and the combined replay (focus-mode ARCH §
     expect(fs.existsSync(heldA)).toBe(true);
     expect(fs.existsSync(heldB)).toBe(true);
     expect(logLines(log)).toContain(
-      `session stack: holding 2 file(s) for ${other} (focus mode on agent:main:focus-target)`,
+      `session stack: holding 2 file(s) for ${other} (focus active level normal)`,
     );
     const held = takeHeldFocusFiles();
     expect([...(held.get(other) ?? [])].toSorted()).toEqual([heldA, heldB].toSorted());
@@ -455,5 +455,38 @@ describe("focus mode: startup replay and the combined replay (focus-mode ARCH §
     await done;
     expect(sessions).toBe(0);
     expect(callsFor(key)).toEqual([]);
+  });
+  it("§7.3: at mixed tiers startup replays only sessions allowed at the active level", async () => {
+    const normal = "agent:main:focus-normal";
+    const hyper = "agent:main:focus-hyper";
+    const open = "agent:main:focus-open";
+    setSessionFocus({ sessionKey: normal, tier: "normal", by: "op" });
+    setSessionFocus({ sessionKey: hyper, tier: "hyper", by: "op" });
+    const files = [
+      writeStackFile({ sessionKey: normal, ...inboundEntry(normal, "mn") }),
+      writeStackFile({ sessionKey: hyper, ...inboundEntry(hyper, "mh") }),
+      writeStackFile({ sessionKey: open, ...inboundEntry(open, "mo") }),
+    ];
+    const log = makeLog();
+
+    await replaySessionStack({ logGateway: log } as never);
+
+    expect(callsFor(hyper).map((c) => c.source)).toEqual(["inbound"]);
+    expect(callsFor(normal)).toEqual([]);
+    expect(callsFor(open)).toEqual([]);
+    expect(logLines(log)).toContain(
+      `session stack: holding 1 file(s) for ${normal} (focus active level hyper)`,
+    );
+    // The replay takes only what `allow` accepts; the rest stays held.
+    const { sessions, done } = replayFocusWaiting(makeLog() as never, (key) => key === normal);
+    await done;
+    expect(sessions).toBe(1);
+    expect(callsFor(normal)).toHaveLength(1);
+    const rest = takeHeldFocusFiles();
+    expect(rest.has(open)).toBe(true);
+    expect(rest.has(normal) || rest.has(hyper)).toBe(false);
+    for (const f of files) {
+      fs.rmSync(f, { force: true });
+    }
   });
 });
