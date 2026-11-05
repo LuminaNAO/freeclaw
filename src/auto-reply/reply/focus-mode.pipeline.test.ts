@@ -1,4 +1,4 @@
-// Focus mode end to end (focus-mode ARCH §3, §5, §6) on the real inbound pipeline
+// Focus mode end to end (focus-mode ARCH §3, §5, §6, §7) on the real inbound pipeline
 // (dispatch → gate → get-reply → commands / agent runner); only the model run and
 // outbound sends are stubbed. Same harness as session-stack.paths.test.ts.
 import fs from "node:fs/promises";
@@ -7,15 +7,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  clearFocusState,
+  clearAllFocus,
+  clearSessionFocus,
   FOCUS_BUSY_NOTICE,
   FOCUS_COMBINED_HEADER,
+  type FocusTier,
+  listHeldFocusSessions,
   readFocusState,
   registerFocusReplayer,
-  setFocusState,
+  sessionFocusTier,
+  setSessionFocus,
   takeHeldFocusFiles,
 } from "../../infra/focus-mode.js";
-import { listStack } from "../../infra/session-stack.js";
+import { listStack, writeStackFile } from "../../infra/session-stack.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
@@ -133,7 +137,7 @@ afterEach(async () => {
     resolve(true);
   }
   await settle();
-  clearFocusState();
+  clearAllFocus();
   takeHeldFocusFiles();
   registerFocusReplayer(undefined);
   resetInboundDedupe();
@@ -211,13 +215,17 @@ function ownerCfg(): OpenClawConfig {
 
 /** The gateway registers this at start; the tests do it the same way. */
 function useGatewayReplayer(): void {
-  registerFocusReplayer(() => replayFocusWaiting(log as never));
+  registerFocusReplayer((allow) => replayFocusWaiting(log as never, allow));
+}
+
+function focusOn(key: string, tier: FocusTier = "normal"): void {
+  setSessionFocus({ sessionKey: key, tier, by: "op" });
 }
 
 describe("focus mode end to end (focus-mode ARCH §6)", () => {
   it("focused: another session's messages are stored, not run; one busy notice only", async () => {
     const config = cfg();
-    setFocusState({ target: "agent:main:main", by: "op" });
+    focusOn("agent:main:main");
     await dispatch(signalCtx("h1", "first"), config);
     await dispatch(signalCtx("h2", "second"), config);
     await settle();
@@ -228,7 +236,7 @@ describe("focus mode end to end (focus-mode ARCH §6)", () => {
 
   it("an operator's /focusmode works in a non-target session while focused; it is not stored", async () => {
     const config = ownerCfg();
-    setFocusState({ target: "agent:main:main", by: "op" });
+    focusOn("agent:main:main");
     useGatewayReplayer();
     const status = createReplyDispatcher({ deliver: async () => {} });
     const sendFinal = vi.spyOn(status, "sendFinalReply");
@@ -237,7 +245,7 @@ describe("focus mode end to end (focus-mode ARCH §6)", () => {
       cfg: config,
       dispatcher: status,
     });
-    expect(sendFinal.mock.calls[0]?.[0]?.text).toContain("Focus mode: on agent:main:main");
+    expect(sendFinal.mock.calls[0]?.[0]?.text).toContain("agent:main:main");
     await dispatch(
       signalCtx("op2", "/focusmode off", "signal:+15550009", { SenderId: "+15550009" }),
       config,
@@ -250,10 +258,10 @@ describe("focus mode end to end (focus-mode ARCH §6)", () => {
 
   it("a non-operator's /focusmode is refused while focused; focus stays on", async () => {
     const config = ownerCfg();
-    setFocusState({ target: "agent:main:main", by: "op" });
+    focusOn("agent:main:main");
     await dispatch(signalCtx("np1", "/focusmode off"), config);
     await settle();
-    expect(readFocusState()?.target).toBe("agent:main:main");
+    expect(sessionFocusTier(readFocusState(), "agent:main:main")).toBe("normal");
     expect(pi.runs).toEqual([]);
     expect(routed).toEqual([]);
     expect(delivered).toEqual([]);
@@ -262,7 +270,7 @@ describe("focus mode end to end (focus-mode ARCH §6)", () => {
 
   it("off: three waiting prompts → exactly one turn with all three in order, sender and time; files deleted; newest route", async () => {
     const config = ownerCfg();
-    setFocusState({ target: "agent:main:main", by: "op" });
+    focusOn("agent:main:main");
     useGatewayReplayer();
     const t0 = Date.UTC(2026, 9, 17, 10, 0, 0);
     await dispatch(
@@ -311,7 +319,7 @@ describe("focus mode end to end (focus-mode ARCH §6)", () => {
 
   it("restart while focused: focus still on after start; non-target files not replayed until off", async () => {
     const config = ownerCfg();
-    setFocusState({ target: "agent:main:main", by: "op" });
+    focusOn("agent:main:main");
     await dispatch(signalCtx("r1", "before restart one"), config);
     await dispatch(signalCtx("r2", "before restart two"), config);
     expect(stackFiles()).toHaveLength(2);
@@ -322,7 +330,7 @@ describe("focus mode end to end (focus-mode ARCH §6)", () => {
     const context = { logGateway: log } as never;
     await replaySessionStack(context);
     await settle();
-    expect(readFocusState()?.target).toBe("agent:main:main");
+    expect(sessionFocusTier(readFocusState(), "agent:main:main")).toBe("normal");
     expect(pi.runs).toEqual([]);
     expect(stackFiles()).toHaveLength(2);
 
@@ -343,11 +351,142 @@ describe("focus mode end to end (focus-mode ARCH §6)", () => {
 
   it("the target session's own messages run while focused", async () => {
     const config = cfg();
-    setFocusState({ target: sessionKey, by: "op" });
+    focusOn(sessionKey);
     await dispatch(signalCtx("tg1", "for the target"), config);
     await vi.waitFor(() => expect(pi.runs).toHaveLength(1));
     await settle();
     expect([...delivered, ...routed.map((r) => r.text)]).toEqual(["reply 1"]);
+    expect(stackFiles()).toEqual([]);
+  });
+});
+
+describe("focus tiers end to end (focus-mode ARCH §7.2, §7.3, §7.6)", () => {
+  const N1 = "agent:main:signal:group:n1";
+  const N2 = "agent:main:signal:group:n2";
+  const THIRD = "agent:main:signal:direct:+15550003";
+  const HYPER = "agent:main:signal:direct:+15550004";
+
+  function to(key: string): string {
+    return `signal:${key.split(":").pop()}`;
+  }
+
+  function msg(key: string, sid: string, body: string): MsgContext {
+    return signalCtx(sid, body, to(key), { SessionKey: key });
+  }
+
+  function filesOf(key: string): string[] {
+    return listStack()
+      .filter((s) => s.sessionKey === key)
+      .flatMap((s) => s.entries.map((e) => e.file));
+  }
+
+  /** Busy notices sent so far, on the inbound surface or routed. */
+  function notices(): number {
+    return [...delivered, ...routed.map((r) => r.text)].filter((t) => t === FOCUS_BUSY_NOTICE)
+      .length;
+  }
+
+  function promptsWith(text: string): string[] {
+    return pi.runs.map((r) => r.prompt).filter((p) => p.includes(text));
+  }
+
+  it("two normal run, a third waits; hyper on a fourth holds the normal ones; lowering replays them; off replays the third", async () => {
+    const config = cfg();
+    useGatewayReplayer();
+    focusOn(N1);
+    focusOn(N2);
+
+    await dispatch(msg(N1, "n1a", "n1 live"), config);
+    await dispatch(msg(N2, "n2a", "n2 live"), config);
+    await vi.waitFor(() => expect(pi.runs).toHaveLength(2));
+    await dispatch(msg(THIRD, "t1", "third one"), config);
+    await dispatch(msg(THIRD, "t2", "third two"), config);
+    await settle();
+    expect(pi.runs).toHaveLength(2);
+    expect(filesOf(THIRD)).toHaveLength(2);
+    expect(notices()).toBe(1); // one notice for the third, not two
+
+    // Add hyper on a fourth: only the fourth runs; the two normal ones now wait too.
+    focusOn(HYPER, "hyper");
+    await dispatch(msg(N1, "n1b", "n1 waiting"), config);
+    await dispatch(msg(N2, "n2b", "n2 waiting"), config);
+    await dispatch(msg(HYPER, "h1", "hyper live"), config);
+    await vi.waitFor(() => expect(promptsWith("hyper live")).toHaveLength(1));
+    await settle();
+    expect(pi.runs).toHaveLength(3);
+    expect(filesOf(N1)).toHaveLength(1);
+    expect(filesOf(N2)).toHaveLength(1);
+    expect(notices()).toBe(3); // one each for the two normal sessions now waiting
+
+    // Remove hyper: the two normal ones get their combined replay; the third still waits.
+    const lowered = clearSessionFocus(HYPER);
+    expect(lowered.replaying).toBe(2);
+    await lowered.done;
+    await vi.waitFor(() => expect(pi.runs).toHaveLength(5));
+    for (const text of ["n1 waiting", "n2 waiting"]) {
+      const [prompt] = promptsWith(text);
+      expect(prompt).toContain(FOCUS_COMBINED_HEADER);
+    }
+    await settle();
+    expect(filesOf(N1)).toEqual([]);
+    expect(filesOf(N2)).toEqual([]);
+    expect(filesOf(THIRD)).toHaveLength(2);
+    expect(promptsWith("third one")).toEqual([]);
+    expect(listHeldFocusSessions()).toEqual([THIRD]);
+
+    // `/focus off` (all): the third replays, both messages in one combined prompt.
+    const off = clearAllFocus();
+    expect(off.replaying).toBe(1);
+    await off.done;
+    await vi.waitFor(() => expect(pi.runs).toHaveLength(6));
+    const [third] = promptsWith("third one");
+    expect(third).toContain(FOCUS_COMBINED_HEADER);
+    expect(third.indexOf("third one")).toBeLessThan(third.indexOf("third two"));
+    await settle();
+    expect(stackFiles()).toEqual([]);
+    expect(pi.runs).toHaveLength(6);
+  });
+
+  it("restart while focused at mixed tiers: the state holds and startup replays only allowed sessions", async () => {
+    const config = cfg();
+    focusOn(N1);
+    focusOn(HYPER, "hyper");
+    await dispatch(msg(N1, "r1", "n1 before restart"), config);
+    await dispatch(msg(THIRD, "r2", "third before restart"), config);
+    expect(pi.runs).toEqual([]);
+    // A prompt of the hyper session whose turn had not finished when the gateway went down.
+    const hyperCtx = msg(HYPER, "r3", "hyper before restart");
+    writeStackFile({ sessionKey: HYPER, source: "inbound", payload: { ctx: hyperCtx } });
+    expect(filesOf(HYPER)).toHaveLength(1);
+
+    // "Restart": the process forgets its held set, dedupe and lanes; disk is all that is left.
+    takeHeldFocusFiles();
+    resetInboundDedupe();
+    resetAllLanes();
+    const state = readFocusState();
+    expect(sessionFocusTier(state, N1)).toBe("normal");
+    expect(sessionFocusTier(state, HYPER)).toBe("hyper");
+
+    useGatewayReplayer();
+    await replaySessionStack({ logGateway: log } as never);
+    await vi.waitFor(() => expect(promptsWith("hyper before restart")).toHaveLength(1));
+    await settle();
+    expect(pi.runs).toHaveLength(1);
+    expect(filesOf(HYPER)).toEqual([]);
+    expect(filesOf(N1)).toHaveLength(1);
+    expect(filesOf(THIRD)).toHaveLength(1);
+    expect(listHeldFocusSessions().toSorted()).toEqual([N1, THIRD].toSorted());
+
+    // Lowering releases what is now allowed: N1 only.
+    await clearSessionFocus(HYPER).done;
+    await vi.waitFor(() => expect(promptsWith("n1 before restart")).toHaveLength(1));
+    await settle();
+    expect(promptsWith("third before restart")).toEqual([]);
+    expect(filesOf(N1)).toEqual([]);
+
+    await clearAllFocus().done;
+    await vi.waitFor(() => expect(promptsWith("third before restart")).toHaveLength(1));
+    await settle();
     expect(stackFiles()).toEqual([]);
   });
 });
