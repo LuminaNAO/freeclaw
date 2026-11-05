@@ -84,14 +84,12 @@ Text + native (when enabled):
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
-- `/session idle <duration|off>` (manage inactivity auto-unfocus for focused thread bindings)
-- `/session max-age <duration|off>` (manage hard max-age auto-unfocus for focused thread bindings)
+- `/session idle <duration|off>` (manage inactivity auto-unbind for thread bindings)
+- `/session max-age <duration|off>` (manage hard max-age auto-unbind for thread bindings)
 - `/subagents list|kill|log|info|send|steer|spawn` (inspect, control, or spawn sub-agent runs for the current session)
 - `/acp spawn|cancel|steer|close|status|set-mode|set|cwd|permissions|timeout|model|reset-options|doctor|install|sessions` (inspect and control ACP runtime sessions)
 - `/agents` (list thread-bound agents for this session)
-- `/focus <target>` (Discord: bind this thread, or a new thread, to a session/subagent target)
-- `/unfocus` (Discord: remove the current thread binding)
-- `/focusmode <session-key|here>|off` (focus mode, operator-only: only the target session runs; other sessions' messages wait on disk, get one "busy" notice, and are replayed as one combined prompt per session on `off`. No argument shows the target, since, and waiting count per session. Not the same as `/focus`.)
+- `/focus [here|<session-key> [normal|hyper]] | off [here|<session-key>]` (operator-only focus. Each session has a tier: `none` < `normal` < `hyper`; the active level is the highest tier any session holds. A person's message runs only in sessions whose tier is at least the active level; others wait on disk, get one "busy" notice, and are replayed as one combined prompt per session as soon as their session is allowed again. `/focus` alone shows the focused sessions with tier and since, the active level and the waiting count per session; `/focus here|<key> [tier]` sets a tier (default `normal`); `/focus off here|<key>` sets that session back to `none`; `/focus off` clears all focus. Cron, heartbeat, subagent and announce turns are never held. Same as `openclaw gateway focus [status|set <key> [--tier t]|off [<key>|--all]] [--json]` and the gateway `focus` method. The old name `/focusmode` still works for one release.)
 - `/kill <id|#|all>` (immediately abort one or all running sub-agents for this session; no confirmation message)
 - `/steer <id|#> <message>` (steer a running sub-agent immediately: in-run when possible, otherwise abort current work and restart on the steer message)
 - `/tell <id|#> <message>` (alias for `/steer`)
@@ -135,7 +133,7 @@ Notes:
 - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
 - `/restart` is enabled by default; set `commands.restart: false` to disable it.
 - Discord-only native command: `/vc join|leave|status` controls voice channels (requires `channels.discord.voice` and native commands; not available as text).
-- Discord thread-binding commands (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`) require effective thread bindings to be enabled (`session.threadBindings.enabled` and/or `channels.discord.threadBindings.enabled`).
+- Discord thread-binding commands (`/agents`, `/session idle`, `/session max-age`) require effective thread bindings to be enabled (`session.threadBindings.enabled` and/or `channels.discord.threadBindings.enabled`).
 - ACP command reference and runtime behavior: [ACP Agents](/tools/acp-agents).
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/fast on|off` persists a session override. Use the Sessions UI `inherit` option to clear it and fall back to config defaults.

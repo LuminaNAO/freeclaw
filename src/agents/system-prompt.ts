@@ -6,6 +6,7 @@ import type { SilentReplyPromptMode } from "../config/silent-reply.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
+import { buildFocusPromptSection, type FocusPromptState } from "./focus-prompt.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
@@ -282,6 +283,12 @@ export function buildAgentSystemPrompt(params: {
    * "Tool Call Style". Defaults to "on".
    */
   blockStreaming?: PromptBlockStreaming;
+  /**
+   * Focus state for this session (focus-mode ARCH §7.5): the active level and this
+   * session's tier. The Focus section is always present; the state line only when
+   * focus is on.
+   */
+  focus?: FocusPromptState;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -628,6 +635,7 @@ export function buildAgentSystemPrompt(params: {
       suppressSilentTokenGuidance: params.silentReplyPromptMode === "none",
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
+    ...buildFocusPromptSection(params.focus),
   ];
 
   if (extraSystemPrompt) {

@@ -161,7 +161,7 @@ export type DiscordUiConfig = {
 
 export type DiscordThreadBindingsConfig = {
   /**
-   * Enable Discord thread binding features (/focus, thread-bound delivery, and
+   * Enable Discord thread binding features (thread-bound delivery and
    * thread-bound subagent session flows). Overrides session.threadBindings.enabled
    * when set.
    */

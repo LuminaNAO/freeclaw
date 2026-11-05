@@ -56,7 +56,10 @@ function createUsageStatsCompletion(): NonNullable<SlashCommand["getArgumentComp
       value,
       label: `${value} (timeframe)`,
     }));
-    const agents = agentIds.map((value) => ({ value, label: `${value} (agent)` }));
+    const agents = agentIds.map((value) => ({
+      value,
+      label: `${value} (agent)`,
+    }));
     return [...agents, ...timeframes].filter((item) => item.value.toLowerCase().startsWith(lower));
   };
 }
@@ -154,6 +157,9 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   const seen = new Set(commands.map((command) => command.name));
   const gatewayCommands = options.cfg ? listChatCommandsForConfig(options.cfg) : listChatCommands();
   for (const command of gatewayCommands) {
+    if (command.hidden) {
+      continue;
+    }
     const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
     for (const alias of aliases) {
       const name = alias.replace(/^\//, "").trim();

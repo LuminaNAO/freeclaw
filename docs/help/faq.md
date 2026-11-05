@@ -1093,10 +1093,8 @@ Use thread bindings. You can bind a Discord thread to a subagent or session targ
 Basic flow:
 
 - Spawn with `sessions_spawn` using `thread: true` (and optionally `mode: "session"` for persistent follow-up).
-- Or manually bind with `/focus <target>`.
 - Use `/agents` to inspect binding state.
-- Use `/session idle <duration|off>` and `/session max-age <duration|off>` to control auto-unfocus.
-- Use `/unfocus` to detach the thread.
+- Use `/session idle <duration|off>` and `/session max-age <duration|off>` to control auto-unbind.
 
 Required config:
 

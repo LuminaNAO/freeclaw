@@ -159,7 +159,7 @@ describe("gateway tool", () => {
     });
   });
 
-  it("passes focus (focus mode set/off/status) through the gateway focus method", async () => {
+  it("passes focus (status, set with tier, off <key>, off all) through the gateway focus method (focus-mode ARCH §7.4)", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const tool = requireGatewayTool("agent:main:main");
     await tool.execute("focus1", {
@@ -167,18 +167,49 @@ describe("gateway tool", () => {
       focusAction: "set",
       target: "agent:main:main",
     });
-    expect(callGatewayTool).toHaveBeenCalledWith("focus", expect.any(Object), {
+    expect(callGatewayTool).toHaveBeenLastCalledWith("focus", expect.any(Object), {
       action: "set",
       target: "agent:main:main",
     });
-    await tool.execute("focus2", { action: "focus", focusAction: "off" });
-    expect(callGatewayTool).toHaveBeenCalledWith("focus", expect.any(Object), { action: "off" });
+    await tool.execute("focus1b", {
+      action: "focus",
+      focusAction: "set",
+      target: "main",
+      tier: "hyper",
+    });
+    expect(callGatewayTool).toHaveBeenLastCalledWith("focus", expect.any(Object), {
+      action: "set",
+      target: "main",
+      tier: "hyper",
+    });
+    await tool.execute("focus2", {
+      action: "focus",
+      focusAction: "off",
+      target: "main",
+    });
+    expect(callGatewayTool).toHaveBeenLastCalledWith("focus", expect.any(Object), {
+      action: "off",
+      target: "main",
+    });
+    await tool.execute("focus2b", {
+      action: "focus",
+      focusAction: "off",
+      all: true,
+    });
+    expect(callGatewayTool).toHaveBeenLastCalledWith("focus", expect.any(Object), {
+      action: "off",
+      all: true,
+    });
     await tool.execute("focus3", { action: "focus" });
-    expect(callGatewayTool).toHaveBeenCalledWith("focus", expect.any(Object), {
+    expect(callGatewayTool).toHaveBeenLastCalledWith("focus", expect.any(Object), {
       action: "status",
     });
     await expect(tool.execute("focus4", { action: "focus", focusAction: "set" })).rejects.toThrow(
       /target/,
+    );
+    // `off` alone is ambiguous for the agent: it must say which session, or all.
+    await expect(tool.execute("focus5", { action: "focus", focusAction: "off" })).rejects.toThrow(
+      /target or all/,
     );
   });
 

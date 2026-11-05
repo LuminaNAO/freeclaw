@@ -60,6 +60,7 @@ import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { resolveFocusPromptState } from "../../focus-prompt.js";
 import { buildGroupMemoryPromptBlock } from "../../group-memory.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
@@ -747,7 +748,11 @@ function trimWhitespaceFromToolCallNamesInMessage(
     if (!block || typeof block !== "object") {
       continue;
     }
-    const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
+    const typedBlock = block as {
+      type?: unknown;
+      name?: unknown;
+      id?: unknown;
+    };
     if (!isToolCallBlockType(typedBlock.type)) {
       continue;
     }
@@ -1172,7 +1177,10 @@ function wrapStreamDecodeXaiToolCallArguments(
         async next() {
           const result = await iterator.next();
           if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
+            const event = result.value as {
+              partial?: unknown;
+              message?: unknown;
+            };
             decodeXaiToolCallArgumentsInMessage(event.partial);
             decodeXaiToolCallArgumentsInMessage(event.message);
           }
@@ -1344,7 +1352,10 @@ export function buildAfterTurnRuntimeContext(params: {
   };
 }
 
-function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
+function summarizeMessagePayload(msg: AgentMessage): {
+  textChars: number;
+  imageBlocks: number;
+} {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
     return { textChars: content.length, imageBlocks: 0 };
@@ -1485,7 +1496,10 @@ export async function runEmbeddedAttempt(
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
-        warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+        warn: makeBootstrapWarn({
+          sessionLabel,
+          warn: (message) => log.warn(message),
+        }),
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
       });
@@ -1585,7 +1599,10 @@ export async function runEmbeddedAttempt(
             yieldDetected = true;
             yieldMessage = message;
             queueYieldInterruptForSession?.();
-            logYieldAbort({ runId: params.runId, elapsedMs: Date.now() - runStartMs });
+            logYieldAbort({
+              runId: params.runId,
+              elapsedMs: Date.now() - runStartMs,
+            });
             runAbortController.abort("sessions_yield");
             abortSessionForYield?.();
           },
@@ -1751,6 +1768,8 @@ export async function runEmbeddedAttempt(
         chatType: params.groupId ? "group" : "direct",
       }),
       blockStreaming: params.blockStreaming ?? resolveDefaultPromptBlockStreaming(params.config),
+      // Focus section state (focus-mode ARCH §7.5): read fresh every turn.
+      focus: resolveFocusPromptState(params.sessionKey),
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
@@ -1882,7 +1901,10 @@ export async function runEmbeddedAttempt(
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools
-      let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
+      let clientToolCallDetected: {
+        name: string;
+        params: Record<string, unknown>;
+      } | null = null;
       const clientToolLoopDetection = resolveToolLoopDetectionConfig({
         cfg: params.config,
         agentId: sessionAgentId,
@@ -2151,7 +2173,9 @@ export async function runEmbeddedAttempt(
 
       const innerStreamFn = activeSession.agent.streamFn;
       activeSession.agent.streamFn = (model, context, options) => {
-        const signal = runAbortController.signal as AbortSignal & { reason?: unknown };
+        const signal = runAbortController.signal as AbortSignal & {
+          reason?: unknown;
+        };
         if (yieldDetected && signal.aborted && signal.reason === "sessions_yield") {
           return createYieldAbortedResponse(model) as unknown as Awaited<
             ReturnType<typeof innerStreamFn>
@@ -2670,7 +2694,11 @@ export async function runEmbeddedAttempt(
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+            await abortable(
+              activeSession.prompt(effectivePrompt, {
+                images: imageResult.images,
+              }),
+            );
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
           }

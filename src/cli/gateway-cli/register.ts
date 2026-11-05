@@ -128,16 +128,20 @@ export function registerGatewayCli(program: Command) {
       await runGatewayCommand(() => runGatewayStackDrop(opts), "Gateway stack drop failed");
     });
 
+  // Focus (focus-mode ARCH §7.4): same ops as `/focus` and the gateway `focus` method.
   const focus = gatewayCallOpts(
     gateway
       .command("focus")
       .description(
-        "Focus mode: only one session runs, the others' messages wait (status by default)",
+        "Focus: only sessions at the active level run, the others' messages wait (status by default)",
       )
       .action(async (opts, command) => {
         await runGatewayCommand(
           () =>
-            runGatewayFocus({ action: "status", opts: resolveGatewayRpcOptions(opts, command) }),
+            runGatewayFocus({
+              action: "status",
+              opts: resolveGatewayRpcOptions(opts, command),
+            }),
           "Gateway focus failed",
         );
       }),
@@ -145,14 +149,16 @@ export function registerGatewayCli(program: Command) {
   gatewayCallOpts(
     focus
       .command("set")
-      .description("Focus on one session (session key)")
-      .argument("<session-key>", "Session key to focus on")
-      .action(async (target: string, opts, command) => {
+      .description("Set a session's focus tier (default normal)")
+      .argument("<session-key>", "Session key to focus (main, a short key or a full key)")
+      .option("--tier <tier>", "Focus tier: normal or hyper", "normal")
+      .action(async (target: string, opts: { tier?: string }, command) => {
         await runGatewayCommand(
           () =>
             runGatewayFocus({
               action: "set",
               target,
+              tier: opts.tier,
               opts: resolveGatewayRpcOptions({ ...command.parent?.opts(), ...opts }, command),
             }),
           "Gateway focus set failed",
@@ -162,12 +168,18 @@ export function registerGatewayCli(program: Command) {
   gatewayCallOpts(
     focus
       .command("off")
-      .description("End focus; waiting messages are replayed, one combined prompt per session")
-      .action(async (opts, command) => {
+      .description(
+        "Set one session back to none, or clear all focus with --all; sessions now allowed replay their waiting messages",
+      )
+      .argument("[session-key]", "Session key to set back to none")
+      .option("--all", "Clear all focus", false)
+      .action(async (target: string | undefined, opts: { all?: boolean }, command) => {
         await runGatewayCommand(
           () =>
             runGatewayFocus({
               action: "off",
+              target,
+              all: opts.all === true,
               opts: resolveGatewayRpcOptions({ ...command.parent?.opts(), ...opts }, command),
             }),
           "Gateway focus off failed",
@@ -177,7 +189,9 @@ export function registerGatewayCli(program: Command) {
   gatewayCallOpts(
     focus
       .command("status")
-      .description("Show the focus target, since, and waiting messages per session")
+      .description(
+        "Show focused sessions with tier and since, the active level, and waiting messages",
+      )
       .action(async (opts, command) => {
         await runGatewayCommand(
           () =>

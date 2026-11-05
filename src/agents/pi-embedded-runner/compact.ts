@@ -40,6 +40,7 @@ import { ensureCustomApiRegistered } from "../custom-api-registry.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
+import { resolveFocusPromptState } from "../focus-prompt.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import {
   applyLocalNoAuthHeaderOverride,
@@ -526,7 +527,10 @@ export async function compactEmbeddedPiSessionDirect(
       config: params.config,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
-      warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+      warn: makeBootstrapWarn({
+        sessionLabel,
+        warn: (message) => log.warn(message),
+      }),
     });
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
     // threshold uses the effective limit, not the native context window.
@@ -697,6 +701,8 @@ export async function compactEmbeddedPiSessionDirect(
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
       blockStreaming: params.blockStreaming ?? resolveDefaultPromptBlockStreaming(params.config),
+      // Focus section state (focus-mode ARCH §7.5): read fresh every turn.
+      focus: resolveFocusPromptState(params.sessionKey),
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 
@@ -938,7 +944,9 @@ export async function compactEmbeddedPiSessionDirect(
             // Best effort: the caller already stopped waiting.
           }
         };
-        params.abortSignal?.addEventListener("abort", onCallerAbort, { once: true });
+        params.abortSignal?.addEventListener("abort", onCallerAbort, {
+          once: true,
+        });
         let result: Awaited<ReturnType<typeof session.compact>>;
         try {
           result = await compactWithSafetyTimeout(() => session.compact(params.customInstructions));

@@ -17,6 +17,22 @@ export const DEFAULT_COMPACTION_INSTRUCTIONS =
   "Do not translate or alter code, file paths, identifiers, or error messages.";
 
 /**
+ * Standing rules every compaction summary keeps, whatever the custom instructions
+ * say. They are part of the fixed summary template (not of the 800-char custom
+ * budget), so a long /compact instruction cannot push them out.
+ *
+ * Focus (focus-mode ARCH §7.5): the system prompt's Focus section survives
+ * compaction. Its rules are kept; the focus state itself is re-read every turn.
+ */
+export const FOCUS_COMPACTION_RULE =
+  "Keep the rules of the system prompt's ## Focus section under ## Constraints/Rules " +
+  "(tiers none < normal < hyper, a session runs only at or above the active level, " +
+  "only an operator sets /focus). Do not record the current focus state as a decision: " +
+  "it is re-read every turn.";
+
+export const STANDING_COMPACTION_RULES: readonly string[] = [FOCUS_COMPACTION_RULE];
+
+/**
  * Upper bound on custom instruction length to prevent prompt bloat.
  * ~800 chars ≈ ~200 tokens — keeps summarization quality stable.
  */

@@ -10,6 +10,7 @@ import type { CliBackendConfig } from "../../config/types.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
+import type { FocusPromptState } from "../focus-prompt.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
@@ -51,6 +52,8 @@ export function buildSystemPrompt(params: {
   bootstrapTruncationWarningLines?: string[];
   modelDisplay: string;
   agentId?: string;
+  /** Focus state of this session for the Focus section (focus-mode ARCH §7.5). */
+  focus?: FocusPromptState;
 }) {
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
@@ -97,6 +100,7 @@ export function buildSystemPrompt(params: {
     memoryCitationsMode: params.config?.memory?.citations,
     // No channel context here: the agent default decides the narration lines.
     blockStreaming: resolveDefaultPromptBlockStreaming(params.config),
+    focus: params.focus,
   });
 }
 
