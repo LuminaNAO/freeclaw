@@ -26,6 +26,7 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call
 import {
   composeSplitTurnInstructions,
   resolveCompactionInstructions,
+  STANDING_COMPACTION_RULES,
 } from "./compaction-instructions.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 
@@ -448,6 +449,7 @@ function buildCompactionStructureInstructions(
     ...REQUIRED_SUMMARY_SECTIONS,
     identifierSectionInstruction,
     "Do not omit unresolved asks from the user.",
+    ...STANDING_COMPACTION_RULES,
   ].join("\n");
   const custom = customInstructions?.trim();
   if (!custom) {
@@ -990,6 +992,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   });
 }
 
+// oxlint-disable-next-line no-underscore-dangle
 export const __testing = {
   collectToolFailures,
   formatToolFailuresSection,
