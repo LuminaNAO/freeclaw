@@ -6,6 +6,7 @@ import { loadContract, parentKeyOf, type Contract, type ContractDefaults } from 
 import { formatEnvelope, Mailbox, msgIdFor, type RunEnd, type RuntimeLike } from "./delivery.js";
 import { joinStatus, laneEmits } from "./fanout.js";
 import { noGroupAdapter, type SwarmGroupAdapter } from "./group.js";
+import { sessionRolesOf } from "./heal.js";
 import { loadHolon, RELAY_ROLE, isMemberRole, targetMembers, type Holon } from "./holon.js";
 import { MemberChannels, type MemberChannelsOptions } from "./members.js";
 import { holonBranch, memberBranch, mergePartition } from "./partition.js";
@@ -28,6 +29,7 @@ import {
   type SwarmEvent,
   type TaskStatus,
 } from "./store.js";
+import { SwarmTimers, systemClock, type SwarmClock } from "./timers.js";
 import { deliverUpstream, type ChannelSender } from "./upstream.js";
 
 // Routing engine (ARCH §4, §5).
@@ -52,6 +54,8 @@ export type EngineOptions = {
   memberChannels?: MemberChannels | MemberChannelsOptions;
   /** Called after any event is appended; the wall deadline uses it to arm new tasks. */
   onEvent?: (taskId: string, event: SwarmEvent) => void;
+  /** ARCH §7.1.4-5: the clock behind the retry timers and the idle sweep (tests fake it). */
+  clock?: SwarmClock;
 };
 
 export type EmitInput = {
@@ -143,6 +147,8 @@ export class SwarmEngine {
   private readonly onEvent?: EngineOptions["onEvent"];
   /** Set by the hooks: exit enforcement and run errors when a run ends (ARCH §5, §7). */
   runEndHandler?: (end: RunEnd) => Promise<void>;
+  /** ARCH §7.1.4-5: the scheduled retries after run errors and the idle sweep. */
+  readonly timers: SwarmTimers;
 
   constructor(opts: EngineOptions) {
     this.stateDir = opts.stateDir;
@@ -152,6 +158,7 @@ export class SwarmEngine {
     this.logger = opts.logger;
     this.channelSender = opts.channelSender;
     this.onEvent = opts.onEvent;
+    this.timers = new SwarmTimers(opts.clock ?? systemClock);
     this.group = opts.group ?? noGroupAdapter;
     this.memberChannels =
       opts.memberChannels instanceof MemberChannels
@@ -508,6 +515,14 @@ export class SwarmEngine {
   close(taskId: string, status: Exclude<TaskStatus, "open">): void {
     updateTaskIndexEntry(this.stateDir, taskId, { status });
     this.record(taskId, { kind: "system", event: "TASK_CLOSED", data: { status } });
+    // ARCH §7.1.4: a closed holon has no next step; its scheduled retries are dropped.
+    this.timers.cancelTask(taskId);
+    const holon = this.holonOrUndefined(taskId);
+    if (holon) {
+      for (const role of sessionRolesOf(holon)) {
+        this.mailbox.dropHold(this.sessionKey(taskId, role));
+      }
+    }
     // A group is a convenience; failing to dispose it never affects the task.
     void this.group.dispose(taskId).catch(() => undefined);
     // ARCH §8.1: a holon's member group is closed when the holon is done. Queued behind the
@@ -801,7 +816,9 @@ export class SwarmEngine {
     const busy = round.members.some(
       (m) =>
         (m !== opts.ending && this.mailbox.isBusy(this.sessionKey(taskId, m))) ||
-        this.mailbox.hasPending(this.sessionKey(taskId, m)),
+        this.mailbox.hasPending(this.sessionKey(taskId, m)) ||
+        // ARCH §7.1.2: a member waiting for its scheduled retry still has a turn coming.
+        this.mailbox.isHeld(this.sessionKey(taskId, m)),
     );
     if (busy) {
       return none;
