@@ -6,12 +6,14 @@ import {
   type OpenClawConfig,
   type OpenClawPluginApi,
 } from "openclaw/plugin-sdk/swarm";
+import { openChildrenOf } from "./src/children.js";
 import { registerSwarmCli } from "./src/cli.js";
 import type { ContractDefaults, UpstreamChannel } from "./src/contract.js";
 import { SWARM_EMIT_TOOL, createSwarmEmitToolFactory } from "./src/emit.js";
 import { SwarmEngine } from "./src/engine.js";
 import { FakeChannel } from "./src/fake-channel.js";
 import { resolveGroupAdapter } from "./src/group.js";
+import { startIdleSweep } from "./src/heal.js";
 import { createSwarmHooks } from "./src/hooks.js";
 import { createSwarmHolonToolFactory, SWARM_HOLON_TOOL } from "./src/lead-tool.js";
 import {
@@ -157,11 +159,19 @@ export default function register(api: OpenClawPluginApi) {
         api.logger.info(
           `[swarm] resumed ${summary.tasks} task(s): resent=${summary.resent} ` +
             `acked=${summary.ackedFromTranscript + summary.ackedAsAnswered} redelivered=${summary.redelivered} ` +
-            `childReports=${summary.childReports}`,
+            `childReports=${summary.childReports} retriesRearmed=${summary.retriesRearmed}`,
         );
       }
+      // ARCH §7.1.5: once a minute, an open holon with nothing in flight gets its outstanding
+      // input again; the swarm never needs an outside checker.
+      startIdleSweep(
+        current,
+        (id) => openChildrenOf(current.stateDir, id),
+        (resumed) => api.logger.info(`[swarm] idle sweep resumed ${resumed.join(", ")}`),
+      );
     },
     stop: () => {
+      engine?.timers.stopAll();
       engine = undefined;
     },
   });
