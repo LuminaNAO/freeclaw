@@ -173,6 +173,24 @@ openclaw gateway call status
 openclaw gateway call logs.tail --params '{"sinceMs": 60000}'
 ```
 
+### `gateway focus`
+
+Focus (operator only): only sessions at the active focus level run people's messages; the others wait and are
+replayed as one combined prompt per session when they are allowed again. Same ops as the `/focus` chat command and
+the gateway `focus` method.
+
+```bash
+openclaw gateway focus                      # status: focused sessions, tier, since, active level, waiting
+openclaw gateway focus set main             # tier normal (default)
+openclaw gateway focus set <session-key> --tier hyper
+openclaw gateway focus off <session-key>    # that session back to none
+openclaw gateway focus off --all            # clear all focus
+openclaw gateway focus status --json        # the same report the gateway method returns
+```
+
+Tiers: `none` < `normal` < `hyper`. The active level is the highest tier any session holds; a session's messages run
+only if its tier is at least the active level. `status` works with the gateway down (reads the state on disk).
+
 ## Manage the Gateway service
 
 ```bash

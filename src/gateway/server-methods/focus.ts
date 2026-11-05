@@ -1,54 +1,65 @@
-// Gateway method `focus` (docs/design/focus-mode.md §4): set, off and status.
+// Gateway method `focus` (docs/design/focus-mode.md §7.4): status, set and off,
+// through the same ops function as `/focus` and `openclaw gateway focus`.
 // Operator authority only: the method is in the admin scope (method-scopes.ts).
+//
+// Params: { action?: "status"|"set"|"off", target?: string, tier?: "normal"|"hyper",
+// all?: boolean }. `off` without a target (or with all) clears all focus.
+// The response is the FocusReport, the same JSON as `openclaw gateway focus --json`.
 import { loadConfig } from "../../config/config.js";
-import { runFocusAction } from "../../infra/focus-mode-actions.js";
+import { type FocusOpRequest, runFocusOp } from "../../infra/focus-mode-actions.js";
 import { resolveControlPlaneActor } from "../control-plane-audit.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** The request as the method receives it, or an error message. */
+export function parseFocusMethodParams(
+  params: Record<string, unknown>,
+): FocusOpRequest | { error: string } {
+  const action = (readString(params.action) ?? "status").toLowerCase();
+  const target = readString(params.target);
+  const tier = readString(params.tier);
+  if (action === "status") {
+    return { action: "status" };
+  }
+  if (action === "set") {
+    if (!target) {
+      return { error: "focus set: target required" };
+    }
+    return { action: "set", target, ...(tier ? { tier } : {}) };
+  }
+  if (action === "off") {
+    if (params.all === true && target) {
+      return { error: "focus off: give a target or all, not both" };
+    }
+    return target ? { action: "off", target } : { action: "off", all: true };
+  }
+  return { error: "focus: action must be status, set or off" };
+}
+
 export const focusHandlers: GatewayRequestHandlers = {
   focus: ({ params, respond, client, context }) => {
-    const actionRaw = typeof params.action === "string" ? params.action.trim().toLowerCase() : "";
-    const action = actionRaw || "status";
-    if (action !== "set" && action !== "off" && action !== "status") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "focus: action must be set, off or status"),
-      );
-      return;
-    }
-    const target = typeof params.target === "string" ? params.target : undefined;
-    if (action === "set" && !target?.trim()) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "focus set: target required"),
-      );
+    const request = parseFocusMethodParams(params);
+    if ("error" in request) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, request.error));
       return;
     }
     const by = resolveControlPlaneActor(client).actor;
     try {
-      const result = runFocusAction({ cfg: loadConfig(), action, target, by });
-      if (result.action === "set") {
-        context.logGateway.info(`focus mode: on ${result.sessionKey} by ${by}`);
-        respond(
-          true,
-          { focus: { target: result.sessionKey, ...result.entry }, replaying: result.replaying },
-          undefined,
+      const { report } = runFocusOp({ cfg: loadConfig(), request, by });
+      if (report.action === "set") {
+        context.logGateway.info(
+          `focus: ${report.sessionKey} ${report.previousTier} -> ${report.tier} by ${by}; active level ${report.status.active}; replaying ${report.replaying} session(s)`,
         );
-        return;
+      } else if (report.action === "off" && Object.keys(report.ended).length > 0) {
+        context.logGateway.info(
+          `focus: off ${report.sessionKey ?? "(all)"} by ${by}; active level ${report.status.active}; replaying ${report.replaying} session(s)`,
+        );
       }
-      if (result.action === "off") {
-        if (Object.keys(result.ended).length > 0) {
-          context.logGateway.info(
-            `focus mode: off by ${by}; replaying ${result.replaying} session(s)`,
-          );
-        }
-        respond(true, { ended: result.ended, replaying: result.replaying }, undefined);
-        return;
-      }
-      respond(true, result.status, undefined);
+      respond(true, report, undefined);
     } catch (err) {
       respond(
         false,

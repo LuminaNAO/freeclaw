@@ -79,9 +79,11 @@ const GatewayToolSchema = Type.Object({
   slashCommands: Type.Optional(Type.Boolean()),
   note: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Number()),
-  // focus (focus mode: set <target> | off | status)
+  // focus (focus-mode ARCH §7.4: status | set <target> [tier] | off [<target>|all])
   focusAction: Type.Optional(stringEnum(["set", "off", "status"] as const)),
   target: Type.Optional(Type.String()),
+  tier: Type.Optional(stringEnum(["normal", "hyper"] as const)),
+  all: Type.Optional(Type.Boolean()),
 });
 // NOTE: We intentionally avoid top-level `allOf`/`anyOf`/`oneOf` conditionals here:
 // - OpenAI rejects tool schemas that include these keywords at the *top-level*.
@@ -99,7 +101,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: true,
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Focus mode (action=focus, focusAction=set+target|off|status): only the target session runs while others' messages wait; use it only when an operator asks. signal.trust.markAgent / signal.trust.unmarkAgent (uuid) mark or unmark a trusted Signal identity as another agent; sessions.setQuiet (sessionKey, errorReplies?, slashCommands?; false = quiet, true = default) sets a session's quiet settings. These three call the same gateway methods as the CLI and are allowed only when the current turn's sender is an operator (senderIsOwner); otherwise they are refused. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Focus (action=focus; focusAction=status | set+target[+tier normal|hyper] | off+target | off+all): a person's message runs only in sessions at the active focus level, others wait; same as /focus and `openclaw gateway focus`; use it only when an operator asks. signal.trust.markAgent / signal.trust.unmarkAgent (uuid) mark or unmark a trusted Signal identity as another agent; sessions.setQuiet (sessionKey, errorReplies?, slashCommands?; false = quiet, true = default) sets a session's quiet settings. These three call the same gateway methods as the CLI and are allowed only when the current turn's sender is an operator (senderIsOwner); otherwise they are refused. Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -280,16 +282,27 @@ export function createGatewayTool(opts?: {
       }
 
       if (action === "focus") {
+        // Focus (focus-mode ARCH §7.4): the gateway `focus` method, same ops as /focus.
         const focusAction = readStringParam(params, "focusAction") ?? "status";
         const target =
           focusAction === "set"
-            ? readStringParam(params, "target", { required: true, label: "target" })
-            : undefined;
-        const result = await callGatewayTool(
-          "focus",
-          gatewayOpts,
-          target ? { action: focusAction, target } : { action: focusAction },
-        );
+            ? readStringParam(params, "target", {
+                required: true,
+                label: "target",
+              })
+            : focusAction === "off"
+              ? readStringParam(params, "target")
+              : undefined;
+        const tier = focusAction === "set" ? readStringParam(params, "tier") : undefined;
+        if (focusAction === "off" && !target && params.all !== true) {
+          throw new Error("focus off: target or all=true required");
+        }
+        const result = await callGatewayTool("focus", gatewayOpts, {
+          action: focusAction,
+          ...(target ? { target } : {}),
+          ...(tier ? { tier } : {}),
+          ...(focusAction === "off" && !target ? { all: true } : {}),
+        });
         return jsonResult({ ok: true, result });
       }
 

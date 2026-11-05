@@ -21,6 +21,7 @@ type DefineChatCommandInput = {
   textAliases?: string[];
   scope?: CommandScope;
   category?: CommandCategory;
+  hidden?: boolean;
 };
 
 function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
@@ -43,6 +44,7 @@ function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefiniti
     textAliases: aliases,
     scope,
     category: command.category,
+    ...(command.hidden ? { hidden: true } : {}),
   };
 }
 
@@ -352,19 +354,28 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
-      key: "focusmode",
-      nativeName: "focusmode",
-      description: "Focus mode: only one session runs, others wait (operator).",
-      textAlias: "/focusmode",
+      key: "focus",
+      nativeName: "focus",
+      description: "Focus: only focused sessions run, others wait (operator).",
+      textAlias: "/focus",
       category: "management",
       args: [
         {
-          name: "target",
-          description: "Session key, here, or off",
+          name: "args",
+          description: "here|<session key> [normal|hyper], off [here|<session key>]",
           type: "string",
           captureRemaining: true,
         },
       ],
+    }),
+    // Old name of /focus (focus-mode ARCH §7.4): hidden alias for one release.
+    defineChatCommand({
+      key: "focusmode",
+      description: "Old name of /focus.",
+      textAlias: "/focusmode",
+      category: "management",
+      acceptsArgs: true,
+      hidden: true,
     }),
     defineChatCommand({
       key: "agents",

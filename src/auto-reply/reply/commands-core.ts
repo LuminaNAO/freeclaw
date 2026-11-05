@@ -13,7 +13,7 @@ import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
-import { handleFocusModeCommand } from "./commands-focus-mode.js";
+import { handleFocusCommand } from "./commands-focus.js";
 import {
   handleCommandsListCommand,
   handleContextCommand,
@@ -182,7 +182,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleUsageCommand,
       handleSessionCommand,
       handleRestartCommand,
-      handleFocusModeCommand,
+      handleFocusCommand,
       handleTtsCommands,
       handleHelpCommand,
       handleCommandsListCommand,

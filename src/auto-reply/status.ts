@@ -862,9 +862,9 @@ export function buildCommandsMessagePaginated(
   const surface = options?.surface?.toLowerCase();
   const isTelegram = surface === "telegram";
 
-  const commands = cfg
-    ? listChatCommandsForConfig(cfg, { skillCommands })
-    : listChatCommands({ skillCommands });
+  const commands = (
+    cfg ? listChatCommandsForConfig(cfg, { skillCommands }) : listChatCommands({ skillCommands })
+  ).filter((command) => !command.hidden);
   const pluginCommands = listPluginCommands();
   const items = buildCommandItems(commands, pluginCommands);
 
