@@ -2,6 +2,7 @@
 // Every new session learns what focus is, the tiers, the §7.2 rule, the commands
 // and that only an operator sets it. When focus is on, one more line gives the
 // active level and this session's tier. Five lines at most under the heading.
+import { activeFocusLevel, readFocusState, sessionFocusTier } from "../infra/focus-mode.js";
 
 /** Upper bound on the section body (lines under `## Focus`, state line included). */
 export const FOCUS_PROMPT_MAX_LINES = 5;
@@ -49,4 +50,26 @@ export function buildFocusPromptSection(state?: FocusPromptState): string[] {
     body.push(stateLine(state));
   }
   return [FOCUS_PROMPT_HEADING, ...body.slice(0, FOCUS_PROMPT_MAX_LINES), ""];
+}
+
+/**
+ * The focus state for a session's system prompt, read from <stateDir>/focus.json
+ * (undefined when no focus is on, or the file cannot be read: the rules still show).
+ */
+export function resolveFocusPromptState(
+  sessionKey: string | undefined,
+  stateDir?: string,
+): FocusPromptState | undefined {
+  try {
+    const state = readFocusState(stateDir);
+    if (!state) {
+      return undefined;
+    }
+    return {
+      active: activeFocusLevel(state),
+      tier: sessionKey?.trim() ? sessionFocusTier(state, sessionKey) : "none",
+    };
+  } catch {
+    return undefined;
+  }
 }

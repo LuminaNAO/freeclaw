@@ -1,11 +1,16 @@
 // Focus section of the system prompt and its survival through compaction
 // (focus-mode ARCH §7.5, tests §7.6).
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { clearAllFocus, setSessionFocus } from "../infra/focus-mode.js";
 import {
   buildFocusPromptSection,
   FOCUS_PROMPT_HEADING,
   FOCUS_PROMPT_MAX_CHARS,
   FOCUS_PROMPT_MAX_LINES,
+  resolveFocusPromptState,
 } from "./focus-prompt.js";
 import {
   FOCUS_COMPACTION_RULE,
@@ -100,6 +105,37 @@ describe("Focus section in the system prompt (focus-mode ARCH §7.5)", () => {
     expect(notFocused).toContain(
       "Focus is on: active level normal; this session is not focused, so its people's messages wait.",
     );
+  });
+});
+
+describe("the Focus section's state comes from focus.json (focus-mode ARCH §7.5)", () => {
+  it("no focus: no state; mixed tiers: the active level and this session's tier", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "focus-prompt-"));
+    try {
+      expect(resolveFocusPromptState("agent:main:main", stateDir)).toBeUndefined();
+      setSessionFocus({ sessionKey: "agent:main:main", by: "op", stateDir });
+      setSessionFocus({ sessionKey: "agent:main:x", tier: "hyper", by: "op", stateDir });
+      expect(resolveFocusPromptState("agent:main:main", stateDir)).toEqual({
+        active: "hyper",
+        tier: "normal",
+      });
+      expect(resolveFocusPromptState("AGENT:main:x", stateDir)).toEqual({
+        active: "hyper",
+        tier: "hyper",
+      });
+      expect(resolveFocusPromptState("agent:main:other", stateDir)).toEqual({
+        active: "hyper",
+        tier: "none",
+      });
+      expect(resolveFocusPromptState(undefined, stateDir)).toEqual({
+        active: "hyper",
+        tier: "none",
+      });
+      clearAllFocus(stateDir);
+      expect(resolveFocusPromptState("agent:main:main", stateDir)).toBeUndefined();
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 });
 
