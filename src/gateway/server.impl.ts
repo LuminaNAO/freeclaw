@@ -948,12 +948,13 @@ export async function startGatewayServer(
     announceGatewayCrash(cfgAtStart, log);
   }
 
-  // Focus mode (focus-mode ARCH §5): ending focus replays each session's waiting
-  // prompts as one combined prompt through the normal inbound path.
-  registerFocusReplayer(() => replayFocusWaiting(gatewayRequestContext.logGateway));
+  // Focus mode (focus-mode ARCH §5, §7.3): when a session is allowed again, its
+  // waiting prompts replay as one combined prompt through the normal inbound path.
+  registerFocusReplayer((allow) => replayFocusWaiting(gatewayRequestContext.logGateway, allow));
 
   // Session prompt stack (§5): after channels start, re-submit unfinished prompts.
-  // While focused, non-target inbound files are held, not replayed (focus-mode ARCH §5.4).
+  // While focused, inbound files of sessions not allowed at the current level are
+  // held, not replayed (focus-mode ARCH §5.4, §7.3).
   if (!minimalTestGateway) {
     void replaySessionStack(gatewayRequestContext);
   }

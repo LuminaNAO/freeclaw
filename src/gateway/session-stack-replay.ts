@@ -21,9 +21,10 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
 import {
+  activeFocusLevel,
+  focusAllows,
   holdFocusFiles,
   readFocusState,
-  sameSessionKey,
   takeHeldFocusFiles,
 } from "../infra/focus-mode.js";
 import {
@@ -243,10 +244,11 @@ function dropStaleEntries(
 }
 
 /**
- * Focus mode ARCH §5.4: while focused, the inbound files of non-target sessions are
- * not replayed at startup; they are held for the combined replay when focus ends.
- * Agent files are not gated (§3.3) and replay as usual. Held files are taken out
- * before the stale guards: they were never run, and focus has no timeout (§2).
+ * Focus mode ARCH §5.4, §7.3: while focused, the inbound files of sessions that are
+ * not allowed at the current level are not replayed at startup; they are held for
+ * the combined replay when their session is allowed again. Agent files are not
+ * gated (§3.3) and replay as usual. Held files are taken out before the stale
+ * guards: they were never run, and focus has no timeout (§2).
  */
 function holdFocusedEntries(
   sessionKey: string,
@@ -254,7 +256,7 @@ function holdFocusedEntries(
   log: GatewayRequestContext["logGateway"],
 ): StackEntry[] {
   const focus = readFocusState();
-  if (!focus || sameSessionKey(sessionKey, focus.target)) {
+  if (!focus || focusAllows(focus, sessionKey)) {
     return entries;
   }
   const held = entries.filter((entry) => entry.content.source === "inbound");
@@ -266,7 +268,7 @@ function holdFocusedEntries(
     held.map((entry) => entry.file),
   );
   log.info(
-    `session stack: holding ${held.length} file(s) for ${sessionKey} (focus mode on ${focus.target})`,
+    `session stack: holding ${held.length} file(s) for ${sessionKey} (focus active level ${activeFocusLevel(focus)})`,
   );
   return entries.filter((entry) => entry.content.source !== "inbound");
 }
@@ -337,17 +339,21 @@ function heldOrder(a: StackEntry, b: StackEntry): number {
 }
 
 /**
- * Focus mode ARCH §5.2-§5.3: per session with held prompts, oldest session first,
- * combine them into ONE prompt and replay it through the normal inbound path. All
- * of the session's files are bound to that one turn, so they are deleted when it
- * ends (stack §3, several prompts consumed by one turn).
+ * Focus mode ARCH §5.2-§5.3, §7.3: per held session that `allow` accepts (all when
+ * omitted), oldest session first, combine its prompts into ONE prompt and replay it
+ * through the normal inbound path. All of the session's files are bound to that one
+ * turn, so they are deleted when it ends (stack §3, several prompts consumed by one
+ * turn). Sessions `allow` refuses stay held.
  */
-export function replayFocusWaiting(log: GatewayRequestContext["logGateway"]): {
+export function replayFocusWaiting(
+  log: GatewayRequestContext["logGateway"],
+  allow?: (sessionKey: string) => boolean,
+): {
   sessions: number;
   done: Promise<void>;
 } {
   const cfg = loadConfig();
-  const sessions = [...takeHeldFocusFiles()]
+  const sessions = [...takeHeldFocusFiles(allow)]
     .map(([sessionKey, files]) => ({
       sessionKey,
       entries: [...files]

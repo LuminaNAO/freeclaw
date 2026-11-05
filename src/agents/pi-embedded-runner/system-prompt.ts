@@ -3,6 +3,7 @@ import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { SilentReplyPromptMode } from "../../config/silent-reply.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
+import type { FocusPromptState } from "../focus-prompt.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import {
   buildAgentSystemPrompt,
@@ -61,6 +62,8 @@ export function buildEmbeddedSystemPrompt(params: {
   silentReplyPromptMode?: SilentReplyPromptMode;
   /** Resolved block-streaming state of the turn; selects the "Tool Call Style" narration lines. */
   blockStreaming?: PromptBlockStreaming;
+  /** Focus state of this session for the Focus section (focus-mode ARCH §7.5). */
+  focus?: FocusPromptState;
 }): string {
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -93,6 +96,7 @@ export function buildEmbeddedSystemPrompt(params: {
     memoryCitationsMode: params.memoryCitationsMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
     blockStreaming: params.blockStreaming,
+    focus: params.focus,
   });
 }
 

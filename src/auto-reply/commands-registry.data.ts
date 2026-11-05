@@ -21,6 +21,7 @@ type DefineChatCommandInput = {
   textAliases?: string[];
   scope?: CommandScope;
   category?: CommandCategory;
+  hidden?: boolean;
 };
 
 function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
@@ -43,6 +44,7 @@ function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefiniti
     textAliases: aliases,
     scope,
     category: command.category,
+    ...(command.hidden ? { hidden: true } : {}),
   };
 }
 
@@ -354,40 +356,26 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "focus",
       nativeName: "focus",
-      description:
-        "Bind this thread (Discord) or topic/conversation (Telegram) to a session target.",
+      description: "Focus: only focused sessions run, others wait (operator).",
       textAlias: "/focus",
       category: "management",
       args: [
         {
-          name: "target",
-          description: "Subagent label/index or session key/id/label",
+          name: "args",
+          description: "here|<session key> [normal|hyper], off [here|<session key>]",
           type: "string",
           captureRemaining: true,
         },
       ],
     }),
+    // Old name of /focus (focus-mode ARCH §7.4): hidden alias for one release.
     defineChatCommand({
       key: "focusmode",
-      nativeName: "focusmode",
-      description: "Focus mode: only one session runs, others wait (operator).",
+      description: "Old name of /focus.",
       textAlias: "/focusmode",
       category: "management",
-      args: [
-        {
-          name: "target",
-          description: "Session key, here, or off",
-          type: "string",
-          captureRemaining: true,
-        },
-      ],
-    }),
-    defineChatCommand({
-      key: "unfocus",
-      nativeName: "unfocus",
-      description: "Remove the current thread (Discord) or topic/conversation (Telegram) binding.",
-      textAlias: "/unfocus",
-      category: "management",
+      acceptsArgs: true,
+      hidden: true,
     }),
     defineChatCommand({
       key: "agents",

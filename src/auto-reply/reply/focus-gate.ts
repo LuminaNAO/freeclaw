@@ -1,4 +1,4 @@
-// Focus mode gate at inbound dispatch (docs/design/focus-mode.md §3).
+// Focus mode gate at inbound dispatch (docs/design/focus-mode.md §3, §7.2).
 // Runs at the same point as the restart-drain check (stack §6), after the stack
 // file is written. A held message keeps its file on disk and starts no turn.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -11,11 +11,13 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
+  activeFocusLevel,
   FOCUS_BUSY_NOTICE,
   type FocusState,
   holdFocusFiles,
-  isFocusModeCommandText,
+  isFocusCommandText,
   markFocusNotified,
+  sessionFocusTier,
 } from "../../infra/focus-mode.js";
 import { finishStackFiles } from "../../infra/session-stack.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
@@ -33,15 +35,16 @@ function commandText(ctx: FinalizedMsgContext): string {
 }
 
 /**
- * `/focusmode` while focused away. §3.4 escape hatch: an operator's command is always
- * handled ("operator"). §4: anyone else gets the standard refusal ("refused": ignored,
- * no turn, nothing kept for replay), exactly as the command handler refuses it.
+ * `/focus` (or its alias `/focusmode`) in a waiting session. §3.4, §7.2: an operator's
+ * command is always handled ("operator"). §4: anyone else gets the standard refusal
+ * ("refused": ignored, no turn, nothing kept for replay), exactly as the command
+ * handler refuses it.
  */
 function classifyFocusModeCommand(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
 ): "operator" | "refused" | undefined {
-  if (!isFocusModeCommandText(commandText(ctx))) {
+  if (!isFocusCommandText(commandText(ctx))) {
     return undefined;
   }
   const auth = resolveCommandAuthorization({
@@ -53,7 +56,7 @@ function classifyFocusModeCommand(
 }
 
 /**
- * §3.1-§3.2. Returns true when the message is held (the caller returns without
+ * §3.2, §7.2. Returns true when the message is held (the caller returns without
  * starting the turn). The stack files stay on disk; the sender gets the busy notice
  * at most once per session per focus period.
  */
@@ -63,7 +66,7 @@ export async function holdForFocus(params: {
   dispatcher: ReplyDispatcher;
   sessionKey: string;
   stackFiles: string[];
-  /** The focus that holds this session (focusHolding). */
+  /** The focus that holds this session (focusHolding: its tier is below the active level). */
   focus: FocusState;
 }): Promise<boolean> {
   const { ctx, cfg, dispatcher, sessionKey, stackFiles, focus } = params;
@@ -72,12 +75,14 @@ export async function holdForFocus(params: {
     return false;
   }
   if (focusCommand === "refused") {
-    logVerbose(`Ignoring /focusmode from non-operator sender: ${redactIdentifier(ctx.SenderId)}`);
+    logVerbose(`Ignoring /focus from non-operator sender: ${redactIdentifier(ctx.SenderId)}`);
     finishStackFiles(stackFiles);
     return true;
   }
   holdFocusFiles(sessionKey, stackFiles.slice());
-  logVerbose(`focus mode: held inbound for ${sessionKey} (focused on ${focus.target})`);
+  logVerbose(
+    `focus mode: held inbound for ${sessionKey} (tier ${sessionFocusTier(focus, sessionKey)} < active level ${activeFocusLevel(focus)})`,
+  );
   if (markFocusNotified(sessionKey)) {
     await sendBusyNotice({ ctx, cfg, dispatcher });
   }

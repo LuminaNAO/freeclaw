@@ -27,8 +27,6 @@ Thread binding controls:
 
 These commands work on channels that support persistent thread bindings. See **Thread supporting channels** below.
 
-- `/focus <subagent-label|session-key|session-id|session-label>`
-- `/unfocus`
 - `/agents`
 - `/session idle <duration|off>`
 - `/session max-age <duration|off>`
@@ -99,22 +97,19 @@ When thread bindings are enabled for a channel, a sub-agent can stay bound to a 
 
 ### Thread supporting channels
 
-- Discord (currently the only supported channel): supports persistent thread-bound subagent sessions (`sessions_spawn` with `thread: true`), manual thread controls (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`), and adapter keys `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.idleHours`, `channels.discord.threadBindings.maxAgeHours`, and `channels.discord.threadBindings.spawnSubagentSessions`.
+- Discord (currently the only supported channel): supports persistent thread-bound subagent sessions (`sessions_spawn` with `thread: true`), thread controls (`/agents`, `/session idle`, `/session max-age`), and adapter keys `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.idleHours`, `channels.discord.threadBindings.maxAgeHours`, and `channels.discord.threadBindings.spawnSubagentSessions`.
 
 Quick flow:
 
 1. Spawn with `sessions_spawn` using `thread: true` (and optionally `mode: "session"`).
 2. OpenClaw creates or binds a thread to that session target in the active channel.
 3. Replies and follow-up messages in that thread route to the bound session.
-4. Use `/session idle` to inspect/update inactivity auto-unfocus and `/session max-age` to control the hard cap.
-5. Use `/unfocus` to detach manually.
+4. Use `/session idle` to inspect/update inactivity auto-unbind and `/session max-age` to control the hard cap.
 
-Manual controls:
+Controls:
 
-- `/focus <target>` binds the current thread (or creates one) to a sub-agent/session target.
-- `/unfocus` removes the binding for the current bound thread.
 - `/agents` lists active runs and binding state (`thread:<id>` or `unbound`).
-- `/session idle` and `/session max-age` only work for focused bound threads.
+- `/session idle` and `/session max-age` only work for bound threads.
 
 Config switches:
 

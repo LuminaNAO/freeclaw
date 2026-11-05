@@ -210,7 +210,8 @@ export async function dispatchReplyFromConfig(params: {
     sessionKey &&
     (await holdForFocus({ ctx, cfg, dispatcher, sessionKey, stackFiles, focus }))
   ) {
-    // Focus mode (focus-mode ARCH §3.2): stored, not run; replayed combined when focus ends.
+    // Focus mode (focus-mode ARCH §3.2, §7.2): stored, not run; replayed combined when
+    // the session is allowed again (§7.3).
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
   try {

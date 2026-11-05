@@ -37,6 +37,7 @@ import {
 } from "./cli-runner/helpers.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
+import { resolveFocusPromptState } from "./focus-prompt.js";
 import { buildGroupMemoryPromptBlock } from "./group-memory.js";
 import {
   classifyFailoverReason,
@@ -165,7 +166,10 @@ export async function runCliAgent(params: {
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+    warn: makeBootstrapWarn({
+      sessionLabel,
+      warn: (message) => log.warn(message),
+    }),
   });
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
@@ -212,6 +216,7 @@ export async function runCliAgent(params: {
     bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
     modelDisplay,
     agentId: sessionAgentId,
+    focus: resolveFocusPromptState(params.sessionKey),
   });
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
@@ -383,7 +388,9 @@ export async function runCliAgent(params: {
         });
         // The caller (for example an explicit cron limit) can give up while the child is running: stop it.
         const cancelOnAbort = () => managedRun.cancel("manual-cancel");
-        params.abortSignal?.addEventListener("abort", cancelOnAbort, { once: true });
+        params.abortSignal?.addEventListener("abort", cancelOnAbort, {
+          once: true,
+        });
         if (params.abortSignal?.aborted) {
           cancelOnAbort();
         }
@@ -428,9 +435,13 @@ export async function runCliAgent(params: {
                 "It may have been waiting for interactive input or an approval prompt.",
                 "For Claude Code, prefer --permission-mode bypassPermissions --print.",
               ].join(" ");
-              enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
+              enqueueSystemEvent(stallNotice, {
+                sessionKey: params.sessionKey,
+              });
               requestHeartbeatNow(
-                scopedHeartbeatWakeOptions(params.sessionKey, { reason: "cli:watchdog:stall" }),
+                scopedHeartbeatWakeOptions(params.sessionKey, {
+                  reason: "cli:watchdog:stall",
+                }),
               );
             }
             // Our own stall abort, not a provider failure: surface it, do not fall back.

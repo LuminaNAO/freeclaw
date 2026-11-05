@@ -62,6 +62,11 @@ export type ChatCommandDefinition = {
   argsMenu?: CommandArgMenuSpec | "auto";
   scope: CommandScope;
   category?: CommandCategory;
+  /**
+   * Recognised and handled, but not listed (/commands, /help, TUI completion).
+   * Used for a renamed command's old name kept as an alias for a release.
+   */
+  hidden?: boolean;
 };
 
 export type NativeCommandSpec = {

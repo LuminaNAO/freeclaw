@@ -26,7 +26,7 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-function buildFocusSessionBindingService() {
+function buildSessionBindingService() {
   return {
     touch: vi.fn(),
     listBySession(targetSessionKey: string) {
@@ -64,7 +64,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
     await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
   return {
     ...actual,
-    getSessionBindingService: () => buildFocusSessionBindingService(),
+    getSessionBindingService: () => buildSessionBindingService(),
   };
 });
 
@@ -135,41 +135,7 @@ function createSessionBindingCapabilities() {
   };
 }
 
-async function focusCodexAcp(
-  params = createDiscordCommandParams("/focus codex-acp"),
-  options?: { existingBinding?: SessionBindingRecord | null },
-) {
-  hoisted.sessionBindingCapabilitiesMock.mockReturnValue(createSessionBindingCapabilities());
-  hoisted.sessionBindingResolveByConversationMock.mockReturnValue(options?.existingBinding ?? null);
-  hoisted.sessionBindingBindMock.mockImplementation(
-    async (input: {
-      targetSessionKey: string;
-      conversation: { channel: string; accountId: string; conversationId: string };
-      metadata?: Record<string, unknown>;
-    }) =>
-      createSessionBindingRecord({
-        targetSessionKey: input.targetSessionKey,
-        conversation: {
-          channel: input.conversation.channel,
-          accountId: input.conversation.accountId,
-          conversationId: input.conversation.conversationId,
-        },
-        metadata: {
-          boundBy: typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "user-1",
-        },
-      }),
-  );
-  hoisted.callGatewayMock.mockImplementation(async (request: unknown) => {
-    const method = (request as { method?: string }).method;
-    if (method === "sessions.resolve") {
-      return { key: "agent:codex-acp:session-1" };
-    }
-    return {};
-  });
-  return await handleSubagentsCommand(params, true);
-}
-
-describe("/focus, /unfocus, /agents", () => {
+describe("/agents; the thread-binding /focus and /unfocus are gone (focus-mode ARCH §7.4)", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
@@ -181,117 +147,6 @@ describe("/focus, /unfocus, /agents", () => {
     hoisted.sessionBindingListBySessionMock.mockReset().mockReturnValue([]);
     hoisted.sessionBindingUnbindMock.mockReset().mockResolvedValue([]);
     hoisted.sessionBindingBindMock.mockReset();
-  });
-
-  it("/focus resolves ACP sessions and binds the current Discord thread", async () => {
-    const result = await focusCodexAcp();
-
-    expect(result?.reply?.text).toContain("bound this thread");
-    expect(result?.reply?.text).toContain("(acp)");
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        placement: "current",
-        targetKind: "session",
-        targetSessionKey: "agent:codex-acp:session-1",
-        conversation: expect.objectContaining({
-          channel: "discord",
-          conversationId: "thread-1",
-        }),
-        metadata: expect.objectContaining({
-          introText:
-            "⚙️ codex-acp session active (idle auto-unfocus after 24h inactivity). Messages here go directly to this session.",
-        }),
-      }),
-    );
-  });
-
-  it("/focus binds Telegram topics as current conversations", async () => {
-    const result = await focusCodexAcp(createTelegramTopicCommandParams("/focus codex-acp"));
-
-    expect(result?.reply?.text).toContain("bound this conversation");
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        placement: "current",
-        conversation: expect.objectContaining({
-          channel: "telegram",
-          conversationId: "-100200300:topic:77",
-        }),
-      }),
-    );
-  });
-
-  it("/focus includes ACP session identifiers in intro text when available", async () => {
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
-      acp: {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "runtime-1",
-        identity: {
-          state: "resolved",
-          source: "status",
-          acpxSessionId: "acpx-456",
-          agentSessionId: "codex-123",
-          lastUpdatedAt: Date.now(),
-        },
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: Date.now(),
-      },
-    });
-    await focusCodexAcp();
-
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          introText: expect.stringContaining("agent session id: codex-123"),
-        }),
-      }),
-    );
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          introText: expect.stringContaining("acpx session id: acpx-456"),
-        }),
-      }),
-    );
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          introText: expect.stringContaining("codex resume codex-123"),
-        }),
-      }),
-    );
-  });
-
-  it("/unfocus removes an active binding for the binding owner", async () => {
-    const params = createDiscordCommandParams("/unfocus");
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
-      createSessionBindingRecord({
-        bindingId: "default:thread-1",
-        metadata: { boundBy: "user-1" },
-      }),
-    );
-
-    const result = await handleSubagentsCommand(params, true);
-
-    expect(result?.reply?.text).toContain("Thread unfocused");
-    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith({
-      bindingId: "default:thread-1",
-      reason: "manual",
-    });
-  });
-
-  it("/focus rejects rebinding when the thread is focused by another user", async () => {
-    const result = await focusCodexAcp(undefined, {
-      existingBinding: createSessionBindingRecord({
-        metadata: { boundBy: "user-2" },
-      }),
-    });
-
-    expect(result?.reply?.text).toContain("Only user-2 can refocus this thread.");
-    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
   it("/agents includes active conversation bindings on the current channel/account", async () => {
@@ -398,9 +253,23 @@ describe("/focus, /unfocus, /agents", () => {
     expect(text).toContain("thread:thread-persistent-1");
   });
 
-  it("/focus rejects unsupported channels", async () => {
-    const params = buildCommandTestParams("/focus codex-acp", baseCfg);
-    const result = await handleSubagentsCommand(params, true);
-    expect(result?.reply?.text).toContain("only available on Discord and Telegram");
+  it("/focus and /unfocus are not thread-binding commands any more", async () => {
+    for (const body of ["/focus codex-acp", "/unfocus"]) {
+      expect(await handleSubagentsCommand(createDiscordCommandParams(body), true)).toBeNull();
+      expect(await handleSubagentsCommand(createTelegramTopicCommandParams(body), true)).toBeNull();
+    }
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingUnbindMock).not.toHaveBeenCalled();
+  });
+
+  it("/subagents focus|unfocus are gone: the help is shown, nothing is bound", async () => {
+    for (const body of ["/subagents focus codex-acp", "/subagents unfocus"]) {
+      const text =
+        (await handleSubagentsCommand(createDiscordCommandParams(body), true))?.reply?.text ?? "";
+      expect(text).toContain("Usage:");
+      expect(text).not.toMatch(/\/(?:un)?focus\b/);
+    }
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingUnbindMock).not.toHaveBeenCalled();
   });
 });
