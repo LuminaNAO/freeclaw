@@ -136,6 +136,37 @@ re-checks §4.7.1. All existing swarm tests stay green.
 - **No time or token limits.** A holon runs until it is done, blocked, failed or cancelled. Old contracts'
   `budget` fields are accepted and ignored.
 
+### 7.1 The swarm heals itself (operator, 2026-11-05)
+Live failure, bench-qwen38-27b-strix-1, 5 Nov 14:44: the provider answered "Request timed out" on the build turn and,
+one second later, on the taskmaster turn that was handling build's silence. The build run settled as a normal end
+with an error assistant message, so the swarm logged WORKER_EXIT_WITHOUT_EMIT (not a run error, no retry). The
+taskmaster run errored, and taskmaster errors are ignored. Nothing was left in flight, and the holon sat idle for
+66 minutes until an operator stepped in. Rule: **an open holon always has a next step in flight; the swarm never
+needs an outside checker.**
+1. **A provider error is a run error, whatever the run status says.** A run that settles with its last assistant
+   message `stopReason: error` (timeout, 5xx, overloaded, connection reset) is handled as RUN_ERROR, never as a
+   silent exit. The engine reads the session's last assistant message to decide.
+2. **Transient errors retry with backoff, every participant including the lead and the relay.** Transient = timeout,
+   5xx, overloaded, connection reset/refused, stream error. Retry the same input after 30 s, 2 min, 5 min, 10 min,
+   then every 15 min, logging RETRY_AFTER_ERROR with the attempt number. Transient errors never count toward FAILED.
+   Quota (403/429/quota) keeps §7: BLOCKED upstream with the reason, and **also** retries every 15 min, so the holon
+   resumes by itself when the quota is back. Non-transient errors (4xx other than 429, schema/auth errors) keep the
+   v1 rule: one retry, then FAILED.
+3. **Lead errors are not ignored.** The lead (taskmaster) is retried by rule 2 with its last input. While the lead
+   is down, worker events queue as they do today; nothing is dropped.
+4. **The retry timer survives a restart.** The next retry time is written to the holon's events
+   (`RETRY_SCHEDULED {role, at, attempt}`); resume re-arms it. This is the one timer the swarm owns
+   (principle 1 "no timers" is amended for this case only).
+5. **Idle sweep.** Once a minute the engine checks each open holon: if no run is active and none is queued or
+   scheduled, and the holon is not waiting on a member or upstream answer, it re-delivers the last undelivered or
+   unanswered input to its owner (the role it was addressed to), as `RESUMED_IDLE`. A holon can therefore never sit
+   idle with work outstanding, whatever the cause.
+6. **Tests:** a run that settles `ok` with an error assistant message → RUN_ERROR + scheduled retry (not
+   WORKER_EXIT_WITHOUT_EMIT); the lead errors → it is retried; five transient errors in a row → still retrying, never
+   FAILED; quota → BLOCKED upstream and later resumes on its own; a gateway restart with a scheduled retry → re-armed
+   on resume; a holon with an unanswered input and nothing in flight → RESUMED_IDLE within the sweep; the 14:44
+   sequence above, replayed, ends with build running again with no operator message.
+
 ## 8. Groups and visibility
 1. A holon that has a human participant gets one channel group (members: those humans, the root owner, the
    agent identity running it), named `<root> · <holon id>`; closed when the holon is done. Agent-only holons get

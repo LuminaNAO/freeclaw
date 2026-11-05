@@ -3,6 +3,7 @@ import { compareHolonKeys, reconcileChildReports, reportToParent, TO_PARENT } fr
 import { parentKeyOf } from "./contract.js";
 import { msgIdFor } from "./delivery.js";
 import { lastInputSeqFor, type SwarmEngine, type TaskState } from "./engine.js";
+import { rearmRetries } from "./heal.js";
 import { resumeMembers } from "./relay.js";
 import { currentRoundEvents } from "./rounds.js";
 import { TASKMASTER } from "./routing.js";
@@ -22,6 +23,8 @@ export type ResumeSummary = {
   modelBlocked: number;
   /** ARCH §5.3: child reports re-delivered to a parent lead after the restart. */
   childReports: number;
+  /** ARCH §7.1.4: scheduled retries armed again after the restart. */
+  retriesRearmed: number;
 };
 
 /** ARCH §8 step 2: the line put on top of a re-delivered input. */
@@ -152,6 +155,11 @@ async function resumeTask(engine: SwarmEngine, taskId: string, summary: ResumeSu
     });
   }
 
+  // ARCH §7.1.4: a retry scheduled before the restart is armed again first, so its session
+  // stays held: what step 1 resends to it queues behind the retry, and step 2 skips it.
+  const rearmed = new Set(rearmRetries(engine, state));
+  summary.retriesRearmed += rearmed.size;
+
   // Step 1: resend unacknowledged outbox entries, never double-delivered.
   const outbox = readOutbox(engine.stateDir, taskId);
   // A merged delivery carries queued parts. While it is unresolved the parts are its
@@ -214,6 +222,7 @@ async function resumeTask(engine: SwarmEngine, taskId: string, summary: ResumeSu
     const inputSeq = Math.max(...lastDelivery.seqs);
     if (
       blockedRoles.has(role) ||
+      rearmed.has(role) || // its next step is the scheduled retry (ARCH §7.1.4)
       undelivered.has(role) || // its last input is step 1's (not delivered yet)
       engine.mailbox.isBusy(sessionKey) ||
       after.events.some((e) => e.kind === "emit" && e.from === role && e.seq > inputSeq)
@@ -326,6 +335,7 @@ export async function resumeOpenTasks(engine: SwarmEngine): Promise<ResumeSummar
     deferred: 0,
     modelBlocked: 0,
     childReports: 0,
+    retriesRearmed: 0,
   };
   // ARCH §7: walk every open holon in the tree, parents before their children. Each holon
   // resumes on its own: a failure in one branch is logged and never blocks its siblings.
