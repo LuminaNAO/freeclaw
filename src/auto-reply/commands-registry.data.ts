@@ -352,22 +352,6 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
-      key: "focus",
-      nativeName: "focus",
-      description:
-        "Bind this thread (Discord) or topic/conversation (Telegram) to a session target.",
-      textAlias: "/focus",
-      category: "management",
-      args: [
-        {
-          name: "target",
-          description: "Subagent label/index or session key/id/label",
-          type: "string",
-          captureRemaining: true,
-        },
-      ],
-    }),
-    defineChatCommand({
       key: "focusmode",
       nativeName: "focusmode",
       description: "Focus mode: only one session runs, others wait (operator).",
@@ -381,13 +365,6 @@ function buildChatCommands(): ChatCommandDefinition[] {
           captureRemaining: true,
         },
       ],
-    }),
-    defineChatCommand({
-      key: "unfocus",
-      nativeName: "unfocus",
-      description: "Remove the current thread (Discord) or topic/conversation (Telegram) binding.",
-      textAlias: "/unfocus",
-      category: "management",
     }),
     defineChatCommand({
       key: "agents",
