@@ -2,9 +2,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
-  clearFocusState,
+  clearAllFocus,
   readFocusState,
-  setFocusState,
+  sessionFocusTier,
+  setSessionFocus,
   takeHeldFocusFiles,
 } from "../../infra/focus-mode.js";
 import { deleteStackFiles, listStack, writeStackFile } from "../../infra/session-stack.js";
@@ -15,7 +16,7 @@ const ownerCfg = { commands: { ownerAllowFrom: ["+2000"] } } as OpenClawConfig;
 const OWNER = { SenderId: "+2000", From: "+2000" };
 
 afterEach(() => {
-  clearFocusState();
+  clearAllFocus();
   takeHeldFocusFiles();
   deleteStackFiles(listStack().flatMap((s) => s.entries.map((e) => e.file)));
 });
@@ -36,17 +37,20 @@ describe("/focusmode (focus-mode ARCH §4)", () => {
     const result = await run("/focusmode agent:main:signal:group:abc");
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("agent:main:signal:group:abc");
-    expect(readFocusState()).toMatchObject({ target: "agent:main:signal:group:abc", by: "+2000" });
+    expect(readFocusState()?.sessions["agent:main:signal:group:abc"]).toMatchObject({
+      tier: "normal",
+      by: "+2000",
+    });
   });
 
   it("main resolves to the main session key", async () => {
     await run("/focusmode main");
-    expect(readFocusState()?.target).toBe("agent:main:main");
+    expect(sessionFocusTier(readFocusState(), "agent:main:main")).toBe("normal");
   });
 
   it("here sets the session the command is sent from", async () => {
     await run("/focusmode here");
-    expect(readFocusState()?.target).toBe("agent:main:main");
+    expect(sessionFocusTier(readFocusState(), "agent:main:main")).toBe("normal");
   });
 
   it("a cron run is refused as a target", async () => {
@@ -56,17 +60,17 @@ describe("/focusmode (focus-mode ARCH §4)", () => {
   });
 
   it("no argument shows target, since and waiting per session", async () => {
-    expect((await run("/focusmode"))?.reply?.text).toBe("Focus mode is off.");
-    setFocusState({ target: "agent:main:main", by: "op", now: 0 });
+    expect((await run("/focusmode"))?.reply?.text).toBe("Focus is off.");
+    setSessionFocus({ sessionKey: "agent:main:main", by: "op", now: 0 });
     writeStackFile({ sessionKey: "agent:main:x", source: "inbound", payload: {} });
     const text = (await run("/focusmode"))?.reply?.text ?? "";
-    expect(text).toContain("Focus mode: on agent:main:main");
-    expect(text).toContain("since 1970-01-01T00:00:00.000Z by op");
+    expect(text).toContain("Focus: active level normal");
+    expect(text).toContain("agent:main:main  normal  since 1970-01-01T00:00:00.000Z by op");
     expect(text).toContain("agent:main:x  waiting=1");
   });
 
   it("off ends it", async () => {
-    setFocusState({ target: "agent:main:main", by: "op" });
+    setSessionFocus({ sessionKey: "agent:main:main", by: "op" });
     const result = await run("/focusmode off");
     expect(result?.reply?.text).toMatch(/^Focus mode off\./);
     expect(readFocusState()).toBeUndefined();
@@ -74,15 +78,15 @@ describe("/focusmode (focus-mode ARCH §4)", () => {
   });
 
   it("a non-operator is refused (standard refusal: ignored, no change)", async () => {
-    setFocusState({ target: "agent:main:main", by: "op" });
+    setSessionFocus({ sessionKey: "agent:main:main", by: "op" });
     const notOwner = await run("/focusmode off", { SenderId: "+1000", From: "+1000" });
     expect(notOwner).toEqual({ shouldContinue: false });
-    expect(readFocusState()?.target).toBe("agent:main:main");
+    expect(sessionFocusTier(readFocusState(), "agent:main:main")).toBe("normal");
 
     const params = buildCommandTestParams("/focusmode off", ownerCfg, OWNER);
     params.command.isAuthorizedSender = false;
     expect(await handleFocusModeCommand(params, true)).toEqual({ shouldContinue: false });
-    expect(readFocusState()?.target).toBe("agent:main:main");
+    expect(sessionFocusTier(readFocusState(), "agent:main:main")).toBe("normal");
   });
 
   it("ignored when text commands are off", async () => {

@@ -31,24 +31,24 @@ export const focusHandlers: GatewayRequestHandlers = {
     try {
       const result = runFocusAction({ cfg: loadConfig(), action, target, by });
       if (result.action === "set") {
-        context.logGateway.info(`focus mode: on ${result.focus.target} by ${by}`);
-        respond(true, { focus: result.focus }, undefined);
+        context.logGateway.info(`focus mode: on ${result.sessionKey} by ${by}`);
+        respond(
+          true,
+          { focus: { target: result.sessionKey, ...result.entry }, replaying: result.replaying },
+          undefined,
+        );
         return;
       }
       if (result.action === "off") {
-        if (result.ended) {
+        if (Object.keys(result.ended).length > 0) {
           context.logGateway.info(
             `focus mode: off by ${by}; replaying ${result.replaying} session(s)`,
           );
         }
-        respond(true, { ended: result.ended ?? null, replaying: result.replaying }, undefined);
+        respond(true, { ended: result.ended, replaying: result.replaying }, undefined);
         return;
       }
-      respond(
-        true,
-        { focus: result.status.focus ?? null, waiting: result.status.waiting },
-        undefined,
-      );
+      respond(true, result.status, undefined);
     } catch (err) {
       respond(
         false,

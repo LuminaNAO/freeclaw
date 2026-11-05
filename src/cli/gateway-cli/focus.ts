@@ -3,8 +3,7 @@
 // <stateDir>/focus.json and the stack files directly when the gateway is down.
 import { readBestEffortConfig } from "../../config/config.js";
 import {
-  type FocusState,
-  type FocusWaiting,
+  type FocusStatus,
   formatFocusStatusLines,
   readFocusStatus,
 } from "../../infra/focus-mode.js";
@@ -37,9 +36,7 @@ export async function runGatewayFocus(params: {
     // Gateway down: the state is on disk.
     const status = readFocusStatus();
     if (opts.json) {
-      defaultRuntime.log(
-        JSON.stringify({ focus: status.focus ?? null, waiting: status.waiting }, null, 2),
-      );
+      defaultRuntime.log(JSON.stringify(status, null, 2));
       return;
     }
     for (const line of formatFocusStatusLines(status)) {
@@ -52,12 +49,12 @@ export async function runGatewayFocus(params: {
     return;
   }
   if (action === "set") {
-    const focus = result.focus as FocusState | undefined;
+    const focus = result.focus as { target?: string } | undefined;
     defaultRuntime.log(`Focus mode on ${focus?.target ?? target}.`);
     return;
   }
   if (action === "off") {
-    if (!result.ended) {
+    if (!result.ended || Object.keys(result.ended).length === 0) {
       defaultRuntime.log("Focus mode is already off.");
       return;
     }
@@ -69,10 +66,7 @@ export async function runGatewayFocus(params: {
     );
     return;
   }
-  for (const line of formatFocusStatusLines({
-    focus: (result.focus as FocusState | null) ?? undefined,
-    waiting: (result.waiting as FocusWaiting[] | undefined) ?? [],
-  })) {
+  for (const line of formatFocusStatusLines(result as unknown as FocusStatus)) {
     defaultRuntime.log(line);
   }
 }

@@ -9,7 +9,7 @@ import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/ses
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { clearFocusState, readFocusState, setFocusState } from "./focus-mode.js";
+import { clearAllFocus, readFocusState, setSessionFocus } from "./focus-mode.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
@@ -114,15 +114,15 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     );
   });
 
-  it("focus mode: a heartbeat turn is not gated while focused away (focus-mode ARCH §3.3)", async () => {
-    setFocusState({ target: "agent:main:some-other-session", by: "op" });
+  it("focus mode: a heartbeat turn is not gated while focused away (focus-mode ARCH §3.3, §7.2)", async () => {
+    setSessionFocus({ sessionKey: "agent:main:some-other-session", tier: "hyper", by: "op" });
     try {
       // runDefaultsHeartbeat asserts the turn ran (getReplyFromConfig called once).
       const replyOpts = await runDefaultsHeartbeat({});
       expect(replyOpts).toEqual(expect.objectContaining({ isHeartbeat: true }));
-      expect(readFocusState()?.target).toBe("agent:main:some-other-session");
+      expect(readFocusState()?.sessions["agent:main:some-other-session"]?.tier).toBe("hyper");
     } finally {
-      clearFocusState();
+      clearAllFocus();
     }
   });
 
