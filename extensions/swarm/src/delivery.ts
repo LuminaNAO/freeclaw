@@ -117,6 +117,11 @@ export class Mailbox {
   /** Session key → id of the run the swarm started there that has not settled yet. */
   private readonly active = new Map<string, string>();
   private readonly pending = new Map<string, DeliveryRequest[]>();
+  /**
+   * ARCH §7.1.2-3: sessions waiting for a scheduled retry after a run error. Nothing runs in a
+   * held session; everything for it queues and goes with the retry when it fires.
+   */
+  private readonly held = new Set<string>();
 
   constructor(
     private readonly runtime: RuntimeLike,
@@ -139,6 +144,57 @@ export class Mailbox {
     return (this.pending.get(sessionKey)?.length ?? 0) > 0;
   }
 
+  /** ARCH §7.1.4: a retry is scheduled for the session (its next step is in flight). */
+  isHeld(sessionKey: string): boolean {
+    return this.held.has(sessionKey);
+  }
+
+  /** Nothing running, queued or scheduled for the session (ARCH §7.1.5). */
+  isIdle(sessionKey: string): boolean {
+    return !this.isBusy(sessionKey) && !this.hasPending(sessionKey) && !this.isHeld(sessionKey);
+  }
+
+  /**
+   * ARCH §7.1.2-3: hold the session until its scheduled retry. Called from the run-end
+   * handler, so the ended run's release does not flush what queued behind it.
+   */
+  hold(sessionKey: string): void {
+    this.held.add(sessionKey);
+  }
+
+  /**
+   * ARCH §7.1.2: the scheduled retry is due. It goes first, with everything that queued
+   * during the hold behind it, as one turn (principle 4).
+   */
+  async release(req: DeliveryRequest): Promise<DeliveryResult> {
+    recordDelivery(req);
+    const key = req.targetSessionKey;
+    this.held.delete(key);
+    const queued = this.pending.get(key) ?? [];
+    if (this.active.has(key)) {
+      // A run started meanwhile (a steer): the retry waits behind it like any message.
+      this.pending.set(key, [...queued, req]);
+      return { status: "queued" };
+    }
+    this.pending.set(key, [req, ...queued]);
+    return (await this.flush(key)) ?? { status: "queued" };
+  }
+
+  /** The holon closed: the hold and what queued under it are dropped (nothing more runs). */
+  dropHold(sessionKey: string): void {
+    if (this.held.delete(sessionKey) && !this.active.has(sessionKey)) {
+      this.pending.delete(sessionKey);
+    }
+  }
+
+  /** Drop a hold without a retry (the retry is moot); queued work goes now. */
+  async unhold(sessionKey: string): Promise<void> {
+    if (!this.held.delete(sessionKey) || this.active.has(sessionKey)) {
+      return;
+    }
+    await this.flush(sessionKey);
+  }
+
   /** Writes the outbox record first, then sends now or holds it for the next turn. */
   async deliver(req: DeliveryRequest): Promise<DeliveryResult> {
     recordDelivery(req);
@@ -149,12 +205,13 @@ export class Mailbox {
       });
       this.active.delete(req.targetSessionKey);
       this.pending.delete(req.targetSessionKey);
+      this.held.delete(req.targetSessionKey);
       return this.send(req);
     }
     if (req.steer) {
       return this.steer(req);
     }
-    if (this.active.has(req.targetSessionKey)) {
+    if (this.active.has(req.targetSessionKey) || this.held.has(req.targetSessionKey)) {
       const queue = this.pending.get(req.targetSessionKey) ?? [];
       queue.push(req);
       this.pending.set(req.targetSessionKey, queue);
@@ -173,6 +230,8 @@ export class Mailbox {
       await this.runtime.subagent.abortSession?.({ sessionKey: key });
       this.active.delete(key);
     }
+    // Urgent work does not wait for a scheduled retry (ARCH §6.4); the retry still follows.
+    this.held.delete(key);
     const queued = this.pending.get(key) ?? [];
     this.pending.delete(key);
     if (queued.length === 0) {
@@ -188,7 +247,7 @@ export class Mailbox {
    * before its ack leaves the entry exactly as it was, never re-opened.
    */
   async resend(stateDir: string, taskId: string, entry: OutboxEntry): Promise<DeliveryResult> {
-    return this.send({
+    const req: DeliveryRequest = {
       stateDir,
       taskId,
       targetSessionKey: entry.targetSessionKey,
@@ -198,7 +257,14 @@ export class Mailbox {
       idempotencyKey: entry.idempotencyKey,
       extraSystemPrompt: entry.extraSystemPrompt,
       supersedes: entry.supersedes,
-    });
+    };
+    const key = entry.targetSessionKey;
+    if (this.active.has(key) || this.held.has(key)) {
+      // One run per session (ARCH §5); a held session's resends go with its retry (§7.1.2).
+      this.pending.set(key, [...(this.pending.get(key) ?? []), req]);
+      return { status: "queued" };
+    }
+    return this.send(req);
   }
 
   /** The session's run settled: flush everything that queued meanwhile as one message. */
@@ -299,7 +365,10 @@ export class Mailbox {
         await this.opts.onRunEnd?.(end);
         if (this.active.get(sessionKey) === runId) {
           this.active.delete(sessionKey);
-          await this.flush(sessionKey);
+          if (!this.held.has(sessionKey)) {
+            // A held session (retry scheduled, §7.1.2) keeps its queue for the retry.
+            await this.flush(sessionKey);
+          }
         }
       })
       .catch((err: unknown) => {
