@@ -156,3 +156,49 @@ export function makeStubRuntime(
     maxLive,
   };
 }
+
+/**
+ * ARCH §7.1.4-5: a fake clock for the swarm's retry timers and idle sweep. `advance` moves time
+ * forward and fires every timer that falls due, in order, letting each one's work settle.
+ */
+export function makeFakeClock(start = Date.UTC(2026, 10, 5, 6, 44)) {
+  let now = start;
+  let nextId = 1;
+  const timers = new Map<number, { at: number; fn: () => unknown }>();
+  const drain = () => new Promise((r) => setTimeout(r, 0));
+  const clock = {
+    now: () => now,
+    setTimeout: (fn: () => unknown, ms: number) => {
+      const id = nextId++;
+      timers.set(id, { at: now + Math.max(0, ms), fn });
+      return id;
+    },
+    clearTimeout: (handle: unknown) => {
+      timers.delete(handle as number);
+    },
+  };
+  async function advance(ms: number) {
+    const until = now + ms;
+    for (;;) {
+      const due = [...timers.entries()]
+        .filter(([, t]) => t.at <= until)
+        .toSorted((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
+      if (!due) {
+        break;
+      }
+      timers.delete(due[0]);
+      now = Math.max(now, due[1].at);
+      await due[1].fn();
+      for (let i = 0; i < 6; i += 1) {
+        await drain();
+      }
+    }
+    now = until;
+    for (let i = 0; i < 4; i += 1) {
+      await drain();
+    }
+  }
+  /** Due times of the pending timers, relative to now (ms). */
+  const pending = () => [...timers.values()].map((t) => t.at - now).toSorted((a, b) => a - b);
+  return { clock, advance, pending, set: (t: number) => (now = t) };
+}

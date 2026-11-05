@@ -7,7 +7,7 @@ import { SwarmEngine } from "./engine.js";
 import { createSwarmHooks, isQuotaError } from "./hooks.js";
 import { readEvents, readTasksIndex } from "./store.js";
 import { seedTask } from "./test-fixtures.js";
-import { makeStubRuntime } from "./test-runtime.js";
+import { makeFakeClock, makeStubRuntime } from "./test-runtime.js";
 
 const tmp = fs.mkdtempSync(path.join(tmpdir(), "swarm-hooks-test-"));
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -20,7 +20,8 @@ function setup() {
   const stateDir = path.join(tmp, `s-${Math.random().toString(36).slice(2)}`);
   seedTask(stateDir, { taskId: TASK, headSha: SHA, upstreamSessionKey: "agent:main:up" });
   const runtime = makeStubRuntime();
-  const engine = new SwarmEngine({ stateDir, runtime });
+  const clock = makeFakeClock();
+  const engine = new SwarmEngine({ stateDir, runtime, clock: clock.clock });
   const hooks = createSwarmHooks(() => engine);
   hooks.attach(engine);
   const emit = (role: string, args: Record<string, unknown>) =>
@@ -35,7 +36,7 @@ function setup() {
       body,
       seqs: [engine.record(TASK, { kind: "system", event: "PING", to: role }).seq],
     });
-  return { stateDir, runtime, engine, hooks, emit, give };
+  return { stateDir, runtime, engine, hooks, emit, give, clock };
 }
 
 describe("exit enforcement (run settled, ARCH §5)", () => {
@@ -131,18 +132,18 @@ describe("exit enforcement (run settled, ARCH §5)", () => {
 });
 
 describe("run errors (ARCH §7)", () => {
-  it("retries the same input once, then reports FAILED upstream and closes the task", async () => {
+  it("a non-transient error retries the same input once, then reports FAILED upstream and closes the task", async () => {
     const { runtime, stateDir, give } = setup();
     await give("build");
     await runtime.end(key("build"), {
       status: "error",
-      error: "provider unavailable",
+      error: "400 invalid request: tool schema rejected",
     });
     expect(runtime.runs.at(-1)?.sessionKey).toBe(key("build"));
     expect(runtime.runs.at(-1)?.message).toContain("RETRY_AFTER_ERROR");
     await runtime.end(key("build"), {
       status: "error",
-      error: "provider unavailable",
+      error: "400 invalid request: tool schema rejected",
     });
     expect(runtime.runs.at(-1)?.sessionKey).toBe("agent:main:up");
     expect(runtime.runs.at(-1)?.message).toContain("EVENT FAILED");
@@ -150,7 +151,7 @@ describe("run errors (ARCH §7)", () => {
   });
 
   it("the retry after an error is never a second run beside the errored one (ARCH §5)", async () => {
-    const { runtime, give, emit } = setup();
+    const { runtime, give, emit, clock } = setup();
     await give("build");
     // A re-prompt arrives while the run is still going (it errors later).
     await emit("taskmaster", {
@@ -161,6 +162,9 @@ describe("run errors (ARCH §7)", () => {
     });
     expect(runtime.liveIn(key("build"))).toBe(1);
     await runtime.end(key("build"), { status: "error", error: "overloaded" });
+    // ARCH §7.1.2: transient → the session is held until the retry; the re-prompt waits too.
+    expect(runtime.liveIn(key("build"))).toBe(0);
+    await clock.advance(30_000);
     expect(runtime.liveIn(key("build"))).toBe(1);
     await runtime.end(key("build"));
     expect(runtime.maxLive.get(key("build"))).toBe(1);

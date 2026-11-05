@@ -10,22 +10,19 @@ import type {
 import type { RunEnd } from "./delivery.js";
 import { SWARM_EMIT_TOOL } from "./emit.js";
 import { lastInputSeqFor, type SwarmEngine, type TaskState } from "./engine.js";
+import { handleRunError, runErrorOf } from "./heal.js";
 import { RELAY_ROLE } from "./holon.js";
 import { onRelayRunEnd, relayMemberReply, relayModelOf } from "./relay.js";
 import { TASKMASTER } from "./routing.js";
 import { isSwarmSessionKey, laneRoleOf, parseSwarmSessionKey } from "./sessions.js";
 import type { SwarmEvent } from "./store.js";
 
-// Run end: exit enforcement and run errors (ARCH §5, §7), plus the model check (ARCH §3, §10.5).
+// Run end: exit enforcement and run errors (ARCH §5, §7, §7.1), plus the model check (ARCH §3, §10.5).
 // A run is over when the gateway reports the whole run settled (mailbox), never earlier.
 
 export type FollowUp = "re-prompt" | "escalate";
 
-const QUOTA_RE = /\b(403|429)\b|quota|rate[ -]?limit|insufficient[_ ]quota|resource[_ ]exhausted/i;
-
-export function isQuotaError(error: string | undefined): boolean {
-  return Boolean(error && QUOTA_RE.test(error));
-}
+export { isQuotaError } from "./heal.js";
 
 function countSince(events: SwarmEvent[], name: string, role: string, inputSeq: number): number {
   return events.filter((e) => e.event === name && e.from === role && e.seq > inputSeq).length;
@@ -60,6 +57,28 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
     if (!ref || end.status === "aborted") {
       return; // aborts are urgent stops or a wrong-model stop, already handled
     }
+    // ARCH §7.1.1-3: a provider error is a run error whatever the run status says, for every
+    // participant (lead and relay included); it is retried, never read as silence.
+    const errored = await engine.locks.run(ref.taskId, async () => {
+      let state: TaskState;
+      try {
+        state = engine.loadState(ref.taskId);
+      } catch {
+        return true;
+      }
+      if (state.status !== "open") {
+        return true;
+      }
+      const reason = await runErrorOf(engine, ref.taskId, ref.role, end);
+      if (reason === undefined) {
+        return false;
+      }
+      await handleRunError(engine, state, ref.role, end, reason);
+      return true;
+    });
+    if (errored) {
+      return;
+    }
     if (ref.role === RELAY_ROLE) {
       // ARCH §10a.3: the relay's own exit enforcement (re-prompt once, then BLOCKED).
       await onRelayRunEnd(engine, ref.taskId, end);
@@ -73,12 +92,6 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
         return;
       }
       if (state.status !== "open") {
-        return;
-      }
-      if (end.status === "error") {
-        if (ref.role !== TASKMASTER) {
-          await handleRunError(engine, state, ref, end.error);
-        }
         return;
       }
       // Emitted = the role logged an emit after the delivery that started this run.
@@ -137,55 +150,6 @@ export function createSwarmHooks(getEngine: () => SwarmEngine | undefined) {
       sha: state.sha,
       body: `escalated by swarm: ${last.body}`,
     });
-  }
-
-  async function handleRunError(
-    engine: SwarmEngine,
-    state: TaskState,
-    ref: { taskId: string; role: string },
-    error: string | undefined,
-  ) {
-    const reason = error ?? "run ended in error";
-    const inputSeq = lastInputSeqFor(state.events, ref.role) ?? 0;
-    engine.record(ref.taskId, {
-      kind: "system",
-      event: "RUN_ERROR",
-      from: ref.role,
-      sha: state.sha,
-      data: { quota: isQuotaError(reason) },
-    });
-    if (isQuotaError(reason)) {
-      // ARCH §7: quota → upstream BLOCKED with reason; never wait silently.
-      await engine.toUpstream(ref.taskId, state, {
-        event: "BLOCKED",
-        from: ref.role,
-        sha: state.sha,
-        body: `quota exhausted for ${ref.role}: ${reason}`,
-      });
-      return;
-    }
-    const errorsForInput = countSince(state.events, "RUN_ERROR", ref.role, inputSeq) + 1;
-    if (errorsForInput <= 1) {
-      // Queues behind the ended run's release; never a second run beside it (ARCH §5).
-      const input = state.events.find((e) => e.seq === inputSeq);
-      await engine.sendTo(ref.taskId, state, {
-        to: ref.role,
-        from: "swarm",
-        event: "RETRY_AFTER_ERROR",
-        sha: state.sha,
-        body: `your previous run ended in an error; retry the same input.\n${input?.body ?? ""}`,
-        seqs: [inputSeq],
-        salt: `retry-${errorsForInput}`,
-      });
-      return;
-    }
-    await engine.toUpstream(ref.taskId, state, {
-      event: "FAILED",
-      from: ref.role,
-      sha: state.sha,
-      body: `${ref.role} failed twice on the same input: ${reason}`,
-    });
-    engine.close(ref.taskId, "failed");
   }
 
   async function onLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
