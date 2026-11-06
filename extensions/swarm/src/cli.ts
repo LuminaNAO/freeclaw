@@ -500,7 +500,7 @@ export function registerSwarmCli(params: {
   withClientOptions(
     swarm
       .command("group")
-      .description("Open or close a holon's channel group (ARCH §8.1)")
+      .description("Open a holon's channel group, or self-destruct it (ARCH §8.1, §10c)")
       .argument("<action>", "open | close")
       .argument("<taskId>"),
   ).action(
