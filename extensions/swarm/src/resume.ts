@@ -4,6 +4,7 @@ import { parentKeyOf } from "./contract.js";
 import { msgIdFor } from "./delivery.js";
 import { lastInputSeqFor, type SwarmEngine, type TaskState } from "./engine.js";
 import { rearmRetries } from "./heal.js";
+import { closeHolonGroup, unclosedGroupOf } from "./members.js";
 import { resumeMembers } from "./relay.js";
 import { currentRoundEvents } from "./rounds.js";
 import { TASKMASTER } from "./routing.js";
@@ -25,6 +26,8 @@ export type ResumeSummary = {
   childReports: number;
   /** ARCH §7.1.4: scheduled retries armed again after the restart. */
   retriesRearmed: number;
+  /** ARCH §10c.3: closed holons whose group was left up and was closed again. */
+  groupsReclosed: number;
 };
 
 /** ARCH §8 step 2: the line put on top of a re-delivered input. */
@@ -336,11 +339,16 @@ export async function resumeOpenTasks(engine: SwarmEngine): Promise<ResumeSummar
     modelBlocked: 0,
     childReports: 0,
     retriesRearmed: 0,
+    groupsReclosed: 0,
   };
   // ARCH §7: walk every open holon in the tree, parents before their children. Each holon
   // resumes on its own: a failure in one branch is logged and never blocks its siblings.
   const index = readTasksIndex(engine.stateDir);
   const keys = Object.keys(index).toSorted(compareHolonKeys);
+  // ARCH §10c.3: a done, failed or cancelled holon whose group is still up (a failed close, or
+  // a crash before the close) gets it closed again. Holons that close during this resume
+  // queue their own close; only those closed before it started are walked here.
+  const closedBefore = keys.filter((k) => index[k] && index[k].status !== "open");
   for (const taskId of keys) {
     if (index[taskId]?.status !== "open") {
       continue;
@@ -352,6 +360,9 @@ export async function resumeOpenTasks(engine: SwarmEngine): Promise<ResumeSummar
         `[swarm] resume of ${taskId} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+  for (const taskId of closedBefore) {
+    summary.groupsReclosed += await recloseGroup(engine, taskId);
   }
   // ARCH §5.3: a child's report recorded before the crash reaches its parent lead exactly
   // once, whether the child is still open or already closed.
@@ -368,4 +379,26 @@ export async function resumeOpenTasks(engine: SwarmEngine): Promise<ResumeSummar
     }
   }
   return summary;
+}
+
+/**
+ * ARCH §10c.3: close a done, failed or cancelled holon's group again if it is still up (one
+ * try; a failure arms the backoff again until the last try). Returns 1 when the group is now
+ * gone. Resume (gateway start) and `swarm continue` call this; an open holon, a holon with no
+ * group, or one whose group is already destroyed is left alone. Takes the task lock.
+ */
+export async function recloseGroup(engine: SwarmEngine, taskId: string): Promise<number> {
+  try {
+    const state = engine.loadState(taskId);
+    if (state.status === "open" || !unclosedGroupOf(state.events)) {
+      return 0;
+    }
+    const res = await engine.memberChannels.track(closeHolonGroup(engine, taskId));
+    return res.ok ? 1 : 0;
+  } catch (err) {
+    engine.logger?.warn(
+      `[swarm] group re-close of ${taskId} failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 0;
+  }
 }

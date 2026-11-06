@@ -533,7 +533,15 @@ export function holonStateFrom(
     if (e.event === "TASK_STARTED" || e.event === "ROUND_STARTED") {
       state = "running";
     }
-    if (e.event === "BLOCKED" && (e.kind === "upstream" || e.to === "upstream")) {
+    if (
+      e.event === "BLOCKED" &&
+      (e.kind === "upstream" || e.to === "upstream") &&
+      // ARCH §10c.3: a closed holon may still report `BLOCKED: group not destroyed`; it stays
+      // done, failed or cancelled.
+      state !== "done" &&
+      state !== "failed" &&
+      state !== "cancelled"
+    ) {
       state = "blocked";
     }
     if (TERMINAL.has(e.event) && (e.kind === "upstream" || e.to === "upstream")) {
