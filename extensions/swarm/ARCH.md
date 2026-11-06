@@ -252,6 +252,31 @@ is retired.
    events.jsonl for `swarm show`. Tests: a RETRY with a route note reaches the fake channel as the sender's words only;
    a long body is cut at the cap; the relay still maps the member's reply to exactly one event.
 
+
+## 10c. Group self-destruct (operator, 2026-11-06)
+Supersedes "Closed (left + renamed `[done]`)" in §8.1 and §10a.3. A holon's group self-destructs the way an airlock
+ceremony group does. Cause: on 6 Nov a done holon's group stayed up because the agent was its only admin and a plain
+`quitGroup` is refused for the last admin (`GROUP_CLOSE_FAILED`).
+1. **Trigger:** the holon reaches `done`, `failed` or `cancelled` (after the final upstream event is recorded).
+2. **Steps, in order, each attempted even if an earlier one failed:**
+   a. post one farewell line: `Task <holon id> is <state>. This group will now self-destruct; you can safely delete it.`;
+   b. rename to `<name> [done]` (or `[failed]` / `[cancelled]`);
+   c. remove every other member, joined or pending, in one `updateGroup removeMember` call (read with
+      `listGroups detailed`; humans, root owner, everyone except the agent identity);
+   d. leave and delete: `quitGroup { delete: true }`. Never needs a new admin, because the agent is now alone;
+   e. verify: `listGroups` no longer contains the group id. Any failure in a-d or a group still listed means the
+      close failed.
+3. **Events:** `GROUP_CLOSED { groupId, renamed, removed, deleted }` on success; `GROUP_CLOSE_FAILED { groupId,
+   step, error }` otherwise. A failed close is retried with backoff (1 min doubling to 30 min, max 10 tries), then
+   re-tried by `swarm continue`/resume and on gateway start. After the last try, `BLOCKED: group not destroyed`
+   goes up one level.
+4. **Generic:** channel API is `closeGroup(groupId, { name, farewell })`, implemented per channel plugin; the
+   Signal one uses the account-resolved signal-cli JSON-RPC as today. No ids, numbers or hosts in code.
+5. **Tests:** fake channel records farewell → rename → removeMember (all others, pending included) → quit with
+   delete → verify, in that order; last-admin case succeeds; each step failing alone still runs the rest and
+   records `GROUP_CLOSE_FAILED` with the step; retry succeeds on the next try; resume re-closes a group left open;
+   failed and cancelled holons close too; an agent-only holon (no group) records nothing.
+
 ## 11. Compatibility
 Every v1 contract, `continue` round and resume behaviour keeps working unchanged. v1 tests stay green. A v1
 contract is a root holon whose lead is the gateway default model (as today) unless `lead` is given.
