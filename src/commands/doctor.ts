@@ -39,6 +39,7 @@ import {
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
 import { noteSourceInstallIssues } from "./doctor-install.js";
+import { noteMailConnectorHealth } from "./doctor-mail.js";
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import {
   noteMacLaunchAgentOverrides,
@@ -137,6 +138,8 @@ export async function doctorCommand(
   await noteAuthProfileHealth({
     cfg,
     prompter,
+    // isTTY is undefined (not false) when stdin is not a terminal, despite its boolean type.
+    // oxlint-disable-next-line typescript/no-unnecessary-type-conversion
     allowKeychainPrompt: options.nonInteractive !== true && Boolean(process.stdin.isTTY),
   });
   const gatewayDetails = buildGatewayConnectionDetails({ config: cfg });
@@ -325,6 +328,7 @@ export async function doctorCommand(
       })
     : { checked: false, ready: false };
   await noteMemorySearchHealth(cfg, { gatewayMemoryProbe });
+  await noteMailConnectorHealth(cfg);
   await maybeRepairGatewayDaemon({
     cfg,
     runtime,
