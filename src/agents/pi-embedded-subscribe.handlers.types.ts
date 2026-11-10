@@ -82,6 +82,10 @@ export type EmbeddedPiSubscribeState = {
   pendingMessagingMediaUrls: Map<string, string[]>;
   deterministicApprovalPromptSent: boolean;
   lastAssistant?: AgentMessage;
+  /** no-reply-tool §4: the model called `no_reply`; no further block replies leave this run. */
+  silentReply: boolean;
+  /** A block reply was handed to the reply pipeline before the run went silent (§4.9 logging). */
+  blockRepliesEmitted: boolean;
 };
 
 export type EmbeddedPiSubscribeContext = {
@@ -128,6 +132,8 @@ export type EmbeddedPiSubscribeContext = {
   incrementCompactionCount: () => void;
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
+  /** Silence the run when this assistant message calls `no_reply` (no-reply-tool §4.2/§4.4). */
+  noteSilentReplyCall: (msg: AgentMessage | undefined) => void;
 };
 
 /**
@@ -161,7 +167,8 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentTargets"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
->;
+> &
+  Partial<Pick<EmbeddedPiSubscribeState, "silentReply">>;
 
 export type ToolHandlerContext = {
   params: ToolHandlerParams;

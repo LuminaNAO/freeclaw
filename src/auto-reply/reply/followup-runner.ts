@@ -216,6 +216,8 @@ export function createFollowupRunner(params: {
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               blockReplyBreak: queued.run.blockReplyBreak,
               blockStreaming: queued.run.blockStreaming,
+              // no-reply-tool §5.1: a queued inbound message replies to its origin.
+              hasReplyTarget: true,
               bootstrapPromptWarningSignaturesSeen,
               bootstrapPromptWarningSignature:
                 bootstrapPromptWarningSignaturesSeen[

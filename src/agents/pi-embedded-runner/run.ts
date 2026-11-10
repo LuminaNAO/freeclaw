@@ -282,6 +282,15 @@ function buildErrorAgentMeta(params: {
   };
 }
 
+const SILENT_REPLY_REASON_LOG_CHARS = 120;
+
+function truncateSilentReplyReason(reason: string | undefined): string {
+  const trimmed = reason?.replace(/\s+/g, " ").trim() ?? "";
+  return trimmed.length > SILENT_REPLY_REASON_LOG_CHARS
+    ? `${trimmed.slice(0, SILENT_REPLY_REASON_LOG_CHARS)}…`
+    : trimmed;
+}
+
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
@@ -992,6 +1001,8 @@ export async function runEmbeddedPiAgent(
                 blockReplyBreak: params.blockReplyBreak,
                 blockReplyChunking: params.blockReplyChunking,
                 blockStreaming: params.blockStreaming,
+                hasReplyTarget: params.hasReplyTarget,
+                onSilentReply: params.onSilentReply,
                 onReasoningStream: params.onReasoningStream,
                 onReasoningEnd: params.onReasoningEnd,
                 onToolResult: params.onToolResult,
@@ -1756,6 +1767,46 @@ export async function runEmbeddedPiAgent(
             promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
+
+          // no-reply-tool §4.1/§4.2/§4.9: the model chose silence. Drop every final payload of the run
+          // (text, media, reply tags, tool error notices); message-tool sends already went out (§4.3).
+          if (attempt.silentReply && !attempt.abortKind) {
+            log.info(
+              `embedded run silent (no_reply): sessionKey=${params.sessionKey ?? "-"} runId=${params.runId} ` +
+                `reason=${JSON.stringify(truncateSilentReplyReason(attempt.silentReply.reason))} ` +
+                `blocksStreamed=${attempt.silentReply.blocksStreamed}`,
+            );
+            if (lastProfileId) {
+              await markAuthProfileGood({
+                store: authStore,
+                provider,
+                profileId: lastProfileId,
+                agentDir: params.agentDir,
+              });
+              await markAuthProfileUsed({
+                store: authStore,
+                profileId: lastProfileId,
+                agentDir: params.agentDir,
+              });
+            }
+            return {
+              payloads: undefined,
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted: false,
+                systemPromptReport: attempt.systemPromptReport,
+                stopReason: "end_turn",
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+              silent: true,
+            };
+          }
 
           const watchdogAbortText = attempt.abortKind
             ? attempt.abortKind === "stall"

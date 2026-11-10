@@ -77,3 +77,31 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.hasSentPayload({ text: "response text", replyToId: "other-id" })).toBe(true);
   });
 });
+
+// no-reply-tool §4.4: once the run goes silent, sent blocks stay and pending ones are dropped.
+describe("createBlockReplyPipeline discardPending", () => {
+  it("keeps sent blocks, drops coalesced and later blocks", async () => {
+    const sent: string[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: (payload) => {
+        sent.push(payload.text ?? "");
+      },
+      timeoutMs: 5_000,
+      coalescing: { minChars: 1, maxChars: 1_000, idleMs: 60_000, joiner: "\n\n" },
+    });
+
+    pipeline.enqueue({ text: "Sent before." });
+    await pipeline.flush({ force: true });
+    pipeline.enqueue({ text: "Still buffered." });
+    expect(pipeline.hasBuffered()).toBe(true);
+
+    pipeline.discardPending?.();
+    pipeline.enqueue({ text: "After silence." });
+    await pipeline.flush({ force: true });
+    pipeline.stop();
+
+    expect(sent).toEqual(["Sent before."]);
+    expect(pipeline.hasBuffered()).toBe(false);
+    expect(pipeline.didStream()).toBe(true);
+  });
+});

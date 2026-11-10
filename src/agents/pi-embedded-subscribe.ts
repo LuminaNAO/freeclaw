@@ -19,6 +19,7 @@ import type {
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
+import { hasNoReplyToolCall } from "./tools/no-reply-tool.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
@@ -79,6 +80,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
     deterministicApprovalPromptSent: false,
+    silentReply: false,
+    blockRepliesEmitted: false,
   };
   const usageTotals = {
     input: 0,
@@ -104,8 +107,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>>[0],
   ) => {
-    if (!params.onBlockReply) {
+    if (!params.onBlockReply || state.silentReply) {
       return;
+    }
+    if (!payload.isReasoning) {
+      state.blockRepliesEmitted = true;
     }
     void Promise.resolve()
       .then(() => params.onBlockReply?.(payload))
@@ -478,7 +484,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const emitBlockChunk = (text: string) => {
-    if (state.suppressBlockChunks) {
+    if (state.suppressBlockChunks || state.silentReply) {
       return;
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
@@ -544,6 +550,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!params.onBlockReply) {
       return;
     }
+    if (state.silentReply) {
+      // no-reply-tool §4.4: blocks not yet flushed are dropped.
+      blockChunker?.reset();
+      state.blockBuffer = "";
+      return;
+    }
     if (blockChunker?.hasBuffered()) {
       blockChunker.drain({ force: true, emit: emitBlockChunk });
       blockChunker.reset();
@@ -605,6 +617,22 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     resetAssistantMessageState(0);
   };
 
+  // no-reply-tool §4.2/§4.4: once the model calls `no_reply`, every block still buffered here is dropped,
+  // nothing further is streamed, and the reply pipeline is told to drop what it has not sent yet.
+  const noteSilentReplyCall = (msg: AgentMessage | undefined) => {
+    if (!params.silentReplyTool || state.silentReply || !hasNoReplyToolCall(msg)) {
+      return;
+    }
+    state.silentReply = true;
+    blockChunker?.reset();
+    state.blockBuffer = "";
+    try {
+      params.onSilentReply?.();
+    } catch (err) {
+      log.warn(`silent reply callback failed: ${String(err)}`);
+    }
+  };
+
   const noteLastAssistant = (msg: AgentMessage) => {
     if (msg?.role === "assistant") {
       state.lastAssistant = msg;
@@ -619,6 +647,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     blockChunker,
     hookRunner: params.hookRunner,
     noteLastAssistant,
+    noteSilentReplyCall,
     shouldEmitToolResult,
     shouldEmitToolOutput,
     emitToolSummary,
@@ -693,6 +722,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // which is generated AFTER the tool sends the actual answer.
     didSendViaMessagingTool: () => messagingToolSentTexts.length > 0,
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
+    /** The model called `no_reply` in this run (no-reply-tool §4). */
+    isSilentReply: () => state.silentReply,
+    /** Whether block replies reached the channel before the run went silent (§4.9). */
+    didStreamBlocksBeforeSilence: () =>
+      state.blockRepliesEmitted && (params.blockStreaming ?? "on") === "on",
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,
     getCompactionCount: () => compactionCount,

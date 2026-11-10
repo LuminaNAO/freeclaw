@@ -80,17 +80,20 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     });
   } else {
     ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
+    // no-reply-tool §4.2: `silent` tells chat surfaces (webchat) not to show the buffered text.
+    const silent = ctx.state.silentReply ? { silent: true } : {};
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
       data: {
         phase: "end",
         endedAt: Date.now(),
+        ...silent,
       },
     });
     void ctx.params.onAgentEvent?.({
       stream: "lifecycle",
-      data: { phase: "end" },
+      data: { phase: "end", ...silent },
     });
   }
 
@@ -98,8 +101,10 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   // Flush the reply pipeline so the response reaches the channel before
   // compaction wait blocks the run.  This mirrors the pattern used by
   // handleToolExecutionStart and ensures delivery is not held hostage to
-  // long-running compaction (#35074).
-  void ctx.params.onBlockReplyFlush?.();
+  // long-running compaction (#35074). A silent run drops pending blocks instead (no-reply-tool §4.4).
+  if (!ctx.state.silentReply) {
+    void ctx.params.onBlockReplyFlush?.();
+  }
 
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;

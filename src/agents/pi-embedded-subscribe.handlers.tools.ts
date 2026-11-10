@@ -312,8 +312,9 @@ export async function handleToolExecutionStart(
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
   // Flush pending block replies to preserve message boundaries before tool execution.
+  // A silent run (no-reply-tool §4.4) drops them instead.
   ctx.flushBlockReplyBuffer();
-  if (ctx.params.onBlockReplyFlush) {
+  if (ctx.params.onBlockReplyFlush && !ctx.state.silentReply) {
     await ctx.params.onBlockReplyFlush();
   }
 

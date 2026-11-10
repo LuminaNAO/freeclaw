@@ -81,4 +81,6 @@ export type EmbeddedRunAttemptResult = {
   clientToolCall?: { name: string; params: Record<string, unknown> };
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
+  /** Set when the run ended silently through the `no_reply` tool (no-reply-tool §4). */
+  silentReply?: { reason?: string; blocksStreamed: boolean };
 };

@@ -193,7 +193,10 @@ export async function deliverAgentCommandResult(params: {
   }
 
   if (!payloads || payloads.length === 0) {
-    runtime.log("No reply from agent.");
+    // no-reply-tool §4.2: a silent run (`no_reply`) is a deliberate non-reply, not a missing one.
+    if (!result.silent) {
+      runtime.log("No reply from agent.");
+    }
     return { payloads: [], meta: result.meta };
   }
 

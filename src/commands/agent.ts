@@ -516,6 +516,8 @@ function runAgentAttempt(params: {
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
     senderIsOwner: params.opts.senderIsOwner,
+    // no-reply-tool §5.1: only `--deliver` runs have a reply target (not subagent/swarm/deliver=false runs).
+    hasReplyTarget: params.opts.deliver === true,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,

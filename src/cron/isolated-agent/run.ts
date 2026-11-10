@@ -641,6 +641,8 @@ export async function runCronIsolatedAgentTurn(params: {
             runId: cronSession.sessionEntry.sessionId,
             requireExplicitMessageTarget: toolPolicy.requireExplicitMessageTarget,
             disableMessageTool: toolPolicy.disableMessageTool,
+            // no-reply-tool §5.1: only cron runs with delivery have a reply target.
+            hasReplyTarget: deliveryRequested,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             abortSignal,
             bootstrapPromptWarningSignaturesSeen,
@@ -685,6 +687,7 @@ export async function runCronIsolatedAgentTurn(params: {
         },
       );
       const shouldRetryInterimAck =
+        !interimRunResult.silent &&
         !interimRunResult.meta?.error &&
         !interimRunResult.didSendViaMessagingTool &&
         !interimPayloadHasStructuredContent &&
@@ -831,6 +834,14 @@ export async function runCronIsolatedAgentTurn(params: {
       deliveryAttempted: params?.deliveryAttempted,
       ...telemetry,
     });
+
+  // no-reply-tool §4.2: the model ended the run with `no_reply`. Nothing is delivered, and like an exact
+  // NO_REPLY the run counts as handled (no main-session summary fallback).
+  if (finalRunResult.silent) {
+    return resolveRunOutcome({
+      delivered: deliveryRequested ? true : undefined,
+    });
+  }
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);

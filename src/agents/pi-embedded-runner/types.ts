@@ -74,6 +74,11 @@ export type EmbeddedPiRunResult = {
   messagingToolSentTargets?: MessagingToolSend[];
   // Count of successful cron.add tool calls in this run.
   successfulCronAdds?: number;
+  /**
+   * True when the model ended the run with the `no_reply` tool (no-reply-tool §4.1). The run has no final
+   * payloads; sends already made with the message tool are not affected.
+   */
+  silent?: boolean;
 };
 
 export type EmbeddedPiCompactResult = {

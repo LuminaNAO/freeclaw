@@ -375,6 +375,12 @@ export async function runAgentTurnWithFallback(params: {
               blockReplyBreak: params.resolvedBlockStreamingBreak,
               blockReplyChunking: params.blockReplyChunking,
               blockStreaming: params.followupRun.run.blockStreaming,
+              // no-reply-tool §5.1: an inbound message or heartbeat always has a reply target.
+              hasReplyTarget: true,
+              // §4.4: blocks not yet sent are dropped once the model calls `no_reply`.
+              onSilentReply: () => {
+                blockReplyPipeline?.discardPending?.();
+              },
               onPartialReply: async (payload) => {
                 const textForTyping = await handlePartialForTyping(payload);
                 if (!params.opts?.onPartialReply || textForTyping === undefined) {
