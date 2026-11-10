@@ -16,9 +16,13 @@ installHeartbeatRunnerTestRuntime();
 
 const WHATSAPP_GROUP = "120363140186826074@g.us";
 
-async function runWith(reply: { text: string }) {
-  let event: ReturnType<typeof getLastHeartbeatEvent> = null;
-  let sends = 0;
+async function runWith(reply: {
+  text: string;
+}): Promise<{ event: ReturnType<typeof getLastHeartbeatEvent>; sends: number }> {
+  const outcome: { event: ReturnType<typeof getLastHeartbeatEvent>; sends: number } = {
+    event: null,
+    sends: 0,
+  };
   await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
     const cfg: OpenClawConfig = {
       agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m", target: "whatsapp" } } },
@@ -42,10 +46,10 @@ async function runWith(reply: { text: string }) {
         hasActiveWebListener: () => true,
       },
     });
-    sends = sendWhatsApp.mock.calls.length;
-    event = getLastHeartbeatEvent();
+    outcome.sends = sendWhatsApp.mock.calls.length;
+    outcome.event = getLastHeartbeatEvent();
   });
-  return { event, sends };
+  return outcome;
 }
 
 describe("heartbeat ack via no_reply", () => {
