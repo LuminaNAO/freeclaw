@@ -34,6 +34,7 @@ type ResolvedAgentConfig = {
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
+  silentReply?: AgentEntry["silentReply"];
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
@@ -137,6 +138,7 @@ export function resolveAgentConfig(
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
     reasoningDefault: entry.reasoningDefault,
+    silentReply: entry.silentReply,
     heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,

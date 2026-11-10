@@ -883,6 +883,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       pdfMaxPages: 20,
       thinkingDefault: "low",
       reasoningDefault: "off",
+      silentReply: "tool",
       verboseDefault: "off",
       elevatedDefault: "on",
       idleTimeoutSeconds: 600,
@@ -914,6 +915,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 1.
 - `reasoningDefault`: default reasoning display (`on` | `off` | `stream`) when neither `/reasoning` nor the session sets a level. Per-agent `agents.list[].reasoningDefault` overrides it. Unset: reasoning display stays `off` on messaging channels (Signal, WhatsApp, Telegram, Discord, Slack, Teams, iMessage, …) and is never turned on automatically there; non-channel surfaces (CLI, TUI, gateway `agent` method) keep the model-catalog default. See [Thinking Levels](/tools/thinking#default-reasoning-visibility).
+- `silentReply`: how the model stays silent (`tool` | `token`). `tool` (default) offers the `no_reply` tool in runs that have a reply target (inbound channel message, heartbeat, cron with delivery) and teaches it in the system prompt; calling it ends the run and nothing from that run's final reply is delivered (sends already made with the `message` tool still go out). A `NO_REPLY` text reply is still honoured. `token` keeps the old `NO_REPLY` text token and offers no tool. Models without tool support always use the token. Surfaces with `surfaces.<channel>.silentReply` set to `disallow` get neither. Per-agent `agents.list[].silentReply` overrides it.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
 

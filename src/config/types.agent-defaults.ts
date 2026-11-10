@@ -201,6 +201,12 @@ export type AgentDefaultsConfig = {
    * Unset: off on messaging channels; model-catalog default on non-channel surfaces (CLI, TUI, gateway agent).
    */
   reasoningDefault?: "on" | "off" | "stream";
+  /**
+   * How the model stays silent (no-reply-tool §5.4):
+   * "tool" (default) offers and teaches the `no_reply` tool (the NO_REPLY token is still honoured);
+   * "token" keeps the old NO_REPLY text token and offers no tool.
+   */
+  silentReply?: "tool" | "token";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
