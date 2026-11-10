@@ -26,12 +26,14 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
 import {
   buildAllowedModelSet,
+  buildModelAliasIndex,
   isCliProvider,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { prepareSessionManagerForRun } from "../agents/pi-embedded-runner/session-manager-init.js";
@@ -963,7 +965,8 @@ async function agentCommandInternal(
     const hasStoredOverride = Boolean(
       sessionEntry?.modelOverride || sessionEntry?.providerOverride,
     );
-    const needsModelCatalog = hasAllowlist || hasStoredOverride;
+    const modelOnceRaw = opts.modelOnce?.trim();
+    const needsModelCatalog = hasAllowlist || hasStoredOverride || Boolean(modelOnceRaw);
     let allowedModelKeys = new Set<string>();
     let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
     let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
@@ -1026,6 +1029,32 @@ async function agentCommandInternal(
       ) {
         provider = normalizedStored.provider;
         model = normalizedStored.model;
+      }
+    }
+    // One-run model override (e.g. a mail connector attachment): not persisted to the session,
+    // and only applied when the agent's model allowlist permits it.
+    let modelOnceApplied = false;
+    if (modelOnceRaw) {
+      const resolvedOnce = resolveModelRefFromString({
+        raw: modelOnceRaw,
+        defaultProvider,
+        aliasIndex: buildModelAliasIndex({ cfg, defaultProvider }),
+      });
+      const onceKey = resolvedOnce
+        ? modelKey(resolvedOnce.ref.provider, resolvedOnce.ref.model)
+        : undefined;
+      if (
+        resolvedOnce &&
+        onceKey &&
+        (isCliProvider(resolvedOnce.ref.provider, cfg) ||
+          allowAnyModel ||
+          allowedModelKeys.has(onceKey))
+      ) {
+        provider = resolvedOnce.ref.provider;
+        model = resolvedOnce.ref.model;
+        modelOnceApplied = true;
+      } else {
+        log.warn(`one-run model "${modelOnceRaw}" not allowed; using the session model`);
       }
     }
     if (sessionEntry) {
@@ -1124,7 +1153,7 @@ async function agentCommandInternal(
       const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
         cfg,
         agentId: sessionAgentId,
-        hasSessionModelOverride: Boolean(storedModelOverride),
+        hasSessionModelOverride: Boolean(storedModelOverride) || modelOnceApplied,
       });
 
       // Track model fallback attempts so retries on an existing session don't

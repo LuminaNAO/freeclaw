@@ -611,6 +611,52 @@ describe("agentCommand", () => {
     });
   });
 
+  it("applies an allowed one-run model (modelOnce) without persisting it", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: { "anthropic/claude-opus-4-5": {}, "openai/gpt-4.1-mini": {} },
+      });
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+      ]);
+
+      await agentCommand(
+        { message: "hi", sessionKey: "agent:main:mail:work", modelOnce: "openai/gpt-4.1-mini" },
+        runtime,
+      );
+
+      expectLastRunProviderModel("openai", "gpt-4.1-mini");
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+        string,
+        { modelOverride?: string }
+      >;
+      expect(saved["agent:main:mail:work"]?.modelOverride).toBeUndefined();
+    });
+  });
+
+  it("ignores a one-run model (modelOnce) outside the allowlist", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: { "anthropic/claude-opus-4-5": {} },
+      });
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus", provider: "anthropic" },
+      ]);
+
+      await agentCommand(
+        { message: "hi", sessionKey: "agent:main:mail:work", modelOnce: "openai/gpt-x" },
+        runtime,
+      );
+
+      expectLastRunProviderModel("anthropic", "claude-opus-4-5");
+    });
+  });
+
   it("keeps stored session model override when models allowlist is empty", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
