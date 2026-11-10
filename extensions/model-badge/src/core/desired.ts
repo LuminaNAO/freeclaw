@@ -34,6 +34,8 @@ export type ViewInputs = {
   adopted?: (baseKey: string) => { sha: string; file: string } | null;
   // ARCH §2c.11: the validated scene the agent wrote for a group at this generation.
   scene?: (baseKey: string, generation: number) => string | null;
+  // ARCH §2c.13: the install's `imageGen.style` (absent = house style, "" = none).
+  look?: string;
 };
 
 // What a target shows now: a vector base (with its exact parameters), a stored raster
@@ -83,6 +85,9 @@ export function createView(inputs: ViewInputs, ctx: { providerId: string; size: 
       if (scene) {
         style.scene = scene;
       }
+    }
+    if (inputs.look !== undefined) {
+      style.look = inputs.look;
     }
     const portrait = ref.kind === "profile";
     const params = baseParamsForSeed(key, style, { portrait });

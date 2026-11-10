@@ -151,7 +151,8 @@ function fakeImageGen() {
 
 describe(`generator tag bump to ${BASE_PROMPT_TAG} (ARCH §2c.10)`, () => {
   it("generated bases regenerate exactly once; adopted bases are untouched; then idempotent", async () => {
-    expect(BASE_PROMPT_TAG).toBe("scene-v1");
+    // §2c.13 bumped it again (flat style); this test still covers the §2c.10 upgrade path.
+    expect(BASE_PROMPT_TAG).toBe("scene-v2");
     const gen = fakeImageGen();
     const w = await createWorld({
       targets: [],

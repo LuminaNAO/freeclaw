@@ -14,8 +14,15 @@ import { rasterBaseSvg, sniffImage, verifyPng, type Renderer, type RenderSize } 
 // system. Only the base is ever generated; marks are composited by our renderer.
 
 // `scene` is the scene the agent wrote for a group (§2c.11), already validated; a
-// member's steering `prompt` still overrides it.
-export type BaseStyle = { motif?: string; palette?: string; prompt?: string; scene?: string };
+// member's steering `prompt` still overrides it. `look` is the install's `imageGen.style`
+// (§2c.13): absent = the house style clause, "" = no style clause.
+export type BaseStyle = {
+  motif?: string;
+  palette?: string;
+  prompt?: string;
+  scene?: string;
+  look?: string;
+};
 // `seed` is the image seed (§2c.3: it covers the target's generation counter); `portrait`
 // marks the account's own profile picture (§2c.5).
 export type BaseTarget = { seed: string; params: BaseParams; portrait?: boolean };
@@ -54,7 +61,7 @@ export const BANNED_PROMPT_WORDS = [
 // Bump whenever the prompt templates change: it is part of a generated base's inputs, so
 // every generated base is made again once; adopted bases are never generated, so they
 // are untouched.
-export const BASE_PROMPT_TAG = "scene-v1";
+export const BASE_PROMPT_TAG = "scene-v2";
 
 // Motifs map to scenes, not shapes.
 export const MOTIF_SCENES: Readonly<Record<MotifName, string>> = {
@@ -64,21 +71,37 @@ export const MOTIF_SCENES: Readonly<Record<MotifName, string>> = {
   dots: "a field of fireflies over tall grass at night",
 };
 
-const NO_MARKS = "no text, no letters, no numbers, no people, no faces, no logos";
+export const NO_MARKS = "no text, no letters, no numbers, no people, no faces, no logos";
 
-const HOUSE_TEMPLATE = `A scene of {scene}. A ${FULL_BLEED}. Soft light, rich detail, ${NO_MARKS}.`;
+// ARCH §2c.13: the house art style is a flat 2D illustration, never a photograph. Both
+// templates end with this clause, then the no-marks clause. An install may replace it
+// with `imageGen.style` ("" drops it).
+export const HOUSE_STYLE =
+  "Clean modern flat vector illustration, simple bold shapes, smooth gradients, limited calm " +
+  "palette, minimal elegant composition, crisp edges, not a photograph, not 3D, no realistic textures";
+
+const HOUSE_TEMPLATE = `A scene of {scene}. A ${FULL_BLEED}. {finish}`;
 
 // ARCH §2c.5: the profile picture is shown cropped to a circle, so its prompt keeps the
 // scene centred with nothing important near the corners, and is still full-bleed.
 const PROFILE_TEMPLATE =
   "A scene of {scene}. A portrait-safe composition centred in the frame that still reads when " +
-  `cropped to a circle, nothing important near the corners. A ${FULL_BLEED}. ` +
-  `Soft light, rich detail, ${NO_MARKS}.`;
+  `cropped to a circle, nothing important near the corners. A ${FULL_BLEED}. {finish}`;
+
+// The style clause (house or the install's own), then the no-marks clause.
+function finishClause(look: string | undefined): string {
+  const clause = look === undefined ? HOUSE_STYLE : look;
+  if (!clause) {
+    return `${NO_MARKS.charAt(0).toUpperCase()}${NO_MARKS.slice(1)}.`;
+  }
+  return `${clause}, ${NO_MARKS}.`;
+}
 
 const BANNED_RE = new RegExp(`\\b(?:${BANNED_PROMPT_WORDS.join("|")})s?\\b`, "gi");
 
 // A member's steering words are kept, minus the banned words, and wrapped in the same
-// full-bleed template (§2c.10).
+// full-bleed template (§2c.10). They lead the prompt; the style clause still follows
+// them, so a member who asks for another look ("watercolour") gets it first (§2c.13).
 function steeringWords(prompt: string): string {
   return (
     prompt
@@ -110,7 +133,11 @@ export function buildPrompt(target: BaseTarget, style: BaseStyle): string {
     scene = `${MOTIF_SCENES[motif]}, in ${palette} colours`;
   }
   const template = target.portrait ? PROFILE_TEMPLATE : HOUSE_TEMPLATE;
-  return template.replace("{scene}", scene);
+  const finish = finishClause(style.look);
+  // One pass, so braces in a member's words are never read as a placeholder.
+  return template.replace(/\{(scene|finish)\}/g, (_, k: string) =>
+    k === "scene" ? scene : finish,
+  );
 }
 
 export function seedNumber(seed: string): number {
