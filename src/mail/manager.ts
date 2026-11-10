@@ -254,3 +254,14 @@ export class MailConnectorManager {
 function redact(text: string, secret: string | undefined): string {
   return secret ? text.split(secret).join("[redacted]") : text;
 }
+
+let activeManager: MailConnectorManager | null = null;
+
+/** The gateway's running manager (set at gateway start, cleared on close). */
+export function setActiveMailConnectorManager(manager: MailConnectorManager | null): void {
+  activeManager = manager;
+}
+
+export function getActiveMailConnectorManager(): MailConnectorManager | null {
+  return activeManager;
+}

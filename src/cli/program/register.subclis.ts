@@ -196,6 +196,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "mail",
+    description: "Mail push connectors (list, status, test, restart)",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../mail-cli.js");
+      mod.registerMailCli(program);
+    },
+  },
+  {
     name: "qr",
     description: "Generate iOS pairing QR/setup code",
     hasSubcommands: false,
