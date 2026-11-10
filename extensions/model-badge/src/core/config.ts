@@ -1,4 +1,5 @@
 import path from "node:path";
+import { BANNED_PROMPT_WORDS } from "./baseart.js";
 import { isHex } from "./color.js";
 import { isMotif, MOTIFS } from "./motif.js";
 import { PALETTE_NAMES } from "./palette.js";
@@ -42,6 +43,8 @@ export type ImageGenConfig =
       maxPerDay: number;
       maxPerRun: number;
       promptWriter: PromptWriterConfig;
+      // ARCH §2c.13: the install's style clause; absent = the house style, "" = none.
+      style?: string;
     }
   | {
       kind: "command";
@@ -52,6 +55,8 @@ export type ImageGenConfig =
       maxPerDay: number;
       maxPerRun: number;
       promptWriter: PromptWriterConfig;
+      // ARCH §2c.13: the install's style clause; absent = the house style, "" = none.
+      style?: string;
     };
 
 export const DEFAULT_TIMING = {
@@ -208,6 +213,33 @@ function normalizePromptWriter(raw: unknown, errors: string[]): PromptWriterConf
   };
 }
 
+const STYLE_BANNED_RE = new RegExp(`\\b(?:${BANNED_PROMPT_WORDS.join("|")})s?\\b`, "i");
+
+// ARCH §2c.13: `imageGen.style` replaces the house style clause. It goes into every
+// generated-base prompt, so it gets the §2c.10 banned-word check; "" means no style clause.
+// A rejected value keeps the house style.
+function normalizeStyle(raw: unknown, errors: string[]): { style?: string } {
+  if (raw === undefined || raw === null) {
+    return {};
+  }
+  if (typeof raw !== "string") {
+    errors.push("imageGen.style must be a string");
+    return {};
+  }
+  const style = raw
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[\s,.;:]+$/, "");
+  const banned = STYLE_BANNED_RE.exec(style);
+  if (banned) {
+    errors.push(
+      `imageGen.style must not contain "${banned[0].toLowerCase()}" (banned in image prompts: ${BANNED_PROMPT_WORDS.join(", ")})`,
+    );
+    return {};
+  }
+  return { style };
+}
+
 function normalizeImageGen(raw: unknown, errors: string[]): ImageGenConfig | null {
   if (raw === undefined || raw === null) {
     return null;
@@ -225,6 +257,7 @@ function normalizeImageGen(raw: unknown, errors: string[]): ImageGenConfig | nul
         ? (c.maxPerRun as number)
         : IMAGE_DEFAULTS.maxPerRun,
     promptWriter: normalizePromptWriter(c.promptWriter, errors),
+    ...normalizeStyle(c.style, errors),
   };
   if (c.kind === "openai-images") {
     if (typeof c.baseUrl !== "string" || !/^https?:\/\//.test(c.baseUrl)) {

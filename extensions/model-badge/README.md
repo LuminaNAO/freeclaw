@@ -65,6 +65,8 @@ bundled default). Enable it with `openclaw plugins enable model-badge`.
   // local generator; lower them for metered backends)
   // "promptWriter": { "enabled": true, "model": null, "timeoutMs": 60000, "memory": true }
   // (inside imageGen; ARCH §2c.11, see "Scenes for new groups")
+  // "style": "<style clause>" (inside imageGen; ARCH §2c.13, see "House art style";
+  // default the flat vector clause, "" = no style clause)
 }
 ```
 
@@ -130,8 +132,11 @@ throwaway session, deleted afterwards. The writer's only inputs are the group na
 top few snippets of the agent's own memory search for it (memory files only; no chat
 messages, member names or numbers). It returns one concrete scene of at most 40 words.
 
-What it returns is checked: one line, ≤ 40 words, no quotes, none of the §2c.10 banned words,
-no id-like digit runs, no proper noun taken from the group name. A rejected, failed or timed
+The writer is asked for a scene for a flat vector illustration (objects and a setting, no
+lighting, camera or photo words). What it returns is checked: one line, ≤ 40 words, no quotes,
+none of the §2c.10 banned words, none of the photo words (`photo`, `photograph`,
+`photorealistic`, `realistic`, `3d`, `render`, `cinematic`, `bokeh`, `lens`; §2c.13), no
+id-like digit runs, no proper noun taken from the group name. A rejected, failed or timed
 out answer (default 60 s) falls back to the §2c.10 motif scene. The accepted scene is wrapped
 in the same full-bleed template. A member's steering `prompt` still overrides it.
 
@@ -147,6 +152,28 @@ never call it twice. A rename or a `regenerate` makes new inputs. Scenes are nev
 `imageGen.promptWriter`: `enabled` (default true), `model` (`provider/model`, default the
 agent's default model), `timeoutMs` (default 60000), `memory` (default true; false sends the
 name only).
+
+## House art style (ARCH §2c.13)
+
+Every generated base (group and profile; motif, written scene and steered prompt alike) is
+asked for a flat 2D picture, not a photograph. After the scene and the full-bleed clause, both
+prompt templates end with the style clause
+
+> Clean modern flat vector illustration, simple bold shapes, smooth gradients, limited calm
+> palette, minimal elegant composition, crisp edges, not a photograph, not 3D, no realistic
+> textures
+
+followed by the no-marks clause (no text, letters, numbers, people, faces or logos). A member's
+steering `prompt` still leads the prompt and the style clause is appended after it, so a
+member who asks for another look ("watercolour ocean") gets it first. Adopted artwork (§2c.8)
+is never generated, so it is untouched.
+
+`imageGen.style` replaces the clause for an install. It gets the same banned-word check as the
+prompts (§2c.10) when the config is read; a value containing one is a config error and the
+house clause stays. An empty string adds no style clause at all.
+
+The prompt tag is `scene-v2` (was `scene-v1`), so every generated base is made again once
+after the upgrade; written scenes are kept and wrapped in the new template, not rewritten.
 
 ## Which groups (operator addendum, §2c target selection)
 
