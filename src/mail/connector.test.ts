@@ -298,9 +298,14 @@ describe("mail connector with the fake provider", () => {
     const first = await started({ connectors: [fakeConnectorConfig()], io, sink });
     getFakeMailbox("work").add({ subject: "important" });
     await waitFor(() => first.manager.get("work")!.status().pending === 1);
-    // "Crash": the process goes away without committing; drop the manager without stop().
+    // "Crash": the process goes away without committing. stop() must not hang on the session
+    // that never returns.
     managers.splice(managers.indexOf(first.manager), 1);
-    void first.manager.stop();
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const stopping = first.manager.stop();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await stopping;
+    vi.useRealTimers();
     const stored = io.files.get("/state/mail/work.json")?.cursor;
     expect(stored?.folders.INBOX.lastUid).toBe(0);
 

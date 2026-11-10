@@ -24,6 +24,8 @@ const RETRY_BASE_MS = 5_000;
 const RETRY_MAX_MS = 5 * 60_000;
 /** Pending messages above this many batches make the provider wait (backpressure). */
 const PENDING_BATCHES_LIMIT = 5;
+/** How long stop() waits for an in-flight delivery before giving up on it. */
+const STOP_FLUSH_WAIT_MS = 10_000;
 
 /** One batch handed to one attached session. */
 export type MailSessionEvent = {
@@ -230,7 +232,18 @@ export class MailConnector {
     }
     await this.runPromise?.catch(() => {});
     this.runPromise = null;
-    await this.flushing?.catch(() => {});
+    // Sessions get the abort signal; one that does not return in time is left behind. Its batch
+    // stays uncommitted and is pushed again on the next start (at-least-once).
+    if (this.flushing) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        this.flushing.catch(() => {}),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, STOP_FLUSH_WAIT_MS);
+        }),
+      ]);
+      clearTimeout(timer);
+    }
     await this.stateWrite.catch(() => {});
     if (this.config.enabled === false) {
       this.setState({ state: "disabled" });
