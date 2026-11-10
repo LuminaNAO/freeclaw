@@ -585,6 +585,17 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
+    id: "mail.connectors[].imap.password",
+    targetType: "mail.connectors[].imap.password",
+    configFile: "openclaw.json",
+    pathPattern: "mail.connectors[].imap.password",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
     id: "gateway.auth.token",
     targetType: "gateway.auth.token",
     configFile: "openclaw.json",

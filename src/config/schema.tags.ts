@@ -65,6 +65,7 @@ const PREFIX_RULES: Array<{ prefix: string; tags: ConfigTag[] }> = [
   { prefix: "diagnostics.", tags: ["observability"] },
   { prefix: "logging.", tags: ["observability"] },
   { prefix: "cron.", tags: ["automation"] },
+  { prefix: "mail.", tags: ["automation"] },
   { prefix: "talk.", tags: ["media"] },
   { prefix: "audio.", tags: ["media"] },
 ];
