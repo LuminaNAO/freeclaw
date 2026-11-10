@@ -14,6 +14,7 @@ import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
+import { createNoReplyTool } from "./tools/no-reply-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
@@ -82,6 +83,10 @@ export function createOpenClawTools(
     spawnWorkspaceDir?: string;
     /** Callback invoked when sessions_yield tool is called. */
     onYield?: (message: string) => Promise<void> | void;
+    /**
+     * no-reply-tool §5: set only when the run is offered the `no_reply` tool; invoked when the model calls it.
+     */
+    onNoReply?: (reason: string | undefined) => void;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
@@ -163,6 +168,7 @@ export function createOpenClawTools(
     createTtsTool({
       agentChannel: options?.agentChannel,
       config: options?.config,
+      silentReplyTool: Boolean(options?.onNoReply),
     }),
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,
@@ -193,6 +199,7 @@ export function createOpenClawTools(
       sessionId: options?.sessionId,
       onYield: options?.onYield,
     }),
+    ...(options?.onNoReply ? [createNoReplyTool({ onNoReply: options.onNoReply })] : []),
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,

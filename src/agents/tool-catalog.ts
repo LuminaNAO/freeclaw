@@ -154,6 +154,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "no_reply",
+    label: "no_reply",
+    description: "Stay silent: end the turn without a reply",
+    sectionId: "messaging",
+    profiles: ["minimal", "coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "subagents",
     label: "subagents",
     description: "Manage sub-agents",

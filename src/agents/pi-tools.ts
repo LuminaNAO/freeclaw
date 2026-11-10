@@ -270,6 +270,8 @@ export function createOpenClawCodingTools(options?: {
   senderIsOwner?: boolean;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
+  /** no-reply-tool §5: set only when the run is offered `no_reply`; invoked when the model calls it. */
+  onNoReply?: (reason: string | undefined) => void;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -535,6 +537,7 @@ export function createOpenClawCodingTools(options?: {
       senderIsOwner: options?.senderIsOwner,
       sessionId: options?.sessionId,
       onYield: options?.onYield,
+      onNoReply: options?.onNoReply,
     }),
   ];
   const toolsForMemoryFlush =
