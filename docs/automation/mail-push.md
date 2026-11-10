@@ -86,7 +86,7 @@ Use an app password where your provider supports them.
           {
             agentId: "main",
             sessionKey: "agent:main:mail:work", // created if missing
-            wakeMode: "now", // "now" | "next-heartbeat"
+            wakeMode: "now", // "now" | "next-heartbeat" (best-effort, see below)
             deliver: false,
             instructionsFile: "MAIL.md", // named in the event, not inlined
           },
@@ -114,7 +114,11 @@ running.
 ## What the agent receives
 
 Per batch, each attached session gets one agent turn (`wakeMode: "now"`) or one queued system
-event (`wakeMode: "next-heartbeat"`, picked up with the next heartbeat or message):
+event (`wakeMode: "next-heartbeat"`, picked up with the next heartbeat or message).
+`next-heartbeat` is best-effort: the system-event queue lives in memory, so a gateway restart
+before the next heartbeat, or more than 20 queued events for the session, drops the event (see
+[Delivery guarantee](#delivery-guarantee-at-least-once)). Use `wakeMode: "now"` when no message may
+be lost.
 
 ```
 [mail:work] 2 new messages. Handle them per MAIL.md (if present).
@@ -170,9 +174,14 @@ committed only after **every** attached session accepted the batch (`now`: the a
 finished; `next-heartbeat`: the event was queued). A session that fails gets the batch again
 with backoff; sessions that already accepted it do not.
 
-So a message is never skipped, but after a crash or a forced stop between the turn and the commit
-it **can arrive twice**, with the same `Id`. Write `MAIL.md` so that a duplicate does no harm
-(see the example above).
+With `wakeMode: "now"` a message is never skipped, but after a crash or a forced stop between the
+turn and the commit it **can arrive twice**, with the same `Id`. Write `MAIL.md` so that a
+duplicate does no harm (see the example above).
+
+`wakeMode: "next-heartbeat"` is **best-effort**, not at-least-once. The cursor is committed as soon
+as the event is queued, but the system-event queue is in memory only: it is not persisted, a
+gateway restart before the next heartbeat loses it, and a session holds at most 20 queued events
+(the oldest are dropped silently). Use `wakeMode: "now"` when no message may be lost.
 
 Other cursor rules:
 
