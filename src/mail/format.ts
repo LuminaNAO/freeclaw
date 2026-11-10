@@ -34,24 +34,90 @@ export function formatMailAddresses(list: MailAddress[]): string {
     .join(", ");
 }
 
-/** Drops quoted reply chains: "On ... wrote:" blocks and trailing `>` quote runs. */
+const QUOTE_CUT_MARKER = "[quoted reply cut]";
+
+function isQuoted(line: string): boolean {
+  return line.trimStart().startsWith(">");
+}
+
+function isBlank(line: string | undefined): boolean {
+  return (line ?? "").trim() === "";
+}
+
+/**
+ * Removes quoted reply chains (§4) without losing new text: every run of two or more `>` lines
+ * (blank lines inside the run included) is replaced with a marker, together with the
+ * "On ... wrote:" header right before it. Text before, between and after quoted runs is kept, so
+ * bottom-posted and inline answers survive. Single quoted lines stay (inline reply context).
+ * "-----Original Message-----" blocks are not quoted with `>` and are left as they are.
+ */
 export function cutQuotedReply(text: string): string {
   const lines = text.split("\n");
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index].trim();
-    const next = lines[index + 1]?.trim() ?? "";
-    const wroteHeader =
-      (/^on\b.+\bwrote:$/i.test(line) || /^-{2,}\s*original message\s*-{2,}$/i.test(line)) &&
-      index > 0;
-    const quoteStart = line.startsWith(">") && next.startsWith(">") && index > 0;
-    if (wroteHeader || quoteStart) {
-      const kept = lines.slice(0, index).join("\n").trimEnd();
-      if (kept) {
-        return `${kept}\n[quoted reply cut]`;
+  const out: string[] = [];
+  let cut = false;
+  let index = 0;
+  while (index < lines.length) {
+    if (!isQuoted(lines[index])) {
+      out.push(lines[index]);
+      index += 1;
+      continue;
+    }
+    // Collect the run: quoted lines, plus blank lines that sit between quoted lines.
+    let end = index;
+    let quotedCount = 0;
+    while (end < lines.length) {
+      if (isQuoted(lines[end])) {
+        quotedCount += 1;
+        end += 1;
+        continue;
+      }
+      if (isBlank(lines[end])) {
+        let next = end;
+        while (next < lines.length && isBlank(lines[next])) {
+          next += 1;
+        }
+        if (next < lines.length && isQuoted(lines[next])) {
+          end = next;
+          continue;
+        }
+      }
+      break;
+    }
+    if (quotedCount < 2) {
+      out.push(...lines.slice(index, end));
+      index = end;
+      continue;
+    }
+    // Drop the attribution header ("On <date>, <name> wrote:", possibly wrapped onto two lines)
+    // and the blank lines between it and the quote.
+    let tail = out.length;
+    while (tail > 0 && isBlank(out[tail - 1])) {
+      tail -= 1;
+    }
+    const header = out[tail - 1]?.trim() ?? "";
+    if (/\bwrote:$/i.test(header)) {
+      tail -= 1;
+      if (!/^on\b/i.test(header) && /^on\b/i.test(out[tail - 1]?.trim() ?? "")) {
+        tail -= 1;
+      }
+      out.length = tail;
+      if (out.length > 0 && !isBlank(out[out.length - 1])) {
+        out.push("");
       }
     }
+    out.push(QUOTE_CUT_MARKER);
+    cut = true;
+    index = end;
   }
-  return text;
+  if (!cut) {
+    return text;
+  }
+  const result = out.join("\n").trim();
+  // A message that is nothing but a quote keeps its text (better than an empty body).
+  if (result.split("\n").every((line) => isBlank(line) || line.trim() === QUOTE_CUT_MARKER)) {
+    return text;
+  }
+  return result;
 }
 
 /**
