@@ -163,6 +163,8 @@ function buildMessagingSection(params: {
   messageToolHints?: string[];
   /** Omit every NO_REPLY mention (the surface disallows silent replies). */
   suppressSilentTokenGuidance?: boolean;
+  /** Teach the `no_reply` tool instead of the NO_REPLY token (no-reply-tool §6). */
+  silentReplyTool?: boolean;
 }) {
   if (params.isMinimal) {
     return [];
@@ -174,7 +176,9 @@ function buildMessagingSection(params: {
     "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
     params.suppressSilentTokenGuidance
       ? "- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (never forward raw internal metadata or a silent placeholder)."
-      : `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
+      : params.silentReplyTool
+        ? "- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to `no_reply`)."
+        : `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
     "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
     params.availableTools.has("message")
       ? [
@@ -185,7 +189,9 @@ function buildMessagingSection(params: {
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           params.suppressSilentTokenGuidance
             ? "- If you use `message` (`action=send`) to deliver your user-visible reply, do not repeat it in your final answer — reply with a one-line acknowledgement instead."
-            : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
+            : params.silentReplyTool
+              ? "- If you use `message` (`action=send`) to deliver your user-visible reply, call `no_reply` (avoid duplicate replies)."
+              : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled
             ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
             : params.runtimeChannel
@@ -228,6 +234,14 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
     "",
   ];
 }
+
+/** no-reply-tool §6: the "Silent replies" section in tool mode (exact text). */
+export const SILENT_REPLY_TOOL_PROMPT_LINES = [
+  "## Silent replies",
+  "When you have nothing to say, call the `no_reply` tool and do nothing else.",
+  "- Call it first and alone. Never write text and then call it.",
+  '- Never write "NO_REPLY" as text.',
+] as const;
 
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
@@ -276,7 +290,10 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
-  /** "none" omits all NO_REPLY guidance (the surface disallows silent replies). */
+  /**
+   * "none" omits all NO_REPLY guidance (the surface disallows silent replies); "tool" teaches the `no_reply`
+   * tool instead of the token (no-reply-tool §6); "generic" (default) teaches the NO_REPLY token.
+   */
   silentReplyPromptMode?: SilentReplyPromptMode;
   /**
    * The turn's resolved block-streaming state (after any channel override). Selects the narration lines of
@@ -633,6 +650,7 @@ export function buildAgentSystemPrompt(params: {
       runtimeChannel,
       messageToolHints: params.messageToolHints,
       suppressSilentTokenGuidance: params.silentReplyPromptMode === "none",
+      silentReplyTool: params.silentReplyPromptMode === "tool",
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
     ...buildFocusPromptSection(params.focus),
@@ -710,7 +728,10 @@ export function buildAgentSystemPrompt(params: {
   // operator disallows them (surfaces.<channel>.silentReply): local models
   // tend to bundle NO_REPLY with real text, so never teaching the token there
   // is safer than any amount of "never append it" guidance.
-  if (!isMinimal && params.silentReplyPromptMode !== "none") {
+  if (!isMinimal && params.silentReplyPromptMode === "tool") {
+    // no-reply-tool §6 (exact text): silence is a tool call; the token is honoured but not taught.
+    lines.push(...SILENT_REPLY_TOOL_PROMPT_LINES, "");
+  } else if (!isMinimal && params.silentReplyPromptMode !== "none") {
     lines.push(
       "## Silent Replies",
       `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
@@ -728,7 +749,16 @@ export function buildAgentSystemPrompt(params: {
   }
 
   // Skip heartbeats for subagent/none modes
-  if (!isMinimal) {
+  if (!isMinimal && params.silentReplyPromptMode === "tool") {
+    // no-reply-tool §4.6/§6: `no_reply` is the heartbeat ack in tool mode.
+    lines.push(
+      "## Heartbeats",
+      heartbeatPromptLine,
+      "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, call the `no_reply` tool and do nothing else. It counts as the heartbeat ack (same as HEARTBEAT_OK).",
+      'If something needs attention, do NOT call `no_reply` or include "HEARTBEAT_OK"; reply with the alert text instead.',
+      "",
+    );
+  } else if (!isMinimal) {
     lines.push(
       "## Heartbeats",
       heartbeatPromptLine,

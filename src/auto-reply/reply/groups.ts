@@ -9,6 +9,7 @@ import { resolveChannelGroupRequireMention } from "../../config/group-policy.js"
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeGroupActivation } from "../group-activation.js";
+import { buildGroupSilenceLine } from "../silent-reply-wording.js";
 import type { TemplateContext } from "../templating.js";
 
 function extractGroupId(raw: string | undefined | null): string | undefined {
@@ -167,9 +168,7 @@ export function buildGroupIntro(params: {
       })
     : undefined;
   const silenceLine =
-    activation === "always"
-      ? `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent. Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.`
-      : undefined;
+    activation === "always" ? buildGroupSilenceLine(params.silentToken) : undefined;
   const cautionLine =
     activation === "always"
       ? "Be extremely selective: reply only when directly addressed or clearly helpful. Otherwise stay silent."

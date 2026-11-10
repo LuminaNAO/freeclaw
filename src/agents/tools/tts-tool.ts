@@ -17,11 +17,15 @@ const TtsToolSchema = Type.Object({
 export function createTtsTool(opts?: {
   config?: OpenClawConfig;
   agentChannel?: GatewayMessageChannel;
+  /** The run teaches `no_reply` instead of the NO_REPLY token (no-reply-tool §6). */
+  silentReplyTool?: boolean;
 }): AnyAgentTool {
   return {
     label: "TTS",
     name: "tts",
-    description: `Convert text to speech. Audio is delivered automatically from the tool result — reply with ${SILENT_REPLY_TOKEN} after a successful call to avoid duplicate messages.`,
+    description: opts?.silentReplyTool
+      ? "Convert text to speech. Audio is delivered automatically from the tool result — call `no_reply` after a successful call to avoid duplicate messages."
+      : `Convert text to speech. Audio is delivered automatically from the tool result — reply with ${SILENT_REPLY_TOKEN} after a successful call to avoid duplicate messages.`,
     parameters: TtsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

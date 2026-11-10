@@ -893,3 +893,70 @@ describe("resolveDefaultPromptBlockStreaming", () => {
     ).toBe("off");
   });
 });
+
+// no-reply-tool §6 / §8.7 / §8.14: the silent-reply section per mode.
+describe("buildAgentSystemPrompt silent replies (no_reply tool)", () => {
+  const TOOL_SECTION = [
+    "## Silent replies",
+    "When you have nothing to say, call the `no_reply` tool and do nothing else.",
+    "- Call it first and alone. Never write text and then call it.",
+    '- Never write "NO_REPLY" as text.',
+  ].join("\n");
+
+  it("§8.14 tool mode: exact §6 section, no token teaching, message-tool line says call no_reply", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message", "no_reply"],
+      silentReplyPromptMode: "tool",
+      heartbeatPrompt: "Read HEARTBEAT.md.",
+    });
+
+    expect(prompt).toContain(`${TOOL_SECTION}\n## Heartbeats`);
+    expect(prompt).not.toContain("## Silent Replies");
+    expect(prompt).not.toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
+    expect(prompt).toContain(
+      "- If you use `message` (`action=send`) to deliver your user-visible reply, call `no_reply` (avoid duplicate replies).",
+    );
+    expect(prompt).not.toContain(`default to ${SILENT_REPLY_TOKEN}`);
+    // §4.6: the heartbeat ack in tool mode is the tool.
+    expect(prompt).toContain(
+      "and there is nothing that needs attention, call the `no_reply` tool and do nothing else.",
+    );
+    // The only remaining mention of the token is the instruction never to write it.
+    expect(prompt.split(SILENT_REPLY_TOKEN)).toHaveLength(2);
+  });
+
+  it("§8.7 disallow mode: no silence section at all", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      silentReplyPromptMode: "none",
+    });
+    expect(prompt).not.toMatch(/## Silent replies/i);
+    expect(prompt).not.toContain("`no_reply`");
+    expect(prompt).not.toContain(SILENT_REPLY_TOKEN);
+  });
+
+  it("§8.8/§8.9 token mode keeps the old section", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+    });
+    expect(prompt).toContain("## Silent Replies");
+    expect(prompt).toContain(
+      `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
+    );
+    expect(prompt).not.toContain("`no_reply`");
+    expect(prompt).toContain("reply exactly:\nHEARTBEAT_OK");
+  });
+
+  it("minimal prompts carry no silence section in tool mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["no_reply"],
+      silentReplyPromptMode: "tool",
+      promptMode: "minimal",
+    });
+    expect(prompt).not.toMatch(/## Silent replies/i);
+  });
+});
