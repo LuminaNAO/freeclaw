@@ -18,6 +18,7 @@ import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { focusHandlers } from "./server-methods/focus.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
+import { mailHandlers } from "./server-methods/mail.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
@@ -101,6 +102,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...browserHandlers,
   ...signalLinkHandlers,
   ...focusHandlers,
+  ...mailHandlers,
   ...signalTrustHandlers,
   ...sessionsQuietHandlers,
 };

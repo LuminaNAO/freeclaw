@@ -313,6 +313,38 @@ function collectCronAssignments(params: {
   });
 }
 
+function collectMailConnectorAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const mail = params.config.mail as Record<string, unknown> | undefined;
+  if (!isRecord(mail) || !Array.isArray(mail.connectors)) {
+    return;
+  }
+  mail.connectors.forEach((rawConnector, index) => {
+    if (!isRecord(rawConnector)) {
+      return;
+    }
+    const imap = isRecord(rawConnector.imap) ? rawConnector.imap : undefined;
+    if (!imap || !Object.prototype.hasOwnProperty.call(imap, "password")) {
+      return;
+    }
+    collectSecretInputAssignment({
+      value: imap.password,
+      path: `mail.connectors.${index}.imap.password`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: rawConnector.enabled !== false && rawConnector.provider === "imap",
+      inactiveReason: "mail connector is disabled or does not use the imap provider.",
+      apply: (value) => {
+        imap.password = value;
+      },
+    });
+  });
+}
+
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -341,4 +373,5 @@ export function collectCoreConfigAssignments(params: {
   collectGatewayAssignments(params);
   collectMessagesTtsAssignments(params);
   collectCronAssignments(params);
+  collectMailConnectorAssignments(params);
 }

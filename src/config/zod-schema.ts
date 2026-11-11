@@ -12,6 +12,7 @@ import {
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { InstallRecordShape } from "./zod-schema.installs.js";
+import { MailSchema } from "./zod-schema.mail.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -585,6 +586,7 @@ export const OpenClawSchema = z
         }
       })
       .optional(),
+    mail: MailSchema,
     hooks: z
       .object({
         enabled: z.boolean().optional(),

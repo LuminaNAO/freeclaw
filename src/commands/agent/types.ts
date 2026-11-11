@@ -44,6 +44,8 @@ export type AgentCommandOpts = {
   sessionKey?: string;
   thinking?: string;
   thinkingOnce?: string;
+  /** Model for this run only (provider/model or alias); not persisted, must pass the allowlist. */
+  modelOnce?: string;
   verbose?: string;
   json?: boolean;
   timeout?: string;

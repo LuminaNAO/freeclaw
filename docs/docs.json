@@ -1062,6 +1062,7 @@
                   "automation/troubleshooting",
                   "automation/webhook",
                   "automation/gmail-pubsub",
+                  "automation/mail-push",
                   "automation/poll",
                   "automation/auth-monitoring"
                 ]
@@ -1282,6 +1283,7 @@
                   "cli/health",
                   "cli/hooks",
                   "cli/logs",
+                  "cli/mail",
                   "cli/memory",
                   "cli/message",
                   "cli/models",

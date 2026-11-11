@@ -14,6 +14,7 @@ export type GatewayReloadPlan = {
   restartCron: boolean;
   restartHeartbeat: boolean;
   restartHealthMonitor: boolean;
+  reloadMailConnectors: boolean;
   restartChannels: Set<ChannelKind>;
   noopPaths: string[];
 };
@@ -31,6 +32,7 @@ type ReloadAction =
   | "restart-cron"
   | "restart-heartbeat"
   | "restart-health-monitor"
+  | "reload-mail-connectors"
   | `restart-channel:${ChannelId}`;
 
 const BASE_RELOAD_RULES: ReloadRule[] = [
@@ -67,6 +69,8 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
+  // Mail connectors (mail-push §6): the manager restarts only connectors whose entry changed.
+  { prefix: "mail", kind: "hot", actions: ["reload-mail-connectors"] },
   {
     prefix: "browser",
     kind: "hot",
@@ -151,6 +155,7 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
     restartCron: false,
     restartHeartbeat: false,
     restartHealthMonitor: false,
+    reloadMailConnectors: false,
     restartChannels: new Set(),
     noopPaths: [],
   };
@@ -179,6 +184,9 @@ export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPla
         break;
       case "restart-health-monitor":
         plan.restartHealthMonitor = true;
+        break;
+      case "reload-mail-connectors":
+        plan.reloadMailConnectors = true;
         break;
       default:
         break;

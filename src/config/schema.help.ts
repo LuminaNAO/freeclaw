@@ -1229,6 +1229,77 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum bytes per cron run-log file before pruning rewrites to the last keepLines entries (for example `2mb`, default `2000000`).",
   "cron.runLog.keepLines":
     "How many trailing run-log lines to retain when a file exceeds maxBytes (default `2000`). Increase for longer forensic history or lower for smaller disks.",
+  mail: "Mail push connectors that watch mailboxes and push each new message into attached sessions as untrusted external content. See docs/automation/mail-push.md before enabling.",
+  "mail.connectors":
+    "List of mail connectors. Each watches one mailbox (read-only) and pushes new mail into its attached sessions; keep the list small and give every entry a unique id.",
+  "mail.connectors[].id":
+    "Unique connector id using lowercase letters, digits and dashes (for example `work`). It names the state file, CLI targets and the [mail:<id>] event prefix.",
+  "mail.connectors[].enabled":
+    "Starts the connector with the gateway when true (default). Set false to keep the entry configured but stopped; disabled connectors report state `disabled`.",
+  "mail.connectors[].provider":
+    'Mail source: "imap" for a real IMAP mailbox or "fake" for in-memory test mail. Other providers (Microsoft Graph, Gmail history) plug in later through the same interface.',
+  "mail.connectors[].imap":
+    "IMAP connection settings for provider imap. The connector only reads (EXAMINE + BODY.PEEK): it never sends, moves, flags, deletes or marks mail read.",
+  "mail.connectors[].imap.host":
+    "IMAP server host name, for example `imap.example.com`. A plaintext connection (tls: false) is only accepted for a loopback host such as 127.0.0.1.",
+  "mail.connectors[].imap.port":
+    "IMAP server port. Defaults to 993 with tls: true and 143 with starttls or plaintext; set it only when your provider uses a non-standard port.",
+  "mail.connectors[].imap.tls":
+    'Connection security: true (implicit TLS, default), "starttls" (upgrade a plain connection) or false (plaintext, only allowed for 127.0.0.1, e.g. a local bridge).',
+  "mail.connectors[].imap.user":
+    "IMAP login user name, usually the mailbox address. It is shown in status output as the account the connector reads, never in events or info-level logs.",
+  "mail.connectors[].imap.password":
+    "IMAP password as a SecretRef (env, file or exec source); plain strings are rejected. Use an app password where your provider supports it, and rotate it there.",
+  "mail.connectors[].imap.folders":
+    'Folders to watch, default ["INBOX"]. Each folder keeps its own cursor (UIDVALIDITY + last UID), so adding a folder starts it from "now" without backfill.',
+  "mail.connectors[].imap.idle":
+    "Uses IMAP IDLE for push delivery when true (default) and the server supports it; false polls every pollSeconds instead, which suits servers with broken IDLE.",
+  "mail.connectors[].imap.pollSeconds":
+    "Poll interval in seconds, used when idle is false or the server lacks IDLE (default 60, minimum 15). Lower values cost more server round trips, for example 30.",
+  "mail.connectors[].filter":
+    "Optional filter; all set conditions are AND-ed and mail that fails them is skipped (the cursor still advances). Per-message routing beyond this belongs in MAIL.md.",
+  "mail.connectors[].filter.from":
+    'Sender address globs; when set, a message must match one, for example ["*@client.com"]. `*` matches any characters, matching is case-insensitive.',
+  "mail.connectors[].filter.to":
+    'Recipient (To/Cc) address globs; when set, one recipient must match one glob, for example ["support@example.com"]. Use it to watch an alias inside a shared mailbox.',
+  "mail.connectors[].filter.subjectIncludes":
+    'Subject substrings (case-insensitive); when set, the subject must contain one, for example ["invoice", "urgent"]. Use it to narrow noisy mailboxes.',
+  "mail.connectors[].filter.excludeFrom":
+    'Sender address globs to drop, for example ["noreply@*", "*@notifications.example.com"]. Exclusions win over the from list.',
+  "mail.connectors[].filter.maxAgeMinutes":
+    "Skips mail whose Date header is older than this many minutes, for example 1440 for one day. Useful when a mailbox receives delayed or re-delivered old mail.",
+  "mail.connectors[].body":
+    "How message bodies appear in events: plain text (HTML converted), trimmed to maxChars. Attachment content is never included, only names when enabled.",
+  "mail.connectors[].body.maxChars":
+    "Maximum body characters per message in an event (default 8000). Lower it, for example to 2000, to keep long newsletters from filling the agent context.",
+  "mail.connectors[].body.attachments":
+    '"names" (default) lists attachment file names in the event; "none" omits them. Attachment content is never downloaded or passed to the agent.',
+  "mail.connectors[].batch":
+    "Burst coalescing: messages arriving within windowSeconds go out as one event, up to max messages per event. Keeps a burst of mail from starting many agent turns.",
+  "mail.connectors[].batch.windowSeconds":
+    "Seconds to wait for more mail before pushing an event (default 20, 0 = push at once). The window starts with the first new message, for example 20.",
+  "mail.connectors[].batch.max":
+    "Maximum messages per event (default 10); larger bursts are split into several events in arrival order. Raise it carefully, each message adds up to maxChars.",
+  "mail.connectors[].attach":
+    "Sessions that receive the events. Each batch goes to every attached session and the cursor commits only after all of them accepted it (at-least-once).",
+  "mail.connectors[].attach[].agentId":
+    "Agent that handles the events. The sessionKey must belong to this agent; the agent workspace holds the instructions file (for example MAIL.md).",
+  "mail.connectors[].attach[].sessionKey":
+    "Session key that receives the events, for example `agent:main:mail:work`; it must start with agent:<agentId>: and is created on first use if missing.",
+  "mail.connectors[].attach[].wakeMode":
+    '"now" (default) runs an agent turn per batch; "next-heartbeat" queues a system event for the session that the next heartbeat or message picks up.',
+  "mail.connectors[].attach[].deliver":
+    "Sends the agent reply to a chat when true (default false: the turn runs and nothing is posted unless the agent sends). Needs channel and to, or channel: last.",
+  "mail.connectors[].attach[].channel":
+    'Delivery channel id (for example `signal`) or "last" for the session\'s last route; only used when deliver is true. Leave null for silent processing.',
+  "mail.connectors[].attach[].to":
+    "Delivery target (chat id, number or group) on the delivery channel; only used when deliver is true. Not needed with channel: last.",
+  "mail.connectors[].attach[].instructionsFile":
+    'Workspace-relative file the event points the agent to (default "MAIL.md"). It is named in the event, not inlined, so the agent reads it per its own workspace rules.',
+  "mail.connectors[].attach[].model":
+    "Optional model override for mail turns, for example a cheaper model for triage; it must pass the agent model allowlist, otherwise the session default is used.",
+  "mail.connectors[].attach[].thinking":
+    "Optional thinking level override for mail turns (off, minimal, low, medium, high). Leave null to use the session or agent default.",
   hooks:
     "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
   "hooks.enabled":

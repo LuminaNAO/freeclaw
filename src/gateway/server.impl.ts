@@ -83,6 +83,7 @@ import { announceGatewayCrash } from "./server-crash-announce.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
+import { type GatewayMailState, startGatewayMailConnectors } from "./server-mail.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
@@ -145,6 +146,7 @@ const logHealth = log.child("health");
 const logCron = log.child("cron");
 const logReload = log.child("reload");
 const logHooks = log.child("hooks");
+const logMail = log.child("mail");
 const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
 const logSecrets = log.child("secrets");
@@ -942,6 +944,11 @@ export async function startGatewayServer(
     }));
   }
 
+  // Mail connectors (docs/design/mail-push.md §6): push new mail into attached sessions.
+  const mailState: GatewayMailState = minimalTestGateway
+    ? { manager: null }
+    : await startGatewayMailConnectors({ cfg: cfgAtStart, deps, log: logMail });
+
   // Crash log (docs/design/gateway-crash-log.md §1.4): once channels are up, tell the main
   // session that the previous run crashed so the agent can tell its humans. Once per process.
   if (!minimalTestGateway) {
@@ -982,6 +989,7 @@ export async function startGatewayServer(
             cronState,
             browserControl,
             channelHealthMonitor,
+            mailState,
           }),
           setState: (nextState) => {
             hooksConfig = nextState.hooksConfig;
@@ -996,6 +1004,7 @@ export async function startGatewayServer(
           startChannel,
           stopChannel,
           logHooks,
+          logMail,
           logBrowser,
           logChannels,
           logCron,
@@ -1045,6 +1054,7 @@ export async function startGatewayServer(
     stopChannel,
     pluginServices,
     cron,
+    mailState,
     heartbeatRunner,
     updateCheckStop: stopGatewayUpdateCheck,
     nodePresenceTimers,

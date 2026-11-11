@@ -23,6 +23,7 @@ import { resolveHooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import type { HookClientIpConfig } from "./server-http.js";
+import { type GatewayMailState, reloadGatewayMailConnectors } from "./server-mail.js";
 import { resolveHookClientIpConfig } from "./server/hooks.js";
 
 type GatewayHotReloadState = {
@@ -32,6 +33,7 @@ type GatewayHotReloadState = {
   cronState: GatewayCronState;
   browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
   channelHealthMonitor: ChannelHealthMonitor | null;
+  mailState?: GatewayMailState;
 };
 
 export function createGatewayReloadHandlers(params: {
@@ -49,6 +51,11 @@ export function createGatewayReloadHandlers(params: {
   logBrowser: { error: (msg: string) => void };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
+  logMail?: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+    error: (msg: string) => void;
+  };
   logReload: { info: (msg: string) => void; warn: (msg: string) => void };
   createHealthMonitor: (checkIntervalMs: number) => ChannelHealthMonitor;
 }) {
@@ -103,6 +110,14 @@ export function createGatewayReloadHandlers(params: {
       const minutes = nextConfig.gateway?.channelHealthCheckMinutes;
       nextState.channelHealthMonitor =
         minutes === 0 ? null : params.createHealthMonitor((minutes ?? 5) * 60_000);
+    }
+
+    if (plan.reloadMailConnectors && state.mailState && params.logMail) {
+      await reloadGatewayMailConnectors({
+        state: state.mailState,
+        cfg: nextConfig,
+        log: params.logMail,
+      });
     }
 
     if (plan.restartGmailWatcher) {

@@ -75,6 +75,9 @@ describe("exec SecretRef id parity", () => {
     if (id.startsWith("cron.")) {
       return "cron";
     }
+    if (id.startsWith("mail.")) {
+      return "mail";
+    }
     if (id.startsWith("gateway.auth.")) {
       return "gateway.auth";
     }

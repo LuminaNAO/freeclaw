@@ -48,6 +48,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`docs`](/cli/docs)
 - [`hooks`](/cli/hooks)
 - [`webhooks`](/cli/webhooks)
+- [`mail`](/cli/mail)
 - [`pairing`](/cli/pairing)
 - [`qr`](/cli/qr)
 - [`plugins`](/cli/plugins) (plugin commands)
@@ -251,6 +252,8 @@ openclaw [--dev] [--profile <name>] <command>
     update
   webhooks
     gmail setup|run
+  mail
+    connectors list|status|test|restart
   pairing
     list
     approve
