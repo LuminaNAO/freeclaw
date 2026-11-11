@@ -506,6 +506,9 @@ export function createEngine(deps: EngineDeps) {
         generation: (key) => images.generation(key),
         adopted: (key) => adopted.active(key),
         scene: (key, generation) => writtenScene(key, generation),
+        ...(i.pluginConfig.imageGen?.style !== undefined
+          ? { look: i.pluginConfig.imageGen.style }
+          : {}),
       },
       { providerId: provider.id, size },
     );

@@ -215,6 +215,28 @@ fallback for hosts with no image model at all.
     changed on upgrade: if it has no `model-badge` entry the extension stays off (bundled default) until an operator
     enables it; the release note says how in one line. Tests: fresh onboarding writes the entry; re-running
     onboarding or `doctor` on an existing config without the entry does not add it; upgrade leaves it off.
+13. **House art style: flat 2D, not photographic (operator, 2026-11-11).** Generated bases came out as photoreal
+    3D scenes ("Soft light, rich detail" + scene words lets the model pick photography). The operator's look is the
+    one Flux used for its own groups on 2026-10-13: one concrete scene, flat vector illustration, smooth gradients,
+    clean simple shapes, a calm limited palette. Applies to every generated base (group and profile, motif, written
+    scene and steered prompt alike); adopted artwork (§2c.8) is never touched.
+    - Both templates end with this exact style clause instead of "Soft light, rich detail":
+      `Clean modern flat vector illustration, simple bold shapes, smooth gradients, limited calm palette, minimal
+      elegant composition, crisp edges, not a photograph, not 3D, no realistic textures`, followed by the existing
+      no-marks clause. The §2c.10 full-bleed clause stays. The style clause must not contain a §2c.10 banned word
+      (note: "emblem"/"background" from the 10-13 method are not used here because "background" is banned).
+    - The prompt writer (§2c.11) is told to describe a scene for a flat vector illustration (objects and a setting,
+      no lighting/camera/photo words); validation additionally rejects `photo`, `photograph`, `photorealistic`,
+      `realistic`, `3d`, `render`, `cinematic`, `bokeh`, `lens` (fallback to the motif scene as today).
+    - Steered prompts: the member's words still lead, but the style clause is always appended; a member who asks for
+      a different look (e.g. "watercolour") gets it via the existing steering words, which come first.
+    - Config: `imageGen.style` (string, optional) overrides the style clause per install; same banned-word check at
+      config validation; empty string = no style clause. Default = the clause above.
+    - `BASE_PROMPT_TAG` becomes `scene-v2`, so every generated base is made again once (adopted bases untouched).
+      Existing written scenes are kept and re-wrapped; they are not rewritten.
+    - Tests: both templates contain the style clause and none of the banned words; validation rejects each new
+      photo word; `imageGen.style` override and empty-string paths; tag bump regenerates generated bases only;
+      steered prompt keeps member words first and the clause last.
 
 ## 3. Lifecycle (generated and removed as the world changes)
 

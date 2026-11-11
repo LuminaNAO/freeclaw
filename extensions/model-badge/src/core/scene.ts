@@ -35,6 +35,7 @@ export interface SceneWriter {
 export const WRITER_INSTRUCTION = [
   "You write one image prompt for a chat group's picture.",
   `Return ONE concrete visual scene, at most ${SCENE_MAX_WORDS} words, that evokes what the group is likely about.`,
+  "Describe it for a flat vector illustration: objects and a setting only, no lighting, camera or photo words.",
   "No text, letters, words, logos, brand names, real people or faces in the scene.",
   "Never quote or repeat the group name, and use no quotation marks.",
   "Write in lower case, on a single line, with no preamble.",
@@ -76,12 +77,31 @@ export type SceneVerdict =
         | "too-long"
         | "quotes"
         | "banned-word"
+        | "photo-word"
         | "digits"
         | "name"
         | "markup";
     };
 
 const BANNED_RE = new RegExp(`\\b(?:${BANNED_PROMPT_WORDS.join("|")})s?\\b`, "i");
+// ARCH §2c.13: the house style is a flat illustration, so a scene that asks for a
+// photograph, a 3D render or camera effects is rejected (motif scene instead). Simple
+// inflections count too ("photos", "rendered", "photographic", "realistically").
+export const PHOTO_WORDS = [
+  "photo",
+  "photograph",
+  "photorealistic",
+  "realistic",
+  "3d",
+  "render",
+  "cinematic",
+  "bokeh",
+  "lens",
+] as const;
+const PHOTO_RE = new RegExp(
+  `\\b(?:${PHOTO_WORDS.join("|")})(?:s|es|ed|er|ers|ing|y|ic|ally)?\\b`,
+  "i",
+);
 // Double quotes, curly quotes, guillemets, backticks; a straight single quote counts as a
 // quote unless it sits between two letters (an apostrophe: "children's").
 const QUOTES_RE = /["“”„‟«»‹›`‘’‚‛]|(?<![\p{L}])'|'(?![\p{L}])/u;
@@ -148,6 +168,9 @@ export function validateScene(raw: unknown, groupName: string): SceneVerdict {
   }
   if (BANNED_RE.test(scene)) {
     return { ok: false, reason: "banned-word" };
+  }
+  if (PHOTO_RE.test(scene)) {
+    return { ok: false, reason: "photo-word" };
   }
   if (DIGITS_RE.test(scene) || OPAQUE_RE.test(scene)) {
     return { ok: false, reason: "digits" };

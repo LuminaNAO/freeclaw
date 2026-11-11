@@ -86,6 +86,11 @@
       "help": "Attempts per target before giving up until its inputs change (default 10; backoff capped by timing.imageGenMaxBackoffMs, default 30 min).",
       "advanced": true
     },
+    "imageGen.style": {
+      "label": "Art Style",
+      "help": "Style clause added to every generated base (ARCH §2c.13). Default: the house flat vector illustration style. An empty string adds no style clause. Must not contain square, avatar, background, tile, card, panel or abstract.",
+      "advanced": true
+    },
     "imageGen.promptWriter": {
       "label": "Scene Writer",
       "help": "A new group's image scene is written by the agent from the group name and its own memory (ARCH §2c.11). Only used when imageGen is loopback, a private address or a local command; otherwise the motif scene is used."
@@ -247,6 +252,12 @@
           "maxPerRun": {
             "type": "number",
             "default": 16
+          },
+          "style": {
+            "type": "string",
+            "not": {
+              "pattern": "\\b(?:[Ss][Qq][Uu][Aa][Rr][Ee]|[Aa][Vv][Aa][Tt][Aa][Rr]|[Bb][Aa][Cc][Kk][Gg][Rr][Oo][Uu][Nn][Dd]|[Tt][Ii][Ll][Ee]|[Cc][Aa][Rr][Dd]|[Pp][Aa][Nn][Ee][Ll]|[Aa][Bb][Ss][Tt][Rr][Aa][Cc][Tt])[Ss]?\\b"
+            }
           },
           "promptWriter": {
             "type": "object",
