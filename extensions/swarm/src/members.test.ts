@@ -414,7 +414,7 @@ describe("member lead over the fake channel (ARCH §10a.4, §12.6)", () => {
   });
 });
 
-describe("group lifecycle (ARCH §8.1, §8.3)", () => {
+describe("group lifecycle (ARCH §8.1, §8.3, §10c)", () => {
   it("the group closes [done] when the member lead says done; the close is in the events", async () => {
     const { runtime, fake, engine, events, settle } = setup("done");
     const T = "members-done";
@@ -435,8 +435,12 @@ describe("group lifecycle (ARCH §8.1, §8.3)", () => {
     expect(readTasksIndex(engine.stateDir)[T]?.status).toBe("done");
     expect(group.closed).toBe(true);
     expect(group.name).toBe(`${groupNameFor(T, T)} [done]`);
-    // The confirmation reached the group before it closed.
-    expect(group.posts.at(-1)).toBe("Understood: Marked done.");
+    // The confirmation reached the group before it closed, then the farewell (ARCH §10c.2a).
+    expect(group.posts.slice(-2)).toEqual([
+      "Understood: Marked done.",
+      `Task ${T} is done. This group will now self-destruct; you can safely delete it.`,
+    ]);
+    expect(group.deleted).toBe(true);
     expect(events(T).find((e) => e.event === "GROUP_CLOSED")?.data).toMatchObject({
       groupId: group.groupId,
     });
@@ -629,7 +633,7 @@ describe("parity: every member op has a CLI verb with --json over the same funct
 });
 
 describe("signal group API (ARCH §10a.3), driven by a stub rpc: never a daemon", () => {
-  it("creates with updateGroup, posts with send, closes by rename + quitGroup, by account", async () => {
+  it("creates with updateGroup and posts with send, by account", async () => {
     const calls: Array<[string, Record<string, unknown>]> = [];
     const channel = createSignalHolonChannel({
       account: "account-placeholder",
@@ -642,11 +646,9 @@ describe("signal group API (ARCH §10a.3), driven by a stub rpc: never a daemon"
       groupId: "gid-placeholder",
     });
     await channel.post("gid-placeholder", "line");
-    await channel.closeGroup("gid-placeholder", { name: "r · h [done]" });
-    expect(calls.map(([m]) => m)).toEqual(["updateGroup", "send", "updateGroup", "quitGroup"]);
+    expect(calls.map(([m]) => m)).toEqual(["updateGroup", "send"]);
     expect(calls.every(([, p]) => p.account === "account-placeholder")).toBe(true);
     expect(calls[0]?.[1]).toMatchObject({ name: "r · h", members: [MEMBER] });
-    expect(calls[2]?.[1]).toMatchObject({ groupId: "gid-placeholder", name: "r · h [done]" });
   });
 
   it("strips uuid: and signal: prefixes from member ids before updateGroup", async () => {

@@ -66,14 +66,17 @@ export function holonChannelsFrom(
           cfg: gatewayConfig as OpenClawConfig,
           accountId: spec?.accountId ?? null,
         });
+      const own = (key: "account" | "accountUuid") => {
+        try {
+          return resolve().config[key]?.trim() || undefined;
+        } catch {
+          return undefined;
+        }
+      };
       out[name] = createSignalHolonChannel({
-        account: (() => {
-          try {
-            return resolve().config.account?.trim() || undefined;
-          } catch {
-            return undefined;
-          }
-        })(),
+        account: own("account"),
+        // ARCH §10c.2c: the agent identity is never removed from its own group.
+        accountUuid: own("accountUuid"),
         rpc: (method, params) => {
           const account = resolve();
           if (account.transportError) {
@@ -155,11 +158,12 @@ export default function register(api: OpenClawPluginApi) {
         }
       }
       const summary = await resumeOpenTasks(engine);
-      if (summary.tasks > 0) {
+      if (summary.tasks > 0 || summary.groupsReclosed > 0) {
         api.logger.info(
           `[swarm] resumed ${summary.tasks} task(s): resent=${summary.resent} ` +
             `acked=${summary.ackedFromTranscript + summary.ackedAsAnswered} redelivered=${summary.redelivered} ` +
-            `childReports=${summary.childReports} retriesRearmed=${summary.retriesRearmed}`,
+            `childReports=${summary.childReports} retriesRearmed=${summary.retriesRearmed} ` +
+            `groupsReclosed=${summary.groupsReclosed}`,
         );
       }
       // ARCH §7.1.5: once a minute, an open holon with nothing in flight gets its outstanding

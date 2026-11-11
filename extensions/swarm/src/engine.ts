@@ -525,9 +525,9 @@ export class SwarmEngine {
     }
     // A group is a convenience; failing to dispose it never affects the task.
     void this.group.dispose(taskId).catch(() => undefined);
-    // ARCH §8.1: a holon's member group is closed when the holon is done. Queued behind the
-    // task lock, so whatever the closing turn still posts (a confirmation, the CANCELLED
-    // line) reaches the group first.
+    // ARCH §10c: a done, failed or cancelled holon's member group self-destructs. Queued
+    // behind the task lock, so the final upstream event is recorded and whatever the closing
+    // turn still posts (a confirmation, the CANCELLED line) reaches the group first.
     void this.memberChannels
       .track(this.locks.run(taskId, () => this.memberChannels.closeGroup(this, taskId)))
       .catch(() => undefined);

@@ -195,8 +195,16 @@ canon:
 - On first need the swarm opens one channel group per holon with members, named
   `<root> · <holon id>`, with those members and the root owner (plugin config
   `members.owners.<channel>`). The group id is recorded as `GROUP_OPENED` in the holon's
-  events. When the holon is done the group is renamed `… [done]` and left (`GROUP_CLOSED`).
-  Agent-only holons never get a group.
+  events. Agent-only holons never get a group.
+- When the holon is done, failed or cancelled its group self-destructs (ARCH §10c): one
+  farewell line, rename to `… [done]` (`[failed]`, `[cancelled]`), remove every other member
+  (joined or pending) in one call, leave and delete (`quitGroup` with `delete: true`), then
+  check the group is no longer listed. Every step runs even if an earlier one failed. Success
+  is `GROUP_CLOSED { groupId, renamed, removed, deleted }`; anything else is
+  `GROUP_CLOSE_FAILED { groupId, step, error }`, retried after 1 min doubling to 30 min, at most
+  10 tries, then `BLOCKED: group not destroyed` one level up. A group still up is closed again
+  on gateway start (resume), by `swarm continue` and by `swarm group close`. Signal needs the
+  agent's own `account` / `accountUuid` in the Signal config so it never removes itself.
 - An event addressed to a member becomes one plain line in that group: the sender's own
   words only (no event name, role, sha or route note; folded to one line, cut at 280
   characters with `…`). The event, role and sha stay in the events (`swarm show`). Lead

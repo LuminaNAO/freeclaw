@@ -2,6 +2,7 @@ import fs from "node:fs";
 import YAML from "yaml";
 import { parseDuration, SwarmContractError } from "./contract.js";
 import { readRepoHead, type SwarmEngine } from "./engine.js";
+import { recloseGroup } from "./resume.js";
 import { currentRound, ROUND_STARTED, roundLine } from "./rounds.js";
 import { TASKMASTER, UPSTREAM } from "./routing.js";
 import { updateTaskIndexEntry, type TaskStatus } from "./store.js";
@@ -104,6 +105,8 @@ export async function continueTask(
     throw new SwarmContractError("swarm.continue needs a follow-up file or follow-up text");
   }
   const followUp = parseFollowUp(yaml);
+  // ARCH §10c.3: a closed holon whose group is still up gets it closed again first.
+  await recloseGroup(engine, taskId);
 
   return engine.locks.run(taskId, async () => {
     const state = engine.loadState(taskId);

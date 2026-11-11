@@ -1,13 +1,27 @@
 import type { DeliveryResult } from "./delivery.js";
 import type { SwarmEngine, TaskState } from "./engine.js";
+import {
+  closedGroupName,
+  farewellLine,
+  GROUP_CLOSE_MAX_TRIES,
+  GROUP_CLOSE_TIMER,
+  groupCloseDelayMs,
+  holonIdOf,
+  skipAfter,
+  stepsOf,
+  type ClosedState,
+  type GroupCloseOptions,
+  type GroupCloseResult,
+} from "./group-close.js";
 import { membersOf, type Holon } from "./holon.js";
 import { TASKMASTER } from "./routing.js";
 import type { SwarmEvent } from "./store.js";
 
 // Members over a channel (ARCH §3.3, §8, §10a.3, §10b). A member is whoever is on the other end
 // of a channel: a person or another agent, the swarm does not care which. One channel group
-// per holon that has a member lead or participant: opened on first need, closed (renamed
-// `[done]`, left) when the holon is done. Events addressed to a member become one short plain
+// per holon that has a member lead or participant: opened on first need; when the holon is done,
+// failed or cancelled the group self-destructs (§10c: farewell, rename, remove every other
+// member, leave and delete, verify; retried with backoff, then BLOCKED one level up). Events addressed to a member become one short plain
 // line in that group, the sender's words only (§10b.5); the member's replies go to the holon's relay session (relay.ts).
 // Agent-only holons never get a group. No person, agent, number or group id lives in code:
 // members come from the holon file, the
@@ -20,8 +34,12 @@ export interface HolonChannel {
   createGroup(opts: { name: string; members: string[] }): Promise<{ groupId: string }>;
   /** One plain message to the group. */
   post(groupId: string, text: string): Promise<void>;
-  /** Close a done holon's group: rename it and leave it. */
-  closeGroup(groupId: string, opts: { name: string }): Promise<void>;
+  /**
+   * ARCH §10c: self-destruct a closed holon's group: farewell, rename, remove every other
+   * member (joined or pending), leave and delete, verify; every step attempted even if an
+   * earlier one failed (group-close.ts `runGroupClose`). Resolves with each step's outcome.
+   */
+  closeGroup(groupId: string, opts: GroupCloseOptions): Promise<GroupCloseResult>;
 }
 
 export type MemberChannelsOptions = {
@@ -36,6 +54,7 @@ export const MEMBER_LINE_MAX = 280;
 
 export const GROUP_OPENED = "GROUP_OPENED";
 export const GROUP_CLOSED = "GROUP_CLOSED";
+export const GROUP_CLOSE_FAILED = "GROUP_CLOSE_FAILED";
 export const GROUP_UNAVAILABLE = "GROUP_UNAVAILABLE";
 export const MEMBER_POSTED = "MEMBER_POSTED";
 export const MEMBER_POST_FAILED = "MEMBER_POST_FAILED";
@@ -72,8 +91,11 @@ export function normalizeWho(raw: string): string {
     .replace(/^uuid:/, "");
 }
 
-/** The group a holon has open, from its events (ARCH §10a.3: the group id is in the events). */
-export function openGroupOf(
+/**
+ * The group a holon opened and has not destroyed yet, from its events (ARCH §10a.3: the group
+ * id is in the events). Includes a group whose self-destruct failed (§10c): it is closed again.
+ */
+export function unclosedGroupOf(
   events: SwarmEvent[],
 ): { groupId: string; channel: string; name: string } | undefined {
   const opened = events.findLast((e) => e.kind === "system" && e.event === GROUP_OPENED);
@@ -95,6 +117,26 @@ export function openGroupOf(
     channel: String(opened.data.channel ?? ""),
     name: String(opened.data.name ?? ""),
   };
+}
+
+/**
+ * The group a holon has open for posting and replies. A group whose self-destruct has started
+ * (any GROUP_CLOSE_FAILED, ARCH §10c) is no longer open: it was said farewell to and renamed.
+ */
+export function openGroupOf(
+  events: SwarmEvent[],
+): { groupId: string; channel: string; name: string } | undefined {
+  const group = unclosedGroupOf(events);
+  if (
+    !group ||
+    events.some(
+      (e) =>
+        e.kind === "system" && e.event === GROUP_CLOSE_FAILED && e.data?.groupId === group.groupId,
+    )
+  ) {
+    return undefined;
+  }
+  return group;
 }
 
 export type GroupStatus =
@@ -151,7 +193,10 @@ export class MemberChannels {
     if (open) {
       return { ok: true, ...open, opened: false };
     }
-    if (events.some((e) => e.kind === "system" && e.event === GROUP_CLOSED)) {
+    if (
+      unclosedGroupOf(events) ||
+      events.some((e) => e.kind === "system" && e.event === GROUP_CLOSED)
+    ) {
       return { ok: false, reason: "the holon's group is closed" };
     }
     const kind = members[0]!.channel;
@@ -288,34 +333,117 @@ export class MemberChannels {
     return { status: "delivered", runId: `member-${rec.seq}` };
   }
 
-  /** ARCH §8.1: closed when the holon is done: renamed `[done]`, then left. */
+  /**
+   * ARCH §10c: the holon's group self-destructs. One try: the channel runs every step (§10c.2);
+   * success is GROUP_CLOSED, anything else GROUP_CLOSE_FAILED with the first failed step. A
+   * failed try is retried with backoff (1 min doubling to 30 min) up to GROUP_CLOSE_MAX_TRIES;
+   * after the last one `BLOCKED: group not destroyed` goes one level up, once. Later tries
+   * (resume, gateway start, `swarm continue`) still run but arm nothing and report nothing.
+   * Caller holds the task lock. An agent-only holon (no group) records nothing.
+   */
   async closeGroup(engine: SwarmEngine, taskId: string): Promise<GroupStatus> {
-    const events = engine.loadState(taskId).events;
-    const open = openGroupOf(events);
+    const state = engine.loadState(taskId);
+    const open = unclosedGroupOf(state.events);
     if (!open) {
       return { ok: false, reason: "no open group" };
     }
+    const closedAs: ClosedState = state.status === "open" ? "done" : state.status;
+    const prior = state.events.filter(
+      (e) =>
+        e.kind === "system" && e.event === GROUP_CLOSE_FAILED && e.data?.groupId === open.groupId,
+    );
+    const doneBefore = new Set(prior.flatMap((e) => stepsOf(e.data?.ok)));
+    const removedBefore = prior.reduce((n, e) => n + (Number(e.data?.removed) || 0), 0);
+    const attempt = prior.length + 1;
+    const name = closedGroupName(open.name, closedAs);
     const channel = this.channels.get(open.channel);
-    const name = `${open.name} [done]`;
+    let result: GroupCloseResult;
     try {
       if (!channel) {
         throw new Error(`no ${open.channel} channel is configured`);
       }
-      await channel.closeGroup(open.groupId, { name });
+      result = await channel.closeGroup(open.groupId, {
+        name,
+        farewell: farewellLine(holonIdOf(taskId), closedAs),
+        skip: skipAfter([...doneBefore]),
+        retry: attempt > 1,
+      });
     } catch (err) {
+      result = {
+        ok: [],
+        failures: [{ step: "channel", error: errorText(err) }],
+        removed: 0,
+      };
+    }
+    engine.timers.cancelRetry(taskId, GROUP_CLOSE_TIMER);
+    const done = new Set([...doneBefore, ...result.ok]);
+    if (result.failures.length === 0) {
       engine.record(taskId, {
         kind: "system",
-        event: "GROUP_CLOSE_FAILED",
-        data: { groupId: open.groupId, error: err instanceof Error ? err.message : String(err) },
+        event: GROUP_CLOSED,
+        data: {
+          channel: open.channel,
+          groupId: open.groupId,
+          name,
+          renamed: done.has("rename"),
+          removed: removedBefore + result.removed,
+          deleted: true,
+          attempt,
+        },
       });
-      return { ok: false, reason: "close failed" };
+      return { ok: true, groupId: open.groupId, channel: open.channel, name, opened: false };
     }
+    const first = result.failures[0]!;
+    const at =
+      attempt < GROUP_CLOSE_MAX_TRIES
+        ? engine.timers.clock.now() + groupCloseDelayMs(attempt)
+        : undefined;
     engine.record(taskId, {
       kind: "system",
-      event: GROUP_CLOSED,
-      data: { channel: open.channel, groupId: open.groupId, name },
+      event: GROUP_CLOSE_FAILED,
+      data: {
+        channel: open.channel,
+        groupId: open.groupId,
+        step: first.step,
+        error: oneLine(first.error),
+        failed: result.failures.map((f) => ({ step: f.step, error: oneLine(f.error) })),
+        ok: result.ok,
+        removed: result.removed,
+        attempt,
+        ...(at !== undefined && { at }),
+      },
     });
-    return { ok: true, groupId: open.groupId, channel: open.channel, name, opened: false };
+    if (at !== undefined) {
+      engine.timers.armRetry(taskId, GROUP_CLOSE_TIMER, at, () =>
+        this.track(
+          engine.locks.run(taskId, () =>
+            // A holon continued meanwhile (`swarm continue`) is open again: nothing to close.
+            engine.loadState(taskId).status === "open"
+              ? undefined
+              : this.closeGroup(engine, taskId),
+          ),
+        ).catch((err: unknown) => {
+          engine.logger?.warn(`[swarm] group close retry for ${taskId} failed: ${errorText(err)}`);
+        }),
+      );
+    } else if (attempt === GROUP_CLOSE_MAX_TRIES) {
+      // ARCH §10c.3: after the last try, one level up (the parent lead, or the root's upstream).
+      await engine.toUpstream(
+        taskId,
+        state,
+        {
+          event: "BLOCKED",
+          from: TASKMASTER,
+          sha: state.sha,
+          body:
+            `BLOCKED: group not destroyed. The ${open.channel} group of ${holonIdOf(taskId)} ` +
+            `failed to self-destruct ${attempt} times (last at step ${first.step}: ` +
+            `${oneLine(first.error)}). It is retried on resume, gateway start and swarm continue.`,
+        },
+        { force: true },
+      );
+    }
+    return { ok: false, reason: `close failed at ${first.step}: ${oneLine(first.error)}` };
   }
 
   /** The open holon whose group this is, from the events of open tasks (no extra index file). */
@@ -342,6 +470,15 @@ export class MemberChannels {
   }
 }
 
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function oneLine(text: string): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > 300 ? `${line.slice(0, 299)}…` : line;
+}
+
 /**
  * The root id of a task id. Child holons (ARCH §5) are addressed by path from their root;
  * a root holon's root is itself.
@@ -361,7 +498,7 @@ export async function openHolonGroup(engine: SwarmEngine, taskId: string): Promi
   });
 }
 
-/** Ops: close a holon's group (rename `[done]`, leave). CLI `swarm group close` calls this. */
+/** Ops: self-destruct a holon's group now (ARCH §10c). CLI `swarm group close` calls this. */
 export async function closeHolonGroup(engine: SwarmEngine, taskId: string): Promise<GroupStatus> {
   return engine.locks.run(taskId, () => engine.memberChannels.closeGroup(engine, taskId));
 }
