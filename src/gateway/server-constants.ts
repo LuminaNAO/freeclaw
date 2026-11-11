@@ -21,7 +21,7 @@ export const __setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
     maxChatHistoryMessagesBytes = value;
   }
 };
-export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 3_000;
+export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000;
 export const getHandshakeTimeoutMs = () => {
   if (process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS) {
     const parsed = Number(process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
@@ -30,7 +30,7 @@ export const getHandshakeTimeoutMs = () => {
     }
   }
   // Allow production override via env var — useful on slow/loaded hosts where
-  // Node.js startup takes longer than the default 3s (e.g. local inference machines).
+  // Node.js startup takes longer than the default (e.g. local inference machines).
   if (process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS) {
     const parsed = Number(process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS);
     if (Number.isFinite(parsed) && parsed > 0) {
