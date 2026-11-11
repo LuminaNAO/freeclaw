@@ -96,6 +96,11 @@ export function handleMessageUpdate(
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
 
+  // no-reply-tool §4.4: go silent as soon as the `no_reply` call streams in, before the pre-tool flush.
+  if (evtType === "toolcall_start" || evtType === "toolcall_delta" || evtType === "toolcall_end") {
+    ctx.noteSilentReplyCall(msg);
+  }
+
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (evtType === "thinking_start" || evtType === "thinking_delta") {
       ctx.state.reasoningStreamOpen = true;
@@ -263,6 +268,8 @@ export function handleMessageEnd(
 
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
+  // no-reply-tool §4.2: text written in the message that calls `no_reply` is never delivered.
+  ctx.noteSilentReplyCall(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
@@ -333,8 +340,11 @@ export function handleMessageEnd(
 
   const onBlockReply = ctx.params.onBlockReply;
   const emitBlockReplySafely = (payload: Parameters<NonNullable<typeof onBlockReply>>[0]) => {
-    if (!onBlockReply) {
+    if (!onBlockReply || ctx.state.silentReply) {
       return;
+    }
+    if (!payload.isReasoning) {
+      ctx.state.blockRepliesEmitted = true;
     }
     void Promise.resolve()
       .then(() => onBlockReply(payload))

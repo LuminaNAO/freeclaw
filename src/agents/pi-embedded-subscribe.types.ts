@@ -30,6 +30,12 @@ export type SubscribeEmbeddedPiSessionParams = {
   onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
   enforceFinalTag?: boolean;
+  /** The run offers the `no_reply` tool (no-reply-tool §5): watch for it to silence the run. */
+  silentReplyTool?: boolean;
+  /** Called once when `no_reply` is called (no-reply-tool §4.4). */
+  onSilentReply?: () => void;
+  /** Resolved block-streaming state of the turn; "on" means blocks reach the channel during the run. */
+  blockStreaming?: "on" | "off";
   config?: OpenClawConfig;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */

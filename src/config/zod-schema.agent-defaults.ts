@@ -156,6 +156,7 @@ export const AgentDefaultsSchema = z
       ])
       .optional(),
     reasoningDefault: z.union([z.literal("on"), z.literal("off"), z.literal("stream")]).optional(),
+    silentReply: z.union([z.literal("tool"), z.literal("token")]).optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])

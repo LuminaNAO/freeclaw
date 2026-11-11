@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 function makeBootstrapFile(overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile {
@@ -111,5 +112,38 @@ describe("buildSystemPromptReport", () => {
     });
 
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
+  });
+});
+
+// no-reply-tool §6: tool mode titles the section "## Silent replies"; the Project Context span must still end
+// there, so the count matches token mode.
+describe("buildSystemPromptReport project context span", () => {
+  const contextFiles = [{ path: "AGENTS.md", content: "Be kind.\nKeep it short." }];
+  const reportFor = (silentReplyPromptMode: "generic" | "tool" | "none") =>
+    buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["message", "no_reply"],
+        contextFiles,
+        heartbeatPrompt: "Read HEARTBEAT.md.",
+        silentReplyPromptMode,
+      }),
+      bootstrapFiles: [],
+      injectedFiles: contextFiles,
+      skillsPrompt: "",
+      tools: [],
+    }).systemPrompt.projectContextChars;
+
+  it("tool mode gives the same projectContextChars as token mode", () => {
+    const generic = reportFor("generic");
+    expect(generic).toBeGreaterThan(0);
+    expect(reportFor("tool")).toBe(generic);
+  });
+
+  it("ends at Heartbeats when the surface disallows silent replies", () => {
+    expect(reportFor("none")).toBe(reportFor("generic"));
   });
 });

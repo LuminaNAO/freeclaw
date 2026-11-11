@@ -72,6 +72,8 @@ export type AgentConfig = {
   humanDelay?: HumanDelayConfig;
   /** Per-agent reasoning display default (overrides agents.defaults.reasoningDefault). */
   reasoningDefault?: AgentDefaultsConfig["reasoningDefault"];
+  /** Per-agent silent-reply mode (overrides agents.defaults.silentReply). */
+  silentReply?: AgentDefaultsConfig["silentReply"];
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;

@@ -111,6 +111,11 @@ import {
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
+import {
+  applyNoReplyToolWording,
+  NO_REPLY_TOOL_NAME,
+  shouldOfferNoReplyTool,
+} from "../../tools/no-reply-tool.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -191,6 +196,8 @@ type PromptBuildHookRunner = {
 };
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
+/** Tools that end the run after their result, sharing one abort path (no-reply-tool §4.1). */
+type ToolRunEndReason = "sessions_yield" | "no_reply";
 const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
 
 // Persist a hidden context reminder so the next turn knows why the runner stopped.
@@ -1544,6 +1551,26 @@ export async function runEmbeddedAttempt(
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
+    // Abort reason of a tool-requested run end ("sessions_yield" or "no_reply"); both share one path.
+    let yieldAbortReason: ToolRunEndReason | null = null;
+    // no-reply-tool §4: set when the model calls `no_reply`. The run ends after the tool results of that
+    // message (other tools in it still run, §4.7), through the sessions_yield abort path.
+    let silentReplyRequested = false;
+    let silentReplyReason: string | undefined;
+    const surfaceSilentReplyMode = resolveSilentReplyPromptMode({
+      cfg: params.config,
+      channel: params.messageChannel ?? params.messageProvider,
+      chatType: params.groupId ? "group" : "direct",
+    });
+    const offerNoReplyTool = shouldOfferNoReplyTool({
+      config: params.config,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+      hasReplyTarget: params.hasReplyTarget,
+      surfaceMode: surfaceSilentReplyMode,
+      modelSupportsTools: supportsModelTools(params.model),
+      toolsDisabled: params.disableTools,
+    });
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
     // Set by the tool-result context guard when it is over the prune trigger
@@ -1603,9 +1630,16 @@ export async function runEmbeddedAttempt(
               runId: params.runId,
               elapsedMs: Date.now() - runStartMs,
             });
+            yieldAbortReason = "sessions_yield";
             runAbortController.abort("sessions_yield");
             abortSessionForYield?.();
           },
+          onNoReply: offerNoReplyTool
+            ? (reason) => {
+                silentReplyRequested = true;
+                silentReplyReason ??= reason;
+              }
+            : undefined,
         });
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
@@ -1727,10 +1761,20 @@ export async function runEmbeddedAttempt(
           agentId: sessionAgentId,
         })
       : undefined;
+    // no-reply-tool §6: when `no_reply` is offered, the group intro and heartbeat prompt teach it too.
+    const noReplyToolOffered = tools.some((tool) => tool.name === NO_REPLY_TOOL_NAME);
     const extraSystemPromptWithGroupMemory =
-      [params.extraSystemPrompt, groupMemoryBlock]
+      [
+        noReplyToolOffered
+          ? applyNoReplyToolWording(params.extraSystemPrompt)
+          : params.extraSystemPrompt,
+        groupMemoryBlock,
+      ]
         .filter((part) => typeof part === "string" && part.trim().length > 0)
         .join("\n\n") || undefined;
+    const heartbeatPromptText = isDefaultAgent
+      ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+      : undefined;
 
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
@@ -1741,9 +1785,9 @@ export async function runEmbeddedAttempt(
       ownerDisplay: ownerDisplay.ownerDisplay,
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
       reasoningTagHint,
-      heartbeatPrompt: isDefaultAgent
-        ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
-        : undefined,
+      heartbeatPrompt: noReplyToolOffered
+        ? applyNoReplyToolWording(heartbeatPromptText)
+        : heartbeatPromptText,
       skillsPrompt,
       docsPath: docsPath ?? undefined,
       ttsHint,
@@ -1762,11 +1806,9 @@ export async function runEmbeddedAttempt(
       contextFiles,
       bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
-      silentReplyPromptMode: resolveSilentReplyPromptMode({
-        cfg: params.config,
-        channel: params.messageChannel ?? params.messageProvider,
-        chatType: params.groupId ? "group" : "direct",
-      }),
+      // no-reply-tool §5/§6: teach the tool only when it is really in this run's tool list.
+      silentReplyPromptMode:
+        surfaceSilentReplyMode === "none" ? "none" : noReplyToolOffered ? "tool" : "generic",
       blockStreaming: params.blockStreaming ?? resolveDefaultPromptBlockStreaming(params.config),
       // Focus section state (focus-mode ARCH §7.5): read fresh every turn.
       focus: resolveFocusPromptState(params.sessionKey),
@@ -2176,7 +2218,14 @@ export async function runEmbeddedAttempt(
         const signal = runAbortController.signal as AbortSignal & {
           reason?: unknown;
         };
-        if (yieldDetected && signal.aborted && signal.reason === "sessions_yield") {
+        // no-reply-tool §4.1: the message that called `no_reply` has run all its tools; end the run
+        // here, before any further model call, the same way sessions_yield does.
+        if (silentReplyRequested && yieldAbortReason === null && !signal.aborted) {
+          yieldAbortReason = "no_reply";
+          runAbortController.abort("no_reply");
+          abortSessionForYield?.();
+        }
+        if (yieldAbortReason !== null && signal.aborted && signal.reason === yieldAbortReason) {
           return createYieldAbortedResponse(model) as unknown as Awaited<
             ReturnType<typeof innerStreamFn>
           >;
@@ -2399,6 +2448,9 @@ export async function runEmbeddedAttempt(
         onAssistantMessageStart: params.onAssistantMessageStart,
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
+        silentReplyTool: offerNoReplyTool,
+        onSilentReply: params.onSilentReply,
+        blockStreaming: params.blockStreaming,
         config: params.config,
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,
@@ -2425,7 +2477,9 @@ export async function runEmbeddedAttempt(
         queueMessage: async (text: string) => {
           await activeSession.steer(text);
         },
-        isStreaming: () => activeSession.isStreaming,
+        // A run that chose silence takes no more steered input: a new message becomes a follow-up turn
+        // instead of being swallowed by the silent end (no-reply-tool §4.1).
+        isStreaming: () => activeSession.isStreaming && !silentReplyRequested,
         isCompacting: () => subscription.isCompacting(),
         abort: abortRun,
       };
@@ -2545,7 +2599,11 @@ export async function runEmbeddedAttempt(
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
-        let effectivePrompt = params.prompt;
+        // no-reply-tool §4.6/§6: the default heartbeat poll teaches `no_reply` when the tool is offered.
+        let effectivePrompt =
+          noReplyToolOffered && params.trigger === "heartbeat"
+            ? applyNoReplyToolWording(params.prompt)
+            : params.prompt;
         const hookCtx = {
           agentId: hookAgentId,
           sessionKey: params.sessionKey,
@@ -2564,7 +2622,7 @@ export async function runEmbeddedAttempt(
         });
         {
           if (hookResult?.prependContext) {
-            effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
+            effectivePrompt = `${hookResult.prependContext}\n\n${effectivePrompt}`;
             log.debug(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );
@@ -2707,10 +2765,10 @@ export async function runEmbeddedAttempt(
           // Check the abort reason to distinguish from external aborts (timeout, user cancel)
           // that may race after yieldDetected is set.
           yieldAborted =
-            yieldDetected &&
+            yieldAbortReason !== null &&
             isRunnerAbortError(err) &&
             err instanceof Error &&
-            err.cause === "sessions_yield";
+            err.cause === yieldAbortReason;
           if (yieldAborted) {
             aborted = false;
             // Ensure the session abort has fully settled before proceeding.
@@ -2751,7 +2809,8 @@ export async function runEmbeddedAttempt(
           // user receives the assistant response immediately.  Without this,
           // coalesced/buffered blocks stay in the pipeline until compaction
           // finishes — which can take minutes on large contexts (#35074).
-          if (params.onBlockReplyFlush) {
+          // no-reply-tool §4.4: a silent run drops blocks not yet flushed instead of sending them.
+          if (params.onBlockReplyFlush && !subscription.isSilentReply()) {
             await params.onBlockReplyFlush();
           }
 
@@ -3038,6 +3097,13 @@ export async function runEmbeddedAttempt(
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
         yieldDetected: yieldDetected || undefined,
+        silentReply:
+          yieldAborted && yieldAbortReason === "no_reply" && !aborted && !timedOut
+            ? {
+                reason: silentReplyReason,
+                blocksStreamed: subscription.didStreamBlocksBeforeSilence(),
+              }
+            : undefined,
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.

@@ -821,4 +821,32 @@ describe("agent event handler", () => {
       "Disk usage crossed 95 percent on /data and needs cleanup now.",
     );
   });
+
+  it("no-reply-tool §4.2: a silent run's final carries no message text", () => {
+    const harness = createHarness({ now: 2_000 });
+    harness.chatRunState.registry.add("run-1", {
+      sessionKey: "session-1",
+      clientRunId: "client-1",
+    });
+    harness.handler({
+      runId: "run-1",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Here you go" },
+    });
+    harness.handler({
+      runId: "run-1",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end", silent: true },
+    });
+    const finals = chatBroadcastCalls(harness.broadcast)
+      .map(([, payload]) => payload as { state?: string; message?: unknown })
+      .filter((payload) => payload.state === "final");
+    expect(finals).toHaveLength(1);
+    expect(finals[0]?.message).toBeUndefined();
+    harness.nowSpy?.mockRestore();
+  });
 });

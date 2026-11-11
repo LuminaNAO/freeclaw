@@ -750,6 +750,7 @@ export const AgentEntrySchema = z
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     reasoningDefault: z.union([z.literal("on"), z.literal("off"), z.literal("stream")]).optional(),
+    silentReply: z.union([z.literal("tool"), z.literal("token")]).optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,

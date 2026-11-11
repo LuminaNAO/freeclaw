@@ -63,6 +63,16 @@ export type RunEmbeddedPiAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /**
+   * The run has a reply target (inbound channel message, heartbeat, cron with delivery). Only such runs are
+   * offered the `no_reply` tool (no-reply-tool §5.1). Unset: no tool.
+   */
+  hasReplyTarget?: boolean;
+  /**
+   * Called once when the model calls `no_reply` (no-reply-tool §4.4): the reply pipeline drops blocks it has
+   * not sent yet. Blocks already delivered stay.
+   */
+  onSilentReply?: () => void;
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;

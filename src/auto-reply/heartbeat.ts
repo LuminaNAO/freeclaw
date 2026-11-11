@@ -3,8 +3,12 @@ import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
-export const HEARTBEAT_PROMPT =
-  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
+/** The ack sentence of the default heartbeat prompt (token mode). */
+export const HEARTBEAT_PROMPT_ACK_SENTENCE = "If nothing needs attention, reply HEARTBEAT_OK.";
+/** The same sentence when the run offers the `no_reply` tool (no-reply-tool §4.6/§6). */
+export const HEARTBEAT_PROMPT_ACK_TOOL_SENTENCE =
+  "If nothing needs attention, call the `no_reply` tool and do nothing else.";
+export const HEARTBEAT_PROMPT = `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. ${HEARTBEAT_PROMPT_ACK_SENTENCE}`;
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 

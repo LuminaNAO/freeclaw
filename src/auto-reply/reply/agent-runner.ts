@@ -35,6 +35,7 @@ import {
 } from "../fallback-state.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
+import { HEARTBEAT_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
@@ -519,6 +520,11 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
     });
+
+    // no-reply-tool §4.6: on a heartbeat, `no_reply` is the ack, with the same outcome as HEARTBEAT_OK.
+    if (runResult.silent && isHeartbeat) {
+      return finalizeWithFollowup({ text: HEARTBEAT_TOKEN }, queueKey, runFollowupTurn);
+    }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and

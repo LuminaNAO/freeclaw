@@ -11,6 +11,11 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
+  /**
+   * no-reply-tool §4.4: the run went silent. Blocks already delivered stay; every block not yet handed to
+   * the channel (coalescer buffer, held payloads, queued sends) is dropped, and later enqueues are ignored.
+   */
+  discardPending?: () => void;
 };
 
 export type BlockReplyBuffer = {
@@ -101,11 +106,12 @@ export function createBlockReplyPipeline(params: {
   const bufferedPayloads: ReplyPayload[] = [];
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
+  let silenced = false;
   let didStream = false;
   let didLogTimeout = false;
 
   const sendPayload = (payload: ReplyPayload, bypassSeenCheck: boolean = false) => {
-    if (aborted) {
+    if (aborted || silenced) {
       return;
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
@@ -125,7 +131,7 @@ export function createBlockReplyPipeline(params: {
     const abortController = new AbortController();
     sendChain = sendChain
       .then(async () => {
-        if (aborted) {
+        if (aborted || silenced) {
           return false;
         }
         await withTimeout(
@@ -170,7 +176,7 @@ export function createBlockReplyPipeline(params: {
   const coalescer = coalescing
     ? createBlockReplyCoalescer({
         config: coalescing,
-        shouldAbort: () => aborted,
+        shouldAbort: () => aborted || silenced,
         onFlush: (payload) => {
           bufferedKeys.clear();
           sendPayload(payload, /* bypassSeenCheck */ true);
@@ -211,7 +217,7 @@ export function createBlockReplyPipeline(params: {
   };
 
   const enqueue = (payload: ReplyPayload) => {
-    if (aborted) {
+    if (aborted || silenced) {
       return;
     }
     if (bufferPayload(payload)) {
@@ -246,16 +252,26 @@ export function createBlockReplyPipeline(params: {
     coalescer?.stop();
   };
 
+  const discardPending = () => {
+    silenced = true;
+    coalescer?.stop();
+    // The coalescer resets its buffer on flush once shouldAbort() is true.
+    void coalescer?.flush({ force: true });
+    bufferedPayloads.length = 0;
+    bufferedPayloadKeys.clear();
+  };
+
   return {
     enqueue,
     flush,
     stop,
-    hasBuffered: () => Boolean(coalescer?.hasBuffered() || bufferedPayloads.length > 0),
+    hasBuffered: () => coalescer?.hasBuffered() === true || bufferedPayloads.length > 0,
     didStream: () => didStream,
     isAborted: () => aborted,
     hasSentPayload: (payload) => {
       const payloadKey = createBlockReplyContentKey(payload);
       return sentContentKeys.has(payloadKey);
     },
+    discardPending,
   };
 }

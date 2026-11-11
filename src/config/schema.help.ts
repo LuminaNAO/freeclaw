@@ -1081,6 +1081,10 @@ export const FIELD_HELP: Record<string, string> = {
     'Default reasoning display ("on", "off", "stream") when neither a /reasoning directive nor the session sets one. Unset keeps reasoning display off on messaging channels (Signal, WhatsApp, Telegram, Discord, Slack, ...) and uses the model catalog default only on non-channel surfaces (CLI, TUI, gateway agent). Set "on" only when you want reasoning posted to chats.',
   "agents.list[].reasoningDefault":
     'Per-agent reasoning display default ("on", "off", "stream"); overrides agents.defaults.reasoningDefault for this agent. Leave unset to inherit.',
+  "agents.defaults.silentReply":
+    'How the model stays silent when it has nothing to say: "tool" (default) offers the `no_reply` tool and teaches it in the system prompt (a NO_REPLY text reply is still honoured), "token" keeps the old NO_REPLY text token and offers no tool. Models without tool support always use the token.',
+  "agents.list[].silentReply":
+    'Per-agent silent-reply mode ("tool", "token"); overrides agents.defaults.silentReply for this agent. Leave unset to inherit.',
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",

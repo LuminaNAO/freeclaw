@@ -77,6 +77,31 @@ function extractToolListText(systemPrompt: string): string {
   return extracted.text.replace(markerA, "").trim();
 }
 
+const PROJECT_CONTEXT_START = "\n# Project Context\n";
+// The section after Project Context: "## Silent Replies" (token mode) or "## Silent replies" (no_reply tool
+// mode, no-reply-tool §6). Where the surface disallows silence there is none, so Heartbeats comes next.
+const PROJECT_CONTEXT_END_MARKERS = [
+  ["\n## Silent Replies\n", "\n## Silent replies\n"],
+  ["\n## Heartbeats\n"],
+] as const;
+
+function extractProjectContext(systemPrompt: string): { text: string; found: boolean } {
+  const start = systemPrompt.indexOf(PROJECT_CONTEXT_START);
+  if (start === -1) {
+    return { text: "", found: false };
+  }
+  const from = start + PROJECT_CONTEXT_START.length;
+  for (const markers of PROJECT_CONTEXT_END_MARKERS) {
+    const ends = markers
+      .map((marker) => systemPrompt.indexOf(marker, from))
+      .filter((index) => index !== -1);
+    if (ends.length > 0) {
+      return { text: systemPrompt.slice(start, Math.min(...ends)), found: true };
+    }
+  }
+  return { text: systemPrompt.slice(start), found: true };
+}
+
 export function buildSystemPromptReport(params: {
   source: SessionSystemPromptReport["source"];
   generatedAt: number;
@@ -96,11 +121,7 @@ export function buildSystemPromptReport(params: {
   tools: AgentTool[];
 }): SessionSystemPromptReport {
   const systemPrompt = params.systemPrompt.trim();
-  const projectContext = extractBetween(
-    systemPrompt,
-    "\n# Project Context\n",
-    "\n## Silent Replies\n",
-  );
+  const projectContext = extractProjectContext(systemPrompt);
   const projectContextChars = projectContext.text.length;
   const toolListText = extractToolListText(systemPrompt);
   const toolListChars = toolListText.length;
