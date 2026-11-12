@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Model badge: generated avatar art is now a flat vector illustration instead of a photographic scene (`imageGen.style` overrides the style, `""` turns it off); generated bases are made again once after the upgrade, a group's own artwork is untouched.
 - Model badge: new installs (`openclaw onboard` creating a config) turn the model-badge plugin on for the Signal channel they configure; upgrades leave it off, enable it with `openclaw plugins enable model-badge`.
 - Signal: add an opt-in ingress trust gate (`OPENCLAW_SIGNAL_TRUST_GATE=enforce`) backed by a per-account trust store managed with `openclaw signal trust`. Untrusted senders never reach the agent, and denied attempts are logged and flagged.
+- Signal/iMessage: files an agent sends keep their file name (the recipient sees `Report Q3.pdf`, not a random id); each send gets its own folder under `media/outbound/`, removed by the normal media cleanup.
 
 ## 1.1.0 - 2026-05-08
 
