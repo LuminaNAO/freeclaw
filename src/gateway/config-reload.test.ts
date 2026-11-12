@@ -2,11 +2,12 @@ import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { ConfigFileSnapshot } from "../config/config.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
+  type GatewayReloadPlan,
   diffConfigPaths,
   resolveGatewayReloadSettings,
   startGatewayConfigReloader,
@@ -412,6 +413,137 @@ describe("startGatewayConfigReloader", () => {
       expect(unhandled).toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandled);
+      await reloader.stop();
+    }
+  });
+});
+
+// docs/design/config-reload.md, "2026-11-12 Reload baseline must be comparable with the reload
+// snapshot": the reloader baseline must be the same kind of config as every later snapshot.
+describe("startGatewayConfigReloader baseline vs SecretRef snapshot", () => {
+  const emptyRegistry = createTestRegistry([]);
+  const signalPlugin: ChannelPlugin = {
+    ...createChannelTestPluginBase({ id: "signal", label: "Signal" }),
+    reload: { configPrefixes: ["channels.signal"] },
+  };
+  const msteamsPlugin: ChannelPlugin = {
+    ...createChannelTestPluginBase({ id: "msteams", label: "Microsoft Teams" }),
+    reload: { configPrefixes: ["channels.msteams"] },
+  };
+  const registry = createTestRegistry([
+    { pluginId: "signal", plugin: signalPlugin, source: "test" },
+    { pluginId: "msteams", plugin: msteamsPlugin, source: "test" },
+  ]);
+
+  const providerKeyRef = { source: "file", provider: "testkeys", id: "/providers/x" } as const;
+  const teamsPasswordRef = { source: "file", provider: "testkeys", id: "/msteams/app" } as const;
+
+  type SecretRefLike = { source: "file"; provider: string; id: string };
+
+  function buildConfig(params: {
+    providerApiKey: string | SecretRefLike;
+    teamsAppPassword: string | SecretRefLike;
+    heartbeatEvery?: string;
+    signalAllowFrom?: string[];
+  }): OpenClawConfig {
+    return {
+      gateway: { reload: { debounceMs: 0 } },
+      agents: { defaults: { heartbeat: { every: params.heartbeatEvery ?? "30m" } } },
+      models: {
+        providers: {
+          x: {
+            baseUrl: "https://models.example.test/v1",
+            apiKey: params.providerApiKey,
+            models: [],
+          },
+        },
+      },
+      channels: {
+        msteams: { appId: "test-app-id", appPassword: params.teamsAppPassword },
+        signal: {
+          account: "+15550000001",
+          allowFrom: params.signalAllowFrom ?? ["+15550000002"],
+        },
+      },
+    } as OpenClawConfig;
+  }
+
+  // As written to the file: SecretRef objects (what readSnapshot returns).
+  function sourceConfig(overrides?: {
+    heartbeatEvery?: string;
+    providerKeyRefId?: string;
+    signalAllowFrom?: string[];
+  }): OpenClawConfig {
+    return buildConfig({
+      providerApiKey: { ...providerKeyRef, id: overrides?.providerKeyRefId ?? providerKeyRef.id },
+      teamsAppPassword: { ...teamsPasswordRef },
+      heartbeatEvery: overrides?.heartbeatEvery,
+      signalAllowFrom: overrides?.signalAllowFrom,
+    });
+  }
+
+  // After secrets activation: every SecretRef replaced by its secret string (what the gateway
+  // ran with at startup).
+  function resolvedConfig(): OpenClawConfig {
+    return buildConfig({
+      providerApiKey: "synthetic-provider-key",
+      teamsAppPassword: "synthetic-teams-password",
+    });
+  }
+
+  function startReloader(readSnapshot: () => Promise<ConfigFileSnapshot>) {
+    const watcher = createWatcherMock();
+    vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
+    const onHotReload = vi.fn(async (_plan: GatewayReloadPlan, _next: OpenClawConfig) => {});
+    const onRestart = vi.fn();
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    // The gateway sets baselineFromSnapshot: the reloader reads the file once at start and diffs
+    // later snapshots against that, not against the resolved initialConfig.
+    const options = {
+      initialConfig: resolvedConfig(),
+      baselineFromSnapshot: true,
+      readSnapshot,
+      onHotReload,
+      onRestart,
+      log,
+      watchPath: "/tmp/openclaw.json",
+    };
+    const reloader = startGatewayConfigReloader(options);
+    return { watcher, onHotReload, onRestart, log, reloader };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setActivePluginRegistry(registry);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    setActivePluginRegistry(emptyRegistry);
+  });
+
+  it("test 1: resolved initialConfig vs SecretRef snapshot restarts no channel and reports no SecretRef path", async () => {
+    // The file at reloader start, then the file after an unrelated edit (heartbeat interval).
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(makeSnapshot({ config: sourceConfig(), hash: "start" }))
+      .mockResolvedValueOnce(
+        makeSnapshot({ config: sourceConfig({ heartbeatEvery: "45m" }), hash: "edit-1" }),
+      );
+    const { watcher, onHotReload, onRestart, reloader } = startReloader(readSnapshot);
+    try {
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(onRestart).not.toHaveBeenCalled();
+      expect(onHotReload).toHaveBeenCalledTimes(1);
+      const [plan] = onHotReload.mock.calls[0];
+      expect([...plan.restartChannels]).toEqual([]);
+      expect(plan.changedPaths).toEqual(["agents.defaults.heartbeat.every"]);
+      expect(plan.changedPaths).not.toContain("models.providers.x.apiKey");
+      expect(plan.changedPaths).not.toContain("channels.msteams.appPassword");
+    } finally {
       await reloader.stop();
     }
   });
