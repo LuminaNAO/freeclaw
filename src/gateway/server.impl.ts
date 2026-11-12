@@ -1013,8 +1013,15 @@ export async function startGatewayServer(
             startChannelHealthMonitor({ channelManager, checkIntervalMs }),
         });
 
+        // Reload baseline (docs/design/config-reload.md, 2026-11-12): the reloader diffs file
+        // snapshots, which keep SecretRef objects unresolved, so the baseline must be unresolved
+        // too. cfgAtStart is resolved and would make every SecretRef field look changed on the
+        // first reload (spurious channel restarts). The secrets source config already holds the
+        // startup writes (generated gateway.auth.token, seeded controlUi.allowedOrigins); the
+        // reloader then takes its baseline from one file snapshot read when it starts.
         return startGatewayConfigReloader({
-          initialConfig: cfgAtStart,
+          initialConfig: getActiveSecretsRuntimeSnapshot()?.sourceConfig ?? cfgAtStart,
+          baselineFromSnapshot: true,
           readSnapshot: readConfigFileSnapshot,
           onHotReload: async (plan, nextConfig) => {
             const previousSnapshot = getActiveSecretsRuntimeSnapshot();

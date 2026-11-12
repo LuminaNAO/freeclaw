@@ -70,7 +70,21 @@ export type GatewayConfigReloader = {
 };
 
 export function startGatewayConfigReloader(opts: {
+  /**
+   * The config the gateway started with. It is the diff baseline unless
+   * `baselineFromSnapshot` is set and the initial snapshot read succeeds.
+   */
   initialConfig: OpenClawConfig;
+  /**
+   * Take the diff baseline from one `readSnapshot()` when the reloader starts, so the baseline is
+   * the same kind of config as every later snapshot: the config as written to the file, SecretRef
+   * objects unresolved, startup writes (generated gateway.auth.token, seeded
+   * gateway.controlUi.allowedOrigins) included. A resolved baseline makes every SecretRef field
+   * look changed on the first reload and restarts channels for nothing
+   * (docs/design/config-reload.md, 2026-11-12). Falls back to `initialConfig` when the file is
+   * missing, invalid or unreadable.
+   */
+  baselineFromSnapshot?: boolean;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
@@ -89,6 +103,27 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
+  // Resolves once the baseline is settled; reloads wait for it so they never diff against a
+  // baseline that is about to be replaced.
+  const baselineReady: Promise<void> = opts.baselineFromSnapshot
+    ? (async () => {
+        try {
+          const snapshot = await opts.readSnapshot();
+          if (!snapshot.exists || !snapshot.valid) {
+            opts.log.warn(
+              "config reload baseline: config file missing or invalid at start; using startup config",
+            );
+            return;
+          }
+          currentConfig = snapshot.config;
+          settings = resolveGatewayReloadSettings(currentConfig);
+        } catch (err) {
+          opts.log.warn(
+            `config reload baseline: reading config failed (${String(err)}); using startup config`,
+          );
+        }
+      })()
+    : Promise.resolve();
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -195,6 +230,10 @@ export function startGatewayConfigReloader(opts: {
       debounceTimer = null;
     }
     try {
+      await baselineReady;
+      if (stopped) {
+        return;
+      }
       const snapshot = await opts.readSnapshot();
       if (handleMissingSnapshot(snapshot)) {
         return;

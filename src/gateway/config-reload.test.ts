@@ -499,7 +499,7 @@ describe("startGatewayConfigReloader baseline vs SecretRef snapshot", () => {
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     // The gateway sets baselineFromSnapshot: the reloader reads the file once at start and diffs
     // later snapshots against that, not against the resolved initialConfig.
-    const options = {
+    const reloader = startGatewayConfigReloader({
       initialConfig: resolvedConfig(),
       baselineFromSnapshot: true,
       readSnapshot,
@@ -507,8 +507,7 @@ describe("startGatewayConfigReloader baseline vs SecretRef snapshot", () => {
       onRestart,
       log,
       watchPath: "/tmp/openclaw.json",
-    };
-    const reloader = startGatewayConfigReloader(options);
+    });
     return { watcher, onHotReload, onRestart, log, reloader };
   }
 
