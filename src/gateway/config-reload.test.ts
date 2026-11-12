@@ -546,4 +546,139 @@ describe("startGatewayConfigReloader baseline vs SecretRef snapshot", () => {
       await reloader.stop();
     }
   });
+
+  it("test 3: planner guard: provider apiKey restarts heartbeat only; channel paths restart only their own channel", () => {
+    const providerPlan = buildGatewayReloadPlan(["models.providers.x.apiKey"]);
+    expect(providerPlan.restartGateway).toBe(false);
+    expect([...providerPlan.restartChannels]).toEqual([]);
+    expect(providerPlan.restartHeartbeat).toBe(true);
+
+    const signalPlan = buildGatewayReloadPlan(["channels.signal.groups.g="]);
+    expect(signalPlan.restartGateway).toBe(false);
+    expect([...signalPlan.restartChannels]).toEqual(["signal"]);
+
+    const teamsPlan = buildGatewayReloadPlan(["channels.msteams.appPassword"]);
+    expect(teamsPlan.restartChannels.has("signal")).toBe(false);
+  });
+
+  it("test 4: a real change still reloads: signal allowFrom restarts signal only, a new apiKey ref id restarts no channel", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(makeSnapshot({ config: sourceConfig(), hash: "start" }))
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: sourceConfig({ signalAllowFrom: ["+15550000002", "+15550000003"] }),
+          hash: "edit-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: sourceConfig({
+            signalAllowFrom: ["+15550000002", "+15550000003"],
+            providerKeyRefId: "/providers/x-rotated",
+          }),
+          hash: "edit-2",
+        }),
+      );
+    const { watcher, onHotReload, onRestart, reloader } = startReloader(readSnapshot);
+    try {
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      expect(onHotReload).toHaveBeenCalledTimes(1);
+      const [signalPlan] = onHotReload.mock.calls[0];
+      expect(signalPlan.changedPaths).toEqual(["channels.signal.allowFrom"]);
+      expect([...signalPlan.restartChannels]).toEqual(["signal"]);
+      expect(signalPlan.restartHeartbeat).toBe(false);
+
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      expect(onHotReload).toHaveBeenCalledTimes(2);
+      const [keyPlan] = onHotReload.mock.calls[1];
+      expect(keyPlan.changedPaths).toEqual(["models.providers.x.apiKey.id"]);
+      expect([...keyPlan.restartChannels]).toEqual([]);
+      expect(keyPlan.restartHeartbeat).toBe(true);
+      expect(onRestart).not.toHaveBeenCalled();
+    } finally {
+      await reloader.stop();
+    }
+  });
+
+  it("startup writes in the file (generated gateway.auth.token, seeded controlUi.allowedOrigins) are part of the baseline", async () => {
+    const withStartupWrites = (cfg: OpenClawConfig): OpenClawConfig => ({
+      ...cfg,
+      gateway: {
+        ...cfg.gateway,
+        bind: "lan",
+        auth: { mode: "token", token: "synthetic-generated-token" },
+        controlUi: {
+          enabled: true,
+          allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+        },
+      },
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({ config: withStartupWrites(sourceConfig()), hash: "start" }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: withStartupWrites(sourceConfig({ heartbeatEvery: "45m" })),
+          hash: "edit-1",
+        }),
+      );
+    // initialConfig (resolved, from before the startup writes) has neither value.
+    const { watcher, onHotReload, onRestart, reloader } = startReloader(readSnapshot);
+    try {
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      expect(onRestart).not.toHaveBeenCalled();
+      expect(onHotReload).toHaveBeenCalledTimes(1);
+      const [plan] = onHotReload.mock.calls[0];
+      expect(plan.changedPaths).toEqual(["agents.defaults.heartbeat.every"]);
+      expect(plan.restartGateway).toBe(false);
+      expect([...plan.restartChannels]).toEqual([]);
+    } finally {
+      await reloader.stop();
+    }
+  });
+
+  it("falls back to initialConfig when the baseline snapshot cannot be read", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockRejectedValueOnce(new Error("read failed"))
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: buildConfig({
+            providerApiKey: "synthetic-provider-key",
+            teamsAppPassword: "synthetic-teams-password",
+            heartbeatEvery: "45m",
+          }),
+          hash: "edit-1",
+        }),
+      );
+    const { watcher, onHotReload, log, reloader } = startReloader(readSnapshot);
+    try {
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("config reload baseline: reading config failed"),
+      );
+      expect(onHotReload).toHaveBeenCalledTimes(1);
+      const [plan] = onHotReload.mock.calls[0];
+      expect(plan.changedPaths).toEqual(["agents.defaults.heartbeat.every"]);
+    } finally {
+      await reloader.stop();
+    }
+  });
+
+  it("does not read a baseline snapshot unless baselineFromSnapshot is set", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValue(makeSnapshot({ config: { gateway: { reload: { debounceMs: 0 } } } }));
+    const { reloader } = createReloaderHarness(readSnapshot);
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).not.toHaveBeenCalled();
+    await reloader.stop();
+  });
 });
