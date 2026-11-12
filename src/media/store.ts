@@ -404,3 +404,45 @@ export async function saveMediaBuffer(
   await writeSavedMediaBuffer({ dir, id, buffer });
   return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
 }
+
+/**
+ * signal-attachment-names §2.2: write the buffer as `<media>/<subdir>/<fresh uuid>/<fileName>`, one
+ * private folder per call, so the file keeps its name and two saves of one name never collide.
+ * `fileName` must already be a safe base name; the resolved path is checked to sit directly in
+ * the new folder before anything is written. Same size limit, MIME detection and modes as
+ * saveMediaBuffer.
+ */
+export async function saveMediaBufferInOwnFolder(
+  buffer: Buffer,
+  contentType: string | undefined,
+  subdir: string,
+  maxBytes: number,
+  fileName: string,
+): Promise<SavedMedia> {
+  if (buffer.byteLength > maxBytes) {
+    throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
+  }
+  const folderId = crypto.randomUUID();
+  const dir = path.join(resolveMediaDir(), subdir, folderId);
+  const dest = path.join(dir, fileName);
+  if (path.dirname(path.resolve(dest)) !== path.resolve(dir) || path.basename(dest) !== fileName) {
+    throw new Error("Outbound media file name is not a plain base name");
+  }
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const mime = await detectMime({ buffer, headerMime: contentType });
+  try {
+    await retryAfterRecreatingDir(dir, () =>
+      // `wx`: the folder is new, so an existing entry means something is wrong; never overwrite.
+      fs.writeFile(dest, buffer, { mode: MEDIA_FILE_MODE, flag: "wx" }),
+    );
+  } catch (err) {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw err;
+  }
+  return {
+    id: `${folderId}/${fileName}`,
+    path: dest,
+    size: buffer.byteLength,
+    contentType: mime,
+  };
+}
