@@ -2,11 +2,12 @@ import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { ConfigFileSnapshot } from "../config/config.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
+  type GatewayReloadPlan,
   diffConfigPaths,
   resolveGatewayReloadSettings,
   startGatewayConfigReloader,
@@ -414,5 +415,270 @@ describe("startGatewayConfigReloader", () => {
       process.off("unhandledRejection", onUnhandled);
       await reloader.stop();
     }
+  });
+});
+
+// docs/design/config-reload.md, "2026-11-12 Reload baseline must be comparable with the reload
+// snapshot": the reloader baseline must be the same kind of config as every later snapshot.
+describe("startGatewayConfigReloader baseline vs SecretRef snapshot", () => {
+  const emptyRegistry = createTestRegistry([]);
+  const signalPlugin: ChannelPlugin = {
+    ...createChannelTestPluginBase({ id: "signal", label: "Signal" }),
+    reload: { configPrefixes: ["channels.signal"] },
+  };
+  const msteamsPlugin: ChannelPlugin = {
+    ...createChannelTestPluginBase({ id: "msteams", label: "Microsoft Teams" }),
+    reload: { configPrefixes: ["channels.msteams"] },
+  };
+  const registry = createTestRegistry([
+    { pluginId: "signal", plugin: signalPlugin, source: "test" },
+    { pluginId: "msteams", plugin: msteamsPlugin, source: "test" },
+  ]);
+
+  const providerKeyRef = { source: "file", provider: "testkeys", id: "/providers/x" } as const;
+  const teamsPasswordRef = { source: "file", provider: "testkeys", id: "/msteams/app" } as const;
+
+  type SecretRefLike = { source: "file"; provider: string; id: string };
+
+  function buildConfig(params: {
+    providerApiKey: string | SecretRefLike;
+    teamsAppPassword: string | SecretRefLike;
+    heartbeatEvery?: string;
+    signalAllowFrom?: string[];
+  }): OpenClawConfig {
+    return {
+      gateway: { reload: { debounceMs: 0 } },
+      agents: { defaults: { heartbeat: { every: params.heartbeatEvery ?? "30m" } } },
+      models: {
+        providers: {
+          x: {
+            baseUrl: "https://models.example.test/v1",
+            apiKey: params.providerApiKey,
+            models: [],
+          },
+        },
+      },
+      channels: {
+        msteams: { appId: "test-app-id", appPassword: params.teamsAppPassword },
+        signal: {
+          account: "+15550000001",
+          allowFrom: params.signalAllowFrom ?? ["+15550000002"],
+        },
+      },
+    } as OpenClawConfig;
+  }
+
+  // As written to the file: SecretRef objects (what readSnapshot returns).
+  function sourceConfig(overrides?: {
+    heartbeatEvery?: string;
+    providerKeyRefId?: string;
+    signalAllowFrom?: string[];
+  }): OpenClawConfig {
+    return buildConfig({
+      providerApiKey: { ...providerKeyRef, id: overrides?.providerKeyRefId ?? providerKeyRef.id },
+      teamsAppPassword: { ...teamsPasswordRef },
+      heartbeatEvery: overrides?.heartbeatEvery,
+      signalAllowFrom: overrides?.signalAllowFrom,
+    });
+  }
+
+  // After secrets activation: every SecretRef replaced by its secret string (what the gateway
+  // ran with at startup).
+  function resolvedConfig(): OpenClawConfig {
+    return buildConfig({
+      providerApiKey: "synthetic-provider-key",
+      teamsAppPassword: "synthetic-teams-password",
+    });
+  }
+
+  function startReloader(readSnapshot: () => Promise<ConfigFileSnapshot>) {
+    const watcher = createWatcherMock();
+    vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
+    const onHotReload = vi.fn(async (_plan: GatewayReloadPlan, _next: OpenClawConfig) => {});
+    const onRestart = vi.fn();
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    // The gateway sets baselineFromSnapshot: the reloader reads the file once at start and diffs
+    // later snapshots against that, not against the resolved initialConfig.
+    const reloader = startGatewayConfigReloader({
+      initialConfig: resolvedConfig(),
+      baselineFromSnapshot: true,
+      readSnapshot,
+      onHotReload,
+      onRestart,
+      log,
+      watchPath: "/tmp/openclaw.json",
+    });
+    return { watcher, onHotReload, onRestart, log, reloader };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setActivePluginRegistry(registry);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    setActivePluginRegistry(emptyRegistry);
+  });
+
+  it("test 1: resolved initialConfig vs SecretRef snapshot restarts no channel and reports no SecretRef path", async () => {
+    // The file at reloader start, then the file after an unrelated edit (heartbeat interval).
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(makeSnapshot({ config: sourceConfig(), hash: "start" }))
+      .mockResolvedValueOnce(
+        makeSnapshot({ config: sourceConfig({ heartbeatEvery: "45m" }), hash: "edit-1" }),
+      );
+    const { watcher, onHotReload, onRestart, reloader } = startReloader(readSnapshot);
+    try {
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(onRestart).not.toHaveBeenCalled();
+      expect(onHotReload).toHaveBeenCalledTimes(1);
+      const [plan] = onHotReload.mock.calls[0];
+      expect([...plan.restartChannels]).toEqual([]);
+      expect(plan.changedPaths).toEqual(["agents.defaults.heartbeat.every"]);
+      expect(plan.changedPaths).not.toContain("models.providers.x.apiKey");
+      expect(plan.changedPaths).not.toContain("channels.msteams.appPassword");
+    } finally {
+      await reloader.stop();
+    }
+  });
+
+  it("test 3: planner guard: provider apiKey restarts heartbeat only; channel paths restart only their own channel", () => {
+    const providerPlan = buildGatewayReloadPlan(["models.providers.x.apiKey"]);
+    expect(providerPlan.restartGateway).toBe(false);
+    expect([...providerPlan.restartChannels]).toEqual([]);
+    expect(providerPlan.restartHeartbeat).toBe(true);
+
+    const signalPlan = buildGatewayReloadPlan(["channels.signal.groups.g="]);
+    expect(signalPlan.restartGateway).toBe(false);
+    expect([...signalPlan.restartChannels]).toEqual(["signal"]);
+
+    const teamsPlan = buildGatewayReloadPlan(["channels.msteams.appPassword"]);
+    expect(teamsPlan.restartChannels.has("signal")).toBe(false);
+  });
+
+  it("test 4: a real change still reloads: signal allowFrom restarts signal only, a new apiKey ref id restarts no channel", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(makeSnapshot({ config: sourceConfig(), hash: "start" }))
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: sourceConfig({ signalAllowFrom: ["+15550000002", "+15550000003"] }),
+          hash: "edit-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: sourceConfig({
+            signalAllowFrom: ["+15550000002", "+15550000003"],
+            providerKeyRefId: "/providers/x-rotated",
+          }),
+          hash: "edit-2",
+        }),
+      );
+    const { watcher, onHotReload, onRestart, reloader } = startReloader(readSnapshot);
+    try {
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      expect(onHotReload).toHaveBeenCalledTimes(1);
+      const [signalPlan] = onHotReload.mock.calls[0];
+      expect(signalPlan.changedPaths).toEqual(["channels.signal.allowFrom"]);
+      expect([...signalPlan.restartChannels]).toEqual(["signal"]);
+      expect(signalPlan.restartHeartbeat).toBe(false);
+
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      expect(onHotReload).toHaveBeenCalledTimes(2);
+      const [keyPlan] = onHotReload.mock.calls[1];
+      expect(keyPlan.changedPaths).toEqual(["models.providers.x.apiKey.id"]);
+      expect([...keyPlan.restartChannels]).toEqual([]);
+      expect(keyPlan.restartHeartbeat).toBe(true);
+      expect(onRestart).not.toHaveBeenCalled();
+    } finally {
+      await reloader.stop();
+    }
+  });
+
+  it("startup writes in the file (generated gateway.auth.token, seeded controlUi.allowedOrigins) are part of the baseline", async () => {
+    const withStartupWrites = (cfg: OpenClawConfig): OpenClawConfig => ({
+      ...cfg,
+      gateway: {
+        ...cfg.gateway,
+        bind: "lan",
+        auth: { mode: "token", token: "synthetic-generated-token" },
+        controlUi: {
+          enabled: true,
+          allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+        },
+      },
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({ config: withStartupWrites(sourceConfig()), hash: "start" }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: withStartupWrites(sourceConfig({ heartbeatEvery: "45m" })),
+          hash: "edit-1",
+        }),
+      );
+    // initialConfig (resolved, from before the startup writes) has neither value.
+    const { watcher, onHotReload, onRestart, reloader } = startReloader(readSnapshot);
+    try {
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      expect(onRestart).not.toHaveBeenCalled();
+      expect(onHotReload).toHaveBeenCalledTimes(1);
+      const [plan] = onHotReload.mock.calls[0];
+      expect(plan.changedPaths).toEqual(["agents.defaults.heartbeat.every"]);
+      expect(plan.restartGateway).toBe(false);
+      expect([...plan.restartChannels]).toEqual([]);
+    } finally {
+      await reloader.stop();
+    }
+  });
+
+  it("falls back to initialConfig when the baseline snapshot cannot be read", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockRejectedValueOnce(new Error("read failed"))
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: buildConfig({
+            providerApiKey: "synthetic-provider-key",
+            teamsAppPassword: "synthetic-teams-password",
+            heartbeatEvery: "45m",
+          }),
+          hash: "edit-1",
+        }),
+      );
+    const { watcher, onHotReload, log, reloader } = startReloader(readSnapshot);
+    try {
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("config reload baseline: reading config failed"),
+      );
+      expect(onHotReload).toHaveBeenCalledTimes(1);
+      const [plan] = onHotReload.mock.calls[0];
+      expect(plan.changedPaths).toEqual(["agents.defaults.heartbeat.every"]);
+    } finally {
+      await reloader.stop();
+    }
+  });
+
+  it("does not read a baseline snapshot unless baselineFromSnapshot is set", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValue(makeSnapshot({ config: { gateway: { reload: { debounceMs: 0 } } } }));
+    const { reloader } = createReloaderHarness(readSnapshot);
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).not.toHaveBeenCalled();
+    await reloader.stop();
   });
 });

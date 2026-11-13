@@ -554,6 +554,29 @@ describe("gateway hot reload", () => {
     });
   });
 
+  it("seeds the config reloader baseline with the unresolved SecretRef, not the resolved value (2026-11-12 reload baseline)", async () => {
+    await writeEnvRefConfig();
+    process.env.OPENAI_API_KEY = "sk-synthetic-startup"; // pragma: allowlist secret
+    hoisted.startGatewayConfigReloader.mockClear();
+
+    await withGatewayServer(async () => {
+      expect(hoisted.startGatewayConfigReloader).toHaveBeenCalledTimes(1);
+      const opts = hoisted.startGatewayConfigReloader.mock.calls[0]?.[0] as unknown as {
+        initialConfig: {
+          models?: { providers?: Record<string, { apiKey?: unknown }> };
+        };
+        baselineFromSnapshot?: boolean;
+      };
+      expect(opts.initialConfig.models?.providers?.openai?.apiKey).toEqual({
+        source: "env",
+        provider: "default",
+        id: "OPENAI_API_KEY",
+      });
+      expect(JSON.stringify(opts.initialConfig)).not.toContain("sk-synthetic-startup");
+      expect(opts.baselineFromSnapshot).toBe(true);
+    });
+  });
+
   it("fails startup when required secret refs are unresolved", async () => {
     await writeEnvRefConfig();
     delete process.env.OPENAI_API_KEY;
