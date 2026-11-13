@@ -21,7 +21,7 @@ Archiving is cleanup of FINISHED runs. It must never end a live run, and the run
    cleared on restore).
 2. The sweeper skips any entry without `endedAt`, whatever its `archiveAtMs` (defence in depth), and logs once per run
    when it skips a stale `archiveAtMs` on a live run.
-3. A run that ends by being killed for any reason other than its own completion (abort, timeout, gateway restart,
+3. DEFERRED (operator, 13 Nov: out of scope, existing kill/stop behaviour unchanged). A run that ends by being killed for any reason other than its own completion (abort, timeout, gateway restart,
    delete) ALWAYS produces a completion event for the parent with the reason, so a parent never waits on a silent
    child. Include the last assistant text if any.
 4. `runTimeoutSeconds` stays the only limit on run length (0 or unset = no limit, as today). The parent's `agent.wait`
