@@ -95,6 +95,8 @@ type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
  */
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
+/** Live runs whose stale `archiveAtMs` the sweeper already logged (once per run). */
+const staleArchiveSkipLoggedRunIds = new Set<string>();
 
 function capFrozenResultText(resultText: string): string {
   const trimmed = resultText.trim();
@@ -482,6 +484,9 @@ async function completeSubagentRun(params: {
     entry.endedAt = endedAt;
     mutated = true;
   }
+  if (scheduleArchiveForEndedRun(entry)) {
+    mutated = true;
+  }
   if (!runOutcomesEqual(entry.outcome, params.outcome)) {
     entry.outcome = params.outcome;
     mutated = true;
@@ -676,6 +681,18 @@ function restoreSubagentRunsOnce() {
     if (subagentRuns.size === 0) {
       return;
     }
+    // A run that has not ended has no archive time; records written before
+    // archiving moved to run end carry a spawn-time one.
+    let clearedStaleArchive = false;
+    for (const entry of subagentRuns.values()) {
+      if (typeof entry.endedAt !== "number" && entry.archiveAtMs !== undefined) {
+        entry.archiveAtMs = undefined;
+        clearedStaleArchive = true;
+      }
+    }
+    if (clearedStaleArchive) {
+      persistSubagentRuns();
+    }
     // Resume pending work.
     ensureListener();
     if ([...subagentRuns.values()].some((entry) => entry.archiveAtMs)) {
@@ -696,6 +713,30 @@ function resolveArchiveAfterMs(cfg?: ReturnType<typeof loadConfig>) {
     return undefined;
   }
   return Math.max(1, Math.floor(minutes)) * 60_000;
+}
+
+/**
+ * Archiving is cleanup of FINISHED runs: a run gets `archiveAtMs` when it ends
+ * (`endedAt + archiveAfterMs`), never at spawn. Session-mode runs are never archived.
+ * Returns whether the entry changed.
+ */
+function scheduleArchiveForEndedRun(
+  entry: SubagentRunRecord,
+  cfg?: ReturnType<typeof loadConfig>,
+): boolean {
+  if (typeof entry.endedAt !== "number") {
+    return false;
+  }
+  const archiveAfterMs = entry.spawnMode === "session" ? undefined : resolveArchiveAfterMs(cfg);
+  const archiveAtMs = archiveAfterMs ? entry.endedAt + archiveAfterMs : undefined;
+  if (archiveAtMs) {
+    startSweeper();
+  }
+  if (entry.archiveAtMs === archiveAtMs) {
+    return false;
+  }
+  entry.archiveAtMs = archiveAtMs;
+  return true;
 }
 
 function resolveSubagentWaitTimeoutMs(
@@ -730,6 +771,17 @@ async function sweepSubagentRuns() {
     if (!entry.archiveAtMs || entry.archiveAtMs > now) {
       continue;
     }
+    // Never archive a live run, whatever its archiveAtMs says.
+    if (typeof entry.endedAt !== "number") {
+      if (!staleArchiveSkipLoggedRunIds.has(runId)) {
+        staleArchiveSkipLoggedRunIds.add(runId);
+        defaultRuntime.log(
+          `[warn] Subagent archive skipped for live run run=${runId} child=${entry.childSessionKey} archiveAtMs=${entry.archiveAtMs}`,
+        );
+      }
+      continue;
+    }
+    staleArchiveSkipLoggedRunIds.delete(runId);
     clearPendingLifecycleError(runId);
     void notifyContextEngineSubagentEnded({
       childSessionKey: entry.childSessionKey,
@@ -756,6 +808,11 @@ async function sweepSubagentRuns() {
   }
   if (mutated) {
     persistSubagentRuns();
+  }
+  for (const runId of staleArchiveSkipLoggedRunIds) {
+    if (!subagentRuns.has(runId)) {
+      staleArchiveSkipLoggedRunIds.delete(runId);
+    }
   }
   if (subagentRuns.size === 0) {
     stopSweeper();
@@ -1113,10 +1170,7 @@ export function replaceSubagentRunAfterSteer(params: {
 
   const now = Date.now();
   const cfg = loadConfig();
-  const archiveAfterMs = resolveArchiveAfterMs(cfg);
   const spawnMode = source.spawnMode === "session" ? "session" : "run";
-  const archiveAtMs =
-    spawnMode === "session" ? undefined : archiveAfterMs ? now + archiveAfterMs : undefined;
   const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const preserveFrozenResultFallback = params.preserveFrozenResultFallback === true;
@@ -1142,16 +1196,14 @@ export function replaceSubagentRunAfterSteer(params: {
     announceRetryCount: undefined,
     lastAnnounceRetryAt: undefined,
     spawnMode,
-    archiveAtMs,
+    // The replacement run has not ended; it is archived when it does.
+    archiveAtMs: undefined,
     runTimeoutSeconds,
   };
 
   subagentRuns.set(nextRunId, next);
   ensureListener();
   persistSubagentRuns();
-  if (archiveAtMs) {
-    startSweeper();
-  }
   void waitForSubagentCompletion(nextRunId, waitTimeoutMs);
   return true;
 }
@@ -1177,10 +1229,7 @@ export function registerSubagentRun(params: {
 }) {
   const now = Date.now();
   const cfg = loadConfig();
-  const archiveAfterMs = resolveArchiveAfterMs(cfg);
   const spawnMode = params.spawnMode === "session" ? "session" : "run";
-  const archiveAtMs =
-    spawnMode === "session" ? undefined : archiveAfterMs ? now + archiveAfterMs : undefined;
   const runTimeoutSeconds = params.runTimeoutSeconds;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
@@ -1201,7 +1250,7 @@ export function registerSubagentRun(params: {
     runTimeoutSeconds,
     createdAt: now,
     startedAt: now,
-    archiveAtMs,
+    // Set when the run ends (see scheduleArchiveForEndedRun), never at spawn.
     cleanupHandled: false,
     wakeOnDescendantSettle: undefined,
     attachmentsDir: params.attachmentsDir,
@@ -1210,9 +1259,6 @@ export function registerSubagentRun(params: {
   });
   ensureListener();
   persistSubagentRuns();
-  if (archiveAtMs) {
-    startSweeper();
-  }
   // Wait for subagent completion via gateway RPC (cross-process).
   // The in-process lifecycle listener is a fallback for embedded runs.
   void waitForSubagentCompletion(params.runId, waitTimeoutMs);
@@ -1288,6 +1334,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   resumedRuns.clear();
   endedHookInFlightRunIds.clear();
   clearAllPendingLifecycleErrors();
+  staleArchiveSkipLoggedRunIds.clear();
   resetAnnounceQueuesForTests();
   stopSweeper();
   restoreAttempted = false;
@@ -1398,6 +1445,7 @@ export function markSubagentRunTerminated(params: {
       continue;
     }
     entry.endedAt = now;
+    scheduleArchiveForEndedRun(entry);
     entry.outcome = { status: "error", error: reason };
     entry.endedReason = SUBAGENT_ENDED_REASON_KILLED;
     entry.cleanupHandled = true;
