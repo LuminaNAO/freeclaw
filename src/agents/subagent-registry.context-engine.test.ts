@@ -43,7 +43,8 @@ vi.mock("./subagent-announce-queue.js", () => ({
   resetAnnounceQueuesForTests: vi.fn(),
 }));
 
-vi.mock("./timeout.js", () => ({
+vi.mock("./timeout.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./timeout.js")>()),
   resolveAgentTimeoutMs: vi.fn(() => 1_000),
 }));
 
