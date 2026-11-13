@@ -57,7 +57,7 @@ import {
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { resolveAgentTimeoutMs } from "./timeout.js";
+import { isAgentTimeoutCapped, resolveAgentTimeoutMs } from "./timeout.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");
@@ -95,6 +95,11 @@ type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
  */
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
+/**
+ * A run with no limit is waited for until it ends: an expired or failed
+ * `agent.wait` is re-armed after this delay instead of ending the run.
+ */
+const SUBAGENT_WAIT_REARM_DELAY_MS = 5_000;
 /** Live runs whose stale `archiveAtMs` the sweeper already logged (once per run). */
 const staleArchiveSkipLoggedRunIds = new Set<string>();
 
@@ -1264,23 +1269,51 @@ export function registerSubagentRun(params: {
   void waitForSubagentCompletion(params.runId, waitTimeoutMs);
 }
 
+/**
+ * With no run limit, `agent.wait` expiring (or its transport failing) is not the
+ * end of the run: wait again while the run is still registered and not ended.
+ */
+function rearmUncappedSubagentWait(runId: string, waitTimeoutMs: number) {
+  setTimeout(() => {
+    const entry = subagentRuns.get(runId);
+    if (!entry || typeof entry.endedAt === "number") {
+      return;
+    }
+    void waitForSubagentCompletion(runId, waitTimeoutMs);
+  }, SUBAGENT_WAIT_REARM_DELAY_MS).unref?.();
+}
+
 async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
+  const uncapped = !isAgentTimeoutCapped(waitTimeoutMs);
   try {
     const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
-    const wait = await callGateway<{
-      status?: string;
-      startedAt?: number;
-      endedAt?: number;
-      error?: string;
-    }>({
-      method: "agent.wait",
-      params: {
-        runId,
-        timeoutMs,
-      },
-      timeoutMs: timeoutMs + 10_000,
-    });
+    let wait: { status?: string; startedAt?: number; endedAt?: number; error?: string };
+    try {
+      wait = await callGateway<{
+        status?: string;
+        startedAt?: number;
+        endedAt?: number;
+        error?: string;
+      }>({
+        method: "agent.wait",
+        params: {
+          runId,
+          timeoutMs,
+        },
+        timeoutMs: timeoutMs + 10_000,
+      });
+    } catch (err) {
+      if (uncapped) {
+        rearmUncappedSubagentWait(runId, waitTimeoutMs);
+      }
+      throw err;
+    }
     if (wait?.status !== "ok" && wait?.status !== "error" && wait?.status !== "timeout") {
+      return;
+    }
+    // An expired wait carries no endedAt; with no limit the run is still going.
+    if (uncapped && wait.status === "timeout" && typeof wait.endedAt !== "number") {
+      rearmUncappedSubagentWait(runId, waitTimeoutMs);
       return;
     }
     const entry = subagentRuns.get(runId);
