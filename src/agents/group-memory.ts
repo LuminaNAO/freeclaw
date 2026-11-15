@@ -183,6 +183,238 @@ export function resetGroupMemoryMetaThrottleForTests(): void {
   lastMetaWriteAtByDir.clear();
   pendingMembersByDir.clear();
   pendingRenamesByDir.clear();
+  resetLegacyGroupMemoryMigrationForTests();
+}
+
+/**
+ * Legacy group-memory layout (pre-v25 agent protocol, 2026-11-15 incident):
+ *   group-memory/<channel>/<encodeURIComponent(rawId)>   // no kind prefix, original case
+ * The gateway convention (§1) is:
+ *   group-memory/<channel>/<encodeURIComponent("group:" + rawId.toLowerCase())>
+ *
+ * The id is lowercased on the way into the session key, so the legacy folder name
+ * is NOT derivable from the canonical id (its original case is lost). Recovery is
+ * therefore a bounded directory scan, memoized per canonical dir. The scan matches
+ * case-insensitively on the encoded raw id and falls back to the legacy meta's
+ * `signal_id`/`groupId` field.
+ */
+const legacyGroupMemoryMigrated = new Map<string, string | undefined>();
+
+/** @internal Test hook: reset the legacy-migration memo. */
+export function resetLegacyGroupMemoryMigrationForTests(): void {
+  legacyGroupMemoryMigrated.clear();
+}
+
+function legacyMetaIdentity(meta: GroupMemoryMeta | undefined): string | undefined {
+  if (!meta) {
+    return undefined;
+  }
+  const direct = typeof meta.groupId === "string" ? meta.groupId : undefined;
+  if (direct) {
+    return direct;
+  }
+  const signalId = (meta as Record<string, unknown>)["signal_id"];
+  return typeof signalId === "string" ? signalId : undefined;
+}
+
+/** Find a legacy-layout folder for this group's canonical dir. Memoized. */
+function findLegacyGroupDir(params: {
+  workspaceDir: string;
+  channel: string;
+  groupId: string;
+  canonicalDir: string;
+}): string | undefined {
+  if (legacyGroupMemoryMigrated.has(params.canonicalDir)) {
+    return legacyGroupMemoryMigrated.get(params.canonicalDir);
+  }
+  const channelDir = path.dirname(params.canonicalDir);
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync(channelDir);
+  } catch {
+    legacyGroupMemoryMigrated.set(params.canonicalDir, undefined);
+    return undefined;
+  }
+  // Canonical groupId is `group:<rawLower>` (or `channel:<rawLower>`). The legacy
+  // folder name is `encodeURIComponent(rawId)` — WITHOUT the kind prefix — in the
+  // original case. So strip the prefix to recover the raw id for matching.
+  const colonIdx = params.groupId.indexOf(":");
+  const rawLower = (
+    colonIdx >= 0 ? params.groupId.slice(colonIdx + 1) : params.groupId
+  ).toLowerCase();
+  const legacyLower = encodeURIComponent(rawLower).toLowerCase();
+  let found: string | undefined;
+  for (const entry of entries) {
+    if (
+      entry.startsWith(".") ||
+      entry.startsWith("group%3A") ||
+      entry.startsWith("channel%3A") ||
+      entry === GROUP_MEMORY_META_FILENAME
+    ) {
+      continue;
+    }
+    const dir = path.join(channelDir, entry);
+    // Never treat the canonical dir as its own legacy twin.
+    if (dir === params.canonicalDir) {
+      continue;
+    }
+    // A memoized path that has since been archived is no longer a twin.
+    try {
+      if (!fs.existsSync(dir)) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    try {
+      if (!fs.statSync(dir).isDirectory()) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    // Fast match: encoded raw id, case-insensitive (legacy kept original case).
+    if (entry.toLowerCase() === legacyLower) {
+      found = dir;
+      break;
+    }
+    // Slow match: identity recorded in the legacy meta.json.
+    const meta = readGroupMemoryMeta(dir);
+    const identity = legacyMetaIdentity(meta)?.trim().toLowerCase();
+    if (identity && (identity === `group:${rawLower}` || identity === rawLower)) {
+      found = dir;
+      break;
+    }
+  }
+  legacyGroupMemoryMigrated.set(params.canonicalDir, found);
+  return found;
+}
+
+function canonicalMemberKey(id: string): string {
+  return id.startsWith("uuid:") ? id.slice(5) : id;
+}
+
+/**
+ * Migrate a legacy-layout folder into the canonical §1 layout: copy CONTEXT.md /
+ * history.md (never overwriting existing canonical files), build a gateway-schema
+ * meta.json when absent (merging members and firstSeen otherwise), then archive the
+ * legacy dir under `<channel>/.archive/` so it is not re-scanned or re-read.
+ * Best-effort: failures leave both layouts in place (recovery, not destruction).
+ */
+function migrateLegacyGroupDir(params: {
+  legacyDir: string;
+  canonicalDir: string;
+  channel: string;
+  groupId: string;
+}): boolean {
+  const { legacyDir, canonicalDir, channel, groupId } = params;
+  const now = new Date().toISOString();
+  const legacyMeta = readGroupMemoryMeta(legacyDir) as
+    | (GroupMemoryMeta & Record<string, unknown>)
+    | undefined;
+
+  ensureDir0700(canonicalDir);
+  for (const file of [GROUP_MEMORY_CONTEXT_FILENAME, GROUP_MEMORY_HISTORY_FILENAME]) {
+    const src = path.join(legacyDir, file);
+    const dst = path.join(canonicalDir, file);
+    try {
+      if (!fs.existsSync(dst) && fs.existsSync(src)) {
+        fs.copyFileSync(src, dst);
+        fs.chmodSync(dst, 0o600);
+      }
+    } catch {
+      // best effort per file
+    }
+  }
+
+  const canonicalMetaPath = path.join(canonicalDir, GROUP_MEMORY_META_FILENAME);
+  const canonicalMeta = readGroupMemoryMeta(canonicalDir);
+  const legacyExtra = legacyMeta ?? ({} as Record<string, unknown>);
+  if (!canonicalMeta) {
+    const legacyMembers = Array.isArray(legacyMeta?.members)
+      ? legacyMeta.members.filter((m): m is string => typeof m === "string")
+      : [];
+    const meta: GroupMemoryMeta = {
+      channel,
+      groupId,
+      name: (typeof legacyMeta?.name === "string" && legacyMeta.name.trim()) || groupId,
+      members: legacyMembers,
+      firstSeen:
+        (typeof legacyMeta?.firstSeen === "string" && legacyMeta.firstSeen) ||
+        (typeof legacyExtra["first_seen_at"] === "string" ? legacyExtra["first_seen_at"] : now),
+      lastSeen: now,
+    };
+    const contextFile = legacyExtra["context_file"];
+    if (typeof contextFile === "string") {
+      meta.context_file = contextFile;
+    }
+    try {
+      writeFile0600(canonicalMetaPath, `${JSON.stringify(meta, null, 2)}\n`);
+    } catch {
+      return false;
+    }
+  } else {
+    const merged = new Map<string, string>();
+    for (const id of [...canonicalMeta.members, ...(legacyMeta?.members ?? [])]) {
+      if (typeof id === "string" && id.trim()) {
+        const key = canonicalMemberKey(id);
+        if (!merged.has(key)) {
+          merged.set(key, id);
+        }
+      }
+    }
+    const firstSeenCandidates = [
+      canonicalMeta.firstSeen,
+      legacyMeta?.firstSeen,
+      typeof legacyExtra["first_seen_at"] === "string" ? legacyExtra["first_seen_at"] : undefined,
+    ].filter((v): v is string => typeof v === "string" && v.length > 0);
+    const next: GroupMemoryMeta = {
+      ...canonicalMeta,
+      members: [...merged.values()],
+      firstSeen: firstSeenCandidates.toSorted()[0] ?? canonicalMeta.firstSeen,
+    };
+    writeFile0600(canonicalMetaPath, `${JSON.stringify(next, null, 2)}\n`);
+  }
+
+  const archiveDir = path.join(path.dirname(canonicalDir), ".archive");
+  try {
+    fs.mkdirSync(archiveDir, { recursive: true, mode: 0o700 });
+    let dest = path.join(archiveDir, path.basename(legacyDir));
+    for (let n = 1; fs.existsSync(dest); n += 1) {
+      dest = `${dest}.${n}`;
+    }
+    fs.renameSync(legacyDir, dest);
+  } catch {
+    // Best effort: if the archive move fails, the memo still prevents re-scanning
+    // this canonical dir in this process, and the canonical layout is complete.
+  }
+  return true;
+}
+
+/**
+ * If a legacy-layout folder exists for this group, migrate it into the canonical
+ * layout — whether or not the canonical meta already exists (create it when absent,
+ * merge members/files when present). Returns the (possibly new/merged) meta.
+ * Returns the existing meta untouched when there is no legacy twin to recover.
+ */
+function healLegacyGroupMemory(params: {
+  workspaceDir: string;
+  channel: string;
+  groupId: string;
+  canonicalDir: string;
+  existing: GroupMemoryMeta | undefined;
+}): GroupMemoryMeta | undefined {
+  const legacyDir = findLegacyGroupDir(params);
+  if (!legacyDir) {
+    return params.existing;
+  }
+  migrateLegacyGroupDir({
+    legacyDir,
+    canonicalDir: params.canonicalDir,
+    channel: params.channel,
+    groupId: params.groupId,
+  });
+  return readGroupMemoryMeta(params.canonicalDir) ?? params.existing;
 }
 
 /**
@@ -279,7 +511,15 @@ export function updateGroupMemoryMetaOnInbound(params: {
     return { dir, written: false, reason: "disabled" };
   }
   const metaPath = path.join(dir, GROUP_MEMORY_META_FILENAME);
-  const existing = readGroupMemoryMeta(dir);
+  // Always heal: a legacy-layout twin may sit alongside an already-created
+  // canonical meta (the 2026-11-15 incident). Memoized; no-op when none exists.
+  const existing = healLegacyGroupMemory({
+    workspaceDir: params.workspaceDir,
+    channel: params.channel.trim().toLowerCase(),
+    groupId: params.groupId,
+    canonicalDir: dir,
+    existing: readGroupMemoryMeta(dir),
+  });
   const senderId = params.senderId?.trim();
   const groupName = params.groupName?.trim();
   let members = new Set(
@@ -467,7 +707,16 @@ export function buildGroupMemoryPromptBlock(params: {
     channel,
     groupId,
   });
-  const meta = readGroupMemoryMeta(dir);
+  let meta = readGroupMemoryMeta(dir);
+  if (!meta) {
+    meta = healLegacyGroupMemory({
+      workspaceDir: params.workspaceDir,
+      channel,
+      groupId,
+      canonicalDir: dir,
+      existing: meta,
+    });
+  }
   const contextRaw = readTextFileIfPresent(resolveContextFilePath(dir, meta));
   const historyRaw = readTextFileIfPresent(path.join(dir, GROUP_MEMORY_HISTORY_FILENAME));
 

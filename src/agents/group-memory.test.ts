@@ -357,3 +357,158 @@ describe("buildGroupMemoryPromptBlock (§2)", () => {
     ).toBeDefined();
   });
 });
+
+describe("legacy group-memory migration (pre-v25 layout)", () => {
+  function seedLegacy(
+    ws: string,
+    encodedRaw: string,
+    files: Record<string, string>,
+    meta?: Record<string, unknown>,
+  ) {
+    const dir = path.join(ws, "group-memory", "signal", encodedRaw);
+    fs.mkdirSync(dir, { recursive: true });
+    for (const [name, content] of Object.entries(files)) {
+      fs.writeFileSync(path.join(dir, name), content);
+    }
+    if (meta) {
+      fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta));
+    }
+    return dir;
+  }
+  const raw = "ABC==";
+  const canonicalId = `group:${raw.toLowerCase()}`;
+
+  it("read path migrates a legacy folder into the canonical layout", () => {
+    const ws = tmpWorkspace();
+    seedLegacy(
+      ws,
+      encodeURIComponent(raw),
+      {
+        "CONTEXT.md": "# real context\npurpose: decided thing\n",
+        "history.md": "- 2026-11-01 legacy event\n",
+      },
+      { signal_id: `group:${raw}`, name: "legacy group", members: ["uuid:111"] },
+    );
+    const block = buildGroupMemoryPromptBlock({
+      workspaceDir: ws,
+      channel: "signal",
+      groupId: canonicalId,
+      cfg: {} as OpenClawConfig,
+    });
+    expect(block).toBeDefined();
+    expect(block).toContain("decided thing");
+    expect(block).toContain("legacy event");
+    expect(block).toContain("legacy group");
+    // canonical dir now exists with a gateway-schema meta
+    const canDir = path.join(ws, "group-memory", "signal", encodeURIComponent(canonicalId));
+    const meta = readGroupMemoryMeta(canDir);
+    expect(meta).toBeDefined();
+    expect(meta?.groupId).toBe(canonicalId);
+    expect(meta?.members).toContain("uuid:111");
+    // legacy dir archived, not deleted in place
+    expect(fs.existsSync(path.join(ws, "group-memory", "signal", encodeURIComponent(raw)))).toBe(
+      false,
+    );
+    expect(
+      fs.existsSync(path.join(ws, "group-memory", "signal", ".archive", encodeURIComponent(raw))),
+    ).toBe(true);
+  });
+
+  it("write path migrates a legacy folder when canonical meta is absent", () => {
+    const ws = tmpWorkspace();
+    const legacyDir = seedLegacy(
+      ws,
+      encodeURIComponent(raw),
+      { "history.md": "- 2026-11-02 legacy event\n" },
+      { signal_id: `group:${raw}`, name: "legacy group", members: ["uuid:111"] },
+    );
+    const result = updateGroupMemoryMetaOnInbound({
+      workspaceDir: ws,
+      channel: "signal",
+      groupId: canonicalId,
+      groupName: "renamed subject",
+      senderId: "uuid:222",
+      cfg: {} as OpenClawConfig,
+    });
+    const canDir = path.join(ws, "group-memory", "signal", encodeURIComponent(canonicalId));
+    expect(result.dir).toBe(canDir);
+    const meta = readGroupMemoryMeta(canDir);
+    expect(meta).toBeDefined();
+    // merged members: legacy + new sender
+    expect(meta?.members).toContain("uuid:111");
+    expect(meta?.members).toContain("uuid:222");
+    // legacy files carried over
+    expect(fs.readFileSync(path.join(canDir, "history.md"), "utf8")).toContain("legacy event");
+    // legacy dir retired
+    expect(fs.existsSync(legacyDir)).toBe(false);
+    expect(fs.existsSync(path.join(ws, "group-memory", "signal", ".archive"))).toBe(true);
+  });
+
+  it("merges into an existing canonical meta without clobbering its CONTEXT.md", () => {
+    const ws = tmpWorkspace();
+    const canDir = path.join(ws, "group-memory", "signal", encodeURIComponent(canonicalId));
+    fs.mkdirSync(canDir, { recursive: true });
+    fs.writeFileSync(path.join(canDir, "CONTEXT.md"), "# canonical context\nalready curated\n");
+    fs.writeFileSync(
+      path.join(canDir, "meta.json"),
+      JSON.stringify({
+        channel: "signal",
+        groupId: canonicalId,
+        name: "canonical group",
+        members: ["uuid:333"],
+        firstSeen: "2026-11-10T00:00:00Z",
+        lastSeen: "2026-11-10T00:00:00Z",
+      }),
+    );
+    seedLegacy(
+      ws,
+      encodeURIComponent(raw),
+      { "CONTEXT.md": "# legacy context\nold purpose\n", "history.md": "- 2026-10-01 old event\n" },
+      {
+        signal_id: `group:${raw}`,
+        name: "legacy group",
+        members: ["uuid:111"],
+        first_seen_at: "2026-09-01T00:00:00Z",
+      },
+    );
+    const result = updateGroupMemoryMetaOnInbound({
+      workspaceDir: ws,
+      channel: "signal",
+      groupId: canonicalId,
+      cfg: {} as OpenClawConfig,
+    });
+    const meta = readGroupMemoryMeta(canDir);
+    expect(result.dir).toBe(canDir);
+    expect(meta?.members).toEqual(expect.arrayContaining(["uuid:111", "uuid:333"]));
+    // oldest firstSeen preserved
+    expect(meta?.firstSeen).toBe("2026-09-01T00:00:00Z");
+    // canonical CONTEXT untouched; legacy history appended
+    expect(fs.readFileSync(path.join(canDir, "CONTEXT.md"), "utf8")).toContain("already curated");
+    expect(fs.readFileSync(path.join(canDir, "history.md"), "utf8")).toContain("old event");
+  });
+
+  it("a different group's legacy folder is never adopted (isolation)", () => {
+    const ws = tmpWorkspace();
+    seedLegacy(
+      ws,
+      encodeURIComponent(raw),
+      { "CONTEXT.md": "# group A legacy\nA only\n" },
+      { signal_id: `group:${raw}`, name: "group A" },
+    );
+    const otherId = "group:zzz==";
+    const otherDir = path.join(ws, "group-memory", "signal", encodeURIComponent(otherId));
+    fs.mkdirSync(otherDir, { recursive: true });
+    const block = buildGroupMemoryPromptBlock({
+      workspaceDir: ws,
+      channel: "signal",
+      groupId: otherId,
+      cfg: {} as OpenClawConfig,
+    });
+    expect(block).toBeDefined();
+    expect(block).not.toContain("A only");
+    // group A's legacy dir still present (not stolen by group B)
+    expect(fs.existsSync(path.join(ws, "group-memory", "signal", encodeURIComponent(raw)))).toBe(
+      true,
+    );
+  });
+});
