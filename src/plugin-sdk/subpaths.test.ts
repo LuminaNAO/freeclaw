@@ -128,4 +128,9 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof twitch.DEFAULT_ACCOUNT_ID).toBe("string");
     expect(typeof twitch.normalizeAccountId).toBe("function");
   });
+
+  it("exports the group-memory purpose read to model-badge (group-memory §9)", async () => {
+    const modelBadge = await import("openclaw/plugin-sdk/model-badge");
+    expect(typeof modelBadge.resolveGroupPurpose).toBe("function");
+  });
 });

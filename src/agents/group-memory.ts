@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveSessionAgentId } from "./agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 
 /**
  * Per-group memory, implemented after the group-memory ARCH
@@ -227,12 +227,18 @@ function findLegacyGroupDir(params: {
   if (legacyGroupMemoryMigrated.has(params.canonicalDir)) {
     return legacyGroupMemoryMigrated.get(params.canonicalDir);
   }
+  const found = scanLegacyGroupDir(params);
+  legacyGroupMemoryMigrated.set(params.canonicalDir, found);
+  return found;
+}
+
+/** The legacy-layout scan itself: reads only, remembers nothing. */
+function scanLegacyGroupDir(params: { groupId: string; canonicalDir: string }): string | undefined {
   const channelDir = path.dirname(params.canonicalDir);
   let entries: string[] = [];
   try {
     entries = fs.readdirSync(channelDir);
   } catch {
-    legacyGroupMemoryMigrated.set(params.canonicalDir, undefined);
     return undefined;
   }
   // Canonical groupId is `group:<rawLower>` (or `channel:<rawLower>`). The legacy
@@ -286,7 +292,6 @@ function findLegacyGroupDir(params: {
       break;
     }
   }
-  legacyGroupMemoryMigrated.set(params.canonicalDir, found);
   return found;
 }
 
@@ -757,4 +762,116 @@ export function buildGroupMemoryPromptBlock(params: {
   }
   lines.push("");
   return lines.join("\n");
+}
+
+/** §9.3: the purpose text other features get is cut to this many characters. */
+export const GROUP_PURPOSE_MAX_CHARS = 800;
+
+export type GroupPurpose = { known: boolean; text: string };
+
+const NOT_KNOWN: GroupPurpose = { known: false, text: "" };
+
+/** The context text without its first heading line (§9.3). */
+function withoutFirstHeading(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const i = lines.findIndex((line) => /^\s{0,3}#{1,6}(\s|$)/.test(line));
+  if (i >= 0) {
+    lines.splice(i, 1);
+  }
+  return lines.join("\n");
+}
+
+/** Drops the §8.2 starter purpose line wherever it is left in an edited file. */
+function withoutStarterLine(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => line.trim() !== GROUP_MEMORY_STARTER_PURPOSE)
+    .join("\n");
+}
+
+/** Member ids never leave the folder through this read (§9.3). */
+function withoutMemberIds(text: string, members: unknown): string {
+  if (!Array.isArray(members)) {
+    return text;
+  }
+  let out = text;
+  const ids = new Set<string>();
+  for (const m of members) {
+    if (typeof m === "string" && m.trim()) {
+      for (const id of [m.trim(), canonicalMemberKey(m.trim())]) {
+        // Very short ids would cut ordinary words; real member ids are long.
+        if (id.length >= 6) {
+          ids.add(id);
+        }
+      }
+    }
+  }
+  // Longest first, so "uuid:<x>" goes before "<x>".
+  for (const id of [...ids].toSorted((a, b) => b.length - a.length)) {
+    out = out.split(id).join("");
+  }
+  return out;
+}
+
+/**
+ * group-memory ARCH §9: whether a group's purpose is known, for other features (first
+ * user: model-badge ARCH §2c.14). Resolves the folder exactly as §2 does (same id
+ * encoding, same `context_file` override, same legacy-layout handling) and never creates
+ * or changes anything: a legacy-layout folder is read where it is, not migrated.
+ *
+ * `known` when meta.json has a non-empty `description`, or the context file has content
+ * other than the §8.2 starter (with or without its heading). `text` is the description
+ * plus the context file without its first heading, cut to 800 characters; never
+ * history.md, never member ids; empty when not known. Disabled (§5) → not known.
+ */
+export function resolveGroupPurpose(params: {
+  cfg?: OpenClawConfig;
+  agentId: string;
+  channel: string;
+  groupId: string;
+}): GroupPurpose {
+  try {
+    const channel = params.channel?.trim().toLowerCase();
+    const groupId = params.groupId?.trim();
+    if (!channel || !groupId || !params.agentId) {
+      return NOT_KNOWN;
+    }
+    if (!isGroupMemoryEnabled({ cfg: params.cfg, agentId: params.agentId })) {
+      return NOT_KNOWN;
+    }
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg ?? {}, params.agentId);
+    const canonicalDir = resolveGroupMemoryDir({ workspaceDir, channel, groupId });
+    let dir = canonicalDir;
+    let meta = readGroupMemoryMeta(canonicalDir);
+    let contextFile = resolveContextFilePath(canonicalDir, meta);
+    if (!meta) {
+      // §2 heals a legacy-layout twin when the canonical meta is absent; this read only
+      // looks at it. A canonical file that already exists wins, as the migration keeps it.
+      const legacyDir = scanLegacyGroupDir({ groupId, canonicalDir });
+      if (legacyDir) {
+        dir = legacyDir;
+        meta = readGroupMemoryMeta(legacyDir);
+        const canonicalContext = path.join(canonicalDir, GROUP_MEMORY_CONTEXT_FILENAME);
+        contextFile = fs.existsSync(canonicalContext)
+          ? canonicalContext
+          : resolveContextFilePath(dir, meta);
+      }
+    }
+    const description =
+      typeof meta?.description === "string" ? meta.description.replace(/\s+/g, " ").trim() : "";
+    const contextRaw = readTextFileIfPresent(contextFile) ?? "";
+    const context = withoutStarterLine(withoutFirstHeading(contextRaw)).trim();
+    if (!description && !context) {
+      return NOT_KNOWN;
+    }
+    const joined = withoutMemberIds([description, context].filter(Boolean).join("\n\n"), [
+      ...(Array.isArray(meta?.members) ? meta.members : []),
+    ]).trim();
+    if (!joined) {
+      return NOT_KNOWN;
+    }
+    return { known: true, text: Array.from(joined).slice(0, GROUP_PURPOSE_MAX_CHARS).join("") };
+  } catch {
+    return NOT_KNOWN;
+  }
 }

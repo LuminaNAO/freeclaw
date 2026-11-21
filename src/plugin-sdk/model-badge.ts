@@ -22,3 +22,6 @@ export { resolveSecretRefString } from "../secrets/resolve.js";
 // client that works over both the HTTP and the unix-socket transport.
 export { resolveSignalAccount } from "../signal/accounts.js";
 export { signalRpcRequest } from "../signal/client.js";
+// group-memory ARCH §9: whether a group's purpose is known (model-badge ARCH §2c.14).
+export { resolveGroupPurpose } from "../agents/group-memory.js";
+export type { GroupPurpose } from "../agents/group-memory.js";
