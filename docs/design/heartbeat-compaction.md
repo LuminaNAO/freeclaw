@@ -22,8 +22,15 @@ It becomes built-in, default-on behaviour.
    compaction: it breaks the cache, changes summary quality, and replays one model's transcript to another.
    - This holds for every session the heartbeat runner can be pointed at, including a scheduled wake that targets
      a chat session by key, not only the default heartbeat session.
-   - One resolver, shared by the compaction, the threshold and `openclaw status`. `/compact` already uses the
-     session's model and must keep doing so; auto-compaction inside a running turn keeps using that turn's model.
+   - One resolver, shared by the compaction, the threshold and `openclaw status`.
+   - Scope (operator, 2026-11-21, kept small on purpose): this section changes the heartbeat pre-turn compaction
+     only. Left exactly as they are:
+     - `/compact` runs on the session's model. `agents.defaults.compaction.model` stays what it is today: an
+       explicit operator opt-in that replaces the model for `/compact` and for compaction inside a running turn.
+       It never applies to the heartbeat pre-turn compaction.
+     - Compaction inside a running turn (overflow, prune) keeps the running turn's model. Known and accepted: a
+       turn that runs on another model than its session and overflows mid-turn compacts on the turn's model.
+       The pre-turn compaction keeps the session under the threshold, so this is rare. No change in `run.ts`.
    - Bug this replaces: the first build let `heartbeat.model` win over the session's override, so a session
      running on model A was compacted by model B whenever a scheduled wake landed on it.
 3. **Only when idle.** Skip and retry at the next heartbeat if a run is active on that session or the gateway is
