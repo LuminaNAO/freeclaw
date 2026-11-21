@@ -56,8 +56,8 @@ describe("Signal reply path fires message_sent (model-badge ARCH §2c.14)", () =
       order.push(`send:${text}`);
       return { messageId: "1" };
     });
-    const handler = vi.fn((event: { content: string }) => {
-      order.push(`hook:${event.content}`);
+    const handler = vi.fn((...args: unknown[]) => {
+      order.push(`hook:${(args[0] as { content: string }).content}`);
     });
     withHook(handler);
     await deliver(["first", "second"]);
