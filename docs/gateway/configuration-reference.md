@@ -914,6 +914,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `params` merge precedence (config): `agents.defaults.models["provider/model"].params` is the base, then `agents.list[].params` (matching agent id) overrides by key.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 1.
+- `contextTokens`: caps the context window for every session of the agent. The effective window is the lowest of the model's window, this value, and the session's own context limit (see [Per-session context limit](#per-session-context-limit)). It can only lower the model's window, never raise it.
 - `reasoningDefault`: default reasoning display (`on` | `off` | `stream`) when neither `/reasoning` nor the session sets a level. Per-agent `agents.list[].reasoningDefault` overrides it. Unset: reasoning display stays `off` on messaging channels (Signal, WhatsApp, Telegram, Discord, Slack, Teams, iMessage, …) and is never turned on automatically there; non-channel surfaces (CLI, TUI, gateway `agent` method) keep the model-catalog default. See [Thinking Levels](/tools/thinking#default-reasoning-visibility).
 - `silentReply`: how the model stays silent (`tool` | `token`). `tool` (default) offers the `no_reply` tool in runs that have a reply target (inbound channel message, heartbeat, cron with delivery) and teaches it in the system prompt; calling it ends the run and nothing from that run's final reply is delivered (sends already made with the `message` tool still go out). A `NO_REPLY` text reply is still honoured. `token` keeps the old `NO_REPLY` text token and offers no tool. Models without tool support always use the token. Surfaces with `surfaces.<channel>.silentReply` set to `disallow` get neither. Per-agent `agents.list[].silentReply` overrides it.
 
@@ -1546,6 +1547,25 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `maxAgeHours`: default hard max age in hours (`0` disables; providers can override)
 
 </Accordion>
+
+### Per-session context limit
+
+A chat can have its own lower context ceiling, stored on its session entry as `contextLimit` (tokens). It is not a config key: an operator sets it per chat.
+
+- **Effective window**: the lowest of the model's context window, `agents.defaults.contextTokens`, and `contextLimit`. A limit can only lower the window; a value above the model window or the agent cap has no effect.
+- **Applies everywhere the window is used**: the run's model window (so auto-compaction triggers on it), the compaction paths, the context-window guard, `/status`, `/context`, the session's recorded `contextTokens`, and session listings.
+- **Bounds**: a whole number of tokens, at least `16000` (the hard minimum context window). Lower values are refused with the minimum named. Commands also accept `k` and `m` suffixes (`256k`, `0.5m`).
+- **Belongs to the chat**: survives `/new`, `/reset`, compaction, model switches and restarts. It is not inherited: sub-agent, cron and other sessions have their own keys and are unaffected.
+- **Takes effect on the next turn**, no restart. If the chat is already above the new limit, that turn compacts first (with a summary) through the normal auto-compaction path.
+- **Unset** (the default): no limit of its own; the window resolves exactly as before.
+
+Three ways to set it, with the same validation and effect. Only operators (owner senders) can set or clear it:
+
+- Chat command in the chat it applies to: `/context limit <tokens>` sets it, `/context limit default` clears it, `/context limit` shows it with the effective window and its source.
+- Gateway method `sessions.patch` with `contextLimit: <number>`; `contextLimit: null` clears it.
+- Agent tool `session_status` with `contextLimit: "<tokens>"` (or `"default"` to clear), for the current session or a `sessionKey`. Applied only in a turn whose sender is an operator; otherwise it is refused.
+
+`/status` shows the effective window and marks the limit when it is the lowest, for example `Context: 33k/256k (13%) (limit; model 1.0m)`. `openclaw sessions` shows a `ctx-limit:<n>` flag and the effective window; the JSON output and gateway session rows add `contextLimit` and `contextSource` for limited sessions.
 
 ---
 

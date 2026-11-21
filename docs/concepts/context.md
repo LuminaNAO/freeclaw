@@ -161,6 +161,16 @@ select it with `plugins.slots.contextEngine`, OpenClaw delegates context
 assembly, `/compact`, and related subagent context lifecycle hooks to that
 engine instead.
 
+## Per-chat context limit (`/context limit`)
+
+Large-window models let a chat grow very large before it compacts. An operator can give a single chat a lower ceiling:
+
+- `/context limit 256k` sets this chat's limit (plain tokens, or `k` / `m` suffixes such as `0.5m`).
+- `/context limit default` clears it.
+- `/context limit` shows the limit and the effective window with its source.
+
+The effective window is the lowest of the model's window, `agents.defaults.contextTokens`, and the chat's limit, so a limit can only lower it. The minimum is `16000` tokens. The limit takes effect on the next turn: if the chat is already above it, that turn compacts first. It survives `/new`, `/reset`, compaction and model switches, and sub-agents of the chat are not limited. Only operators (owner senders) can use it. Details: [Per-session context limit](/gateway/configuration-reference#per-session-context-limit).
+
 ## What `/context` actually reports
 
 `/context` prefers the latest **run-built** system prompt report when available:

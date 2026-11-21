@@ -82,6 +82,7 @@ Text + native (when enabled):
 - `/allowlist` (list/add/remove allowlist entries)
 - `/approve <id> allow-once|allow-always|deny` (resolve exec approval prompts)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
+- `/context limit [<tokens>|default]` (operators only: show, set or clear this chat's own context limit; accepts `256000`, `256k`, `0.5m`; can only lower the window; see [Per-session context limit](/gateway/configuration-reference#per-session-context-limit))
 - `/export-session [path]` (alias: `/export`) (export current session to HTML with full system prompt)
 - `/whoami` (show your sender id; alias: `/id`)
 - `/session idle <duration|off>` (manage inactivity auto-unbind for thread bindings)
