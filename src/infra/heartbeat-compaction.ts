@@ -2,8 +2,8 @@
  * Heartbeat session compaction (docs/design/heartbeat-compaction.md §2).
  *
  * Before a heartbeat turn, compact the heartbeat session when its context is above the
- * threshold (§3), on the same model the heartbeat turn would use, only when the session
- * is idle and the gateway is not draining. Quiet: one log line, nothing sent to any chat.
+ * threshold (§3), on the session's own model (§2.2, never heartbeat.model), only when the
+ * session is idle and the gateway is not draining. Quiet: one log line, nothing sent to any chat.
  */
 import crypto from "node:crypto";
 import path from "node:path";
@@ -57,7 +57,7 @@ const log = createSubsystemLogger("gateway/heartbeat");
 
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
-export type HeartbeatSessionModel = { provider: string; model: string };
+export type SessionCompactionModel = { provider: string; model: string };
 
 export type HeartbeatCompactionOutcome =
   | { status: "skipped"; reason: HeartbeatCompactionSkipReason }
@@ -74,31 +74,25 @@ export type HeartbeatCompactionSkipReason =
   | "draining";
 
 /**
- * The model the heartbeat turn on this session would use (§2.2). Mirrors getReplyFromConfig:
- * an explicit heartbeat.model wins; otherwise the session's (or its parent's) stored override,
- * then a channel model override, then the agent default.
+ * §2.2: the session's own model, i.e. the model a normal message to that session would run on:
+ * the session's stored model override (or its parent's), else the channel model override, else
+ * the agent default. A stored override outside the model allowlist falls through to the channel
+ * override, then the agent default.
+ *
+ * This is the ONE resolver for the heartbeat compaction model, its threshold window (§3) and the
+ * `openclaw status` line. It deliberately takes no heartbeat config: heartbeat.model (and any other
+ * per-turn or per-job model) only picks the model of the heartbeat turn, never the compaction model.
  */
-export function resolveHeartbeatSessionModel(params: {
+export function resolveSessionCompactionModel(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  heartbeat?: HeartbeatConfig;
   sessionKey: string;
   entry?: SessionEntry;
   store?: Record<string, SessionEntry | undefined>;
-}): HeartbeatSessionModel {
+}): SessionCompactionModel {
   const { cfg, agentId, entry } = params;
   const defaults = resolveDefaultModelForAgent({ cfg, agentId });
   const defaultProvider = defaults.provider;
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
-
-  const heartbeatRaw =
-    params.heartbeat?.model?.trim() || cfg.agents?.defaults?.heartbeat?.model?.trim() || "";
-  if (heartbeatRaw) {
-    const resolved = resolveModelRefFromString({ raw: heartbeatRaw, defaultProvider, aliasIndex });
-    if (resolved) {
-      return { provider: resolved.ref.provider, model: resolved.ref.model };
-    }
-  }
 
   const stored = resolveStoredOverride(entry, params.store, params.sessionKey);
   if (stored) {
@@ -118,26 +112,23 @@ export function resolveHeartbeatSessionModel(params: {
     }
   }
 
-  const hasSessionOverride = Boolean(
-    entry?.modelOverride?.trim() || entry?.providerOverride?.trim(),
-  );
-  if (!hasSessionOverride) {
-    const channelOverride = resolveChannelModelOverride({
-      cfg,
-      channel: entry?.channel ?? entry?.origin?.provider ?? entry?.lastChannel,
-      groupId: entry?.groupId,
-      groupChannel: entry?.groupChannel,
-      groupSubject: entry?.subject,
+  const channelOverride = resolveChannelModelOverride({
+    cfg,
+    channel: entry?.channel ?? entry?.origin?.provider ?? entry?.lastChannel,
+    groupId: entry?.groupId,
+    groupChannel: entry?.groupChannel,
+    groupSubject: entry?.subject,
+    // A thread session inherits its parent group's channel override, like a normal message.
+    parentSessionKey: resolveThreadParentSessionKey(params.sessionKey),
+  });
+  if (channelOverride) {
+    const resolved = resolveModelRefFromString({
+      raw: channelOverride.model,
+      defaultProvider,
+      aliasIndex: buildModelAliasIndex({ cfg, defaultProvider }),
     });
-    if (channelOverride) {
-      const resolved = resolveModelRefFromString({
-        raw: channelOverride.model,
-        defaultProvider,
-        aliasIndex,
-      });
-      if (resolved) {
-        return { provider: resolved.ref.provider, model: resolved.ref.model };
-      }
+    if (resolved) {
+      return { provider: resolved.ref.provider, model: resolved.ref.model };
     }
   }
 
@@ -165,7 +156,7 @@ function resolveStoredOverride(
 /** W: the max context window of the given model (capped by agents.defaults.contextTokens). */
 export function resolveHeartbeatContextWindow(params: {
   cfg: OpenClawConfig;
-  model: HeartbeatSessionModel;
+  model: SessionCompactionModel;
   entry?: SessionEntry;
 }): number {
   const { cfg, model, entry } = params;
@@ -233,7 +224,11 @@ function isSessionBusy(entry: SessionEntry, sessionKey: string): boolean {
   return false;
 }
 
-function resolveThinkLevel(cfg: OpenClawConfig, entry: SessionEntry, model: HeartbeatSessionModel) {
+function resolveThinkLevel(
+  cfg: OpenClawConfig,
+  entry: SessionEntry,
+  model: SessionCompactionModel,
+) {
   return (
     normalizeThinkLevel(entry.thinkingLevel) ??
     resolveThinkingDefault({ cfg, provider: model.provider, model: model.model })
@@ -272,7 +267,7 @@ async function runHeartbeatMemoryFlush(params: {
   sessionFile: string;
   workspaceDir: string;
   agentDir: string;
-  model: HeartbeatSessionModel;
+  model: SessionCompactionModel;
   thinkLevel: ReturnType<typeof resolveThinkLevel>;
 }): Promise<void> {
   const settings = resolveMemoryFlushSettings(params.cfg);
@@ -352,10 +347,9 @@ export async function maybeCompactHeartbeatSession(params: {
     if (!entry?.sessionId) {
       return { status: "skipped", reason: "no-session" };
     }
-    const model = resolveHeartbeatSessionModel({
+    const model = resolveSessionCompactionModel({
       cfg,
       agentId,
-      heartbeat,
       sessionKey,
       entry,
       store,
@@ -503,10 +497,9 @@ export function resolveHeartbeatCompactionStatus(params: {
 }): HeartbeatCompactionStatus {
   const { cfg, agentId, heartbeat, sessionKey, store } = params;
   const entry = store[sessionKey];
-  const model = resolveHeartbeatSessionModel({
+  const model = resolveSessionCompactionModel({
     cfg,
     agentId,
-    heartbeat,
     sessionKey,
     entry,
     store,

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveMainSessionKey } from "../config/sessions.js";
 import { markGatewayDraining, resetAllLanes } from "../process/command-queue.js";
+import { resolveSessionCompactionModel } from "./heartbeat-compaction.js";
 import { resolveHeartbeatCompactionStatusForAgent, runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
@@ -71,8 +72,24 @@ type Scenario = {
   contextWindow?: number;
   heartbeat?: Record<string, unknown>;
   entry?: Record<string, unknown>;
+  /** Extra session entries written next to the heartbeat session. */
+  extraEntries?: Record<string, Record<string, unknown>>;
+  /** Forced session key for the run (a scheduled wake targeting another session). */
+  runSessionKey?: string;
   cfg?: (cfg: OpenClawConfig) => OpenClawConfig;
 };
+
+function testModel(id: string, contextWindow: number) {
+  return {
+    id,
+    name: id,
+    contextWindow,
+    maxTokens: 8192,
+    input: ["text"],
+    reasoning: false,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+}
 
 function compactionsByHeartbeat() {
   return piMocks.compactEmbeddedPiSession.mock.calls.map((call) => call[0]);
@@ -110,24 +127,14 @@ async function withScenario(
             openai: {
               baseUrl: "https://example.invalid/v1",
               models: [
-                {
-                  id: "gpt-test",
-                  name: "gpt-test",
-                  contextWindow: scenario.contextWindow ?? 200_000,
-                  maxTokens: 8192,
-                  input: ["text"],
-                  reasoning: false,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-                {
-                  id: "gpt-small",
-                  name: "gpt-small",
-                  contextWindow: 128_000,
-                  maxTokens: 8192,
-                  input: ["text"],
-                  reasoning: false,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
+                // Agent default (D): 200k → threshold 100k.
+                testModel("gpt-test", scenario.contextWindow ?? 200_000),
+                // Session override (A): 128k → threshold 64k.
+                testModel("gpt-small", 128_000),
+                // heartbeat.model (B): 64k → threshold 32k.
+                testModel("gpt-beat", 64_000),
+                // Channel override (C): 160k → threshold 80k.
+                testModel("gpt-chan", 160_000),
               ],
             },
           },
@@ -153,6 +160,7 @@ async function withScenario(
             compactionCount: 2,
             ...scenario.entry,
           },
+          ...scenario.extraEntries,
         }),
       );
       await fs.writeFile(path.join(tmpDir, `${SESSION_ID}.jsonl`), "");
@@ -164,6 +172,7 @@ async function withScenario(
       const heartbeatOnce = () =>
         runHeartbeatOnce({
           cfg,
+          ...(scenario.runSessionKey ? { sessionKey: scenario.runSessionKey, reason: "wake" } : {}),
           deps: { getQueueSize: () => 0, nowMs: () => 0, sendWhatsApp },
         });
       await run({ cfg, storePath, sessionKey, replySpy, sendWhatsApp, heartbeatOnce });
@@ -257,18 +266,6 @@ describe("runHeartbeatOnce – heartbeat session compaction (ARCH §2, §4)", ()
           expect.objectContaining({ provider: "openai", model: "gpt-small" }),
         );
         expect(piMocks.runEmbeddedPiAgent).toHaveBeenCalledWith(
-          expect.objectContaining({ provider: "openai", model: "gpt-small" }),
-        );
-      },
-    );
-  });
-
-  it("uses heartbeat.model when set, like the turn itself", async () => {
-    await withScenario(
-      { totalTokens: 70_000, heartbeat: { model: "openai/gpt-small" } },
-      async ({ heartbeatOnce }) => {
-        await heartbeatOnce();
-        expect(compactionsByHeartbeat()[0]).toEqual(
           expect.objectContaining({ provider: "openai", model: "gpt-small" }),
         );
       },
@@ -403,6 +400,328 @@ describe("runHeartbeatOnce – heartbeat session compaction (ARCH §2, §4)", ()
       );
       expect(compactionLogLines()).toHaveLength(1);
     });
+  });
+});
+
+const MODEL_A = { provider: "openai", model: "gpt-small" }; // session override, 128k → 64k
+const MODEL_B = "openai/gpt-beat"; // heartbeat.model, 64k → 32k
+const MODEL_C = { provider: "openai", model: "gpt-chan" }; // channel override, 160k → 80k
+const MODEL_D = { provider: "openai", model: "gpt-test" }; // agent default, 200k → 100k
+
+function withChannelOverride(groupId: string, model: string) {
+  return (cfg: OpenClawConfig): OpenClawConfig => ({
+    ...cfg,
+    channels: { ...cfg.channels, modelByChannel: { whatsapp: { [groupId]: model } } },
+  });
+}
+
+function withAllowlist(models: string[]) {
+  return (cfg: OpenClawConfig): OpenClawConfig => ({
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models: Object.fromEntries(models.map((model) => [model, {}])),
+      },
+    },
+  });
+}
+
+function heartbeatTurnOptions(replySpy: ReturnType<typeof vi.spyOn>) {
+  return replySpy.mock.calls[0]?.[1];
+}
+
+describe("heartbeat compaction model: the session's own model, never heartbeat.model (ARCH §2.2, §4)", () => {
+  it("session override A + heartbeat.model B → compaction, threshold and status all use A", async () => {
+    // 50k: over B's threshold (32k), under A's (64k) → the threshold must come from A.
+    await withScenario(
+      {
+        totalTokens: 50_000,
+        heartbeat: { model: MODEL_B },
+        entry: { providerOverride: "openai", modelOverride: "gpt-small" },
+      },
+      async ({ cfg, heartbeatOnce }) => {
+        await heartbeatOnce();
+        expect(piMocks.compactEmbeddedPiSession).not.toHaveBeenCalled();
+        expect(resolveHeartbeatCompactionStatusForAgent(cfg, "main")?.threshold).toBe(64_000);
+      },
+    );
+    await withScenario(
+      {
+        totalTokens: 70_000,
+        heartbeat: { model: MODEL_B },
+        entry: { providerOverride: "openai", modelOverride: "gpt-small" },
+      },
+      async ({ heartbeatOnce, replySpy }) => {
+        await heartbeatOnce();
+        expect(piMocks.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
+        expect(compactionsByHeartbeat()[0]).toEqual(expect.objectContaining(MODEL_A));
+        expect(piMocks.runEmbeddedPiAgent).toHaveBeenCalledWith(expect.objectContaining(MODEL_A));
+        expect(compactionLogLines()).toEqual([
+          expect.stringContaining("(threshold 64000, model openai/gpt-small)"),
+        ]);
+        // The heartbeat turn itself still runs on heartbeat.model (unchanged by §2.2).
+        expect(heartbeatTurnOptions(replySpy)).toEqual(
+          expect.objectContaining({ isHeartbeat: true, heartbeatModelOverride: MODEL_B }),
+        );
+      },
+    );
+  });
+
+  it("no session override, channel override C, heartbeat.model B → C", async () => {
+    // 70k: under C's threshold (80k) but over B's (32k) → no compaction.
+    await withScenario(
+      {
+        totalTokens: 70_000,
+        heartbeat: { model: MODEL_B },
+        entry: { groupId: "team-room" },
+        cfg: withChannelOverride("team-room", "openai/gpt-chan"),
+      },
+      async ({ heartbeatOnce }) => {
+        await heartbeatOnce();
+        expect(piMocks.compactEmbeddedPiSession).not.toHaveBeenCalled();
+      },
+    );
+    // 90k: over C's threshold (80k), under D's (100k), far over B's (32k).
+    await withScenario(
+      {
+        totalTokens: 90_000,
+        heartbeat: { model: MODEL_B },
+        entry: { groupId: "team-room" },
+        cfg: withChannelOverride("team-room", "openai/gpt-chan"),
+      },
+      async ({ cfg, heartbeatOnce, replySpy }) => {
+        expect(resolveHeartbeatCompactionStatusForAgent(cfg, "main")?.threshold).toBe(80_000);
+        await heartbeatOnce();
+        expect(piMocks.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
+        expect(compactionsByHeartbeat()[0]).toEqual(expect.objectContaining(MODEL_C));
+        expect(piMocks.runEmbeddedPiAgent).toHaveBeenCalledWith(expect.objectContaining(MODEL_C));
+        expect(heartbeatTurnOptions(replySpy)).toEqual(
+          expect.objectContaining({ heartbeatModelOverride: MODEL_B }),
+        );
+      },
+    );
+  });
+
+  it("no overrides, agent default D, heartbeat.model B → D", async () => {
+    // 50k: over B's threshold (32k), under D's (100k).
+    await withScenario(
+      { totalTokens: 50_000, heartbeat: { model: MODEL_B } },
+      async ({ cfg, heartbeatOnce }) => {
+        expect(resolveHeartbeatCompactionStatusForAgent(cfg, "main")?.threshold).toBe(100_000);
+        await heartbeatOnce();
+        expect(piMocks.compactEmbeddedPiSession).not.toHaveBeenCalled();
+      },
+    );
+    await withScenario(
+      { totalTokens: 150_000, heartbeat: { model: MODEL_B } },
+      async ({ heartbeatOnce, replySpy }) => {
+        await heartbeatOnce();
+        expect(piMocks.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
+        expect(compactionsByHeartbeat()[0]).toEqual(expect.objectContaining(MODEL_D));
+        expect(piMocks.runEmbeddedPiAgent).toHaveBeenCalledWith(expect.objectContaining(MODEL_D));
+        expect(heartbeatTurnOptions(replySpy)).toEqual(
+          expect.objectContaining({ heartbeatModelOverride: MODEL_B }),
+        );
+      },
+    );
+  });
+
+  it("parent session override is inherited (thread session forced by a wake)", async () => {
+    const threadKey = "agent:main:main:thread:t1";
+    await withScenario(
+      {
+        heartbeat: { model: MODEL_B },
+        entry: { providerOverride: "openai", modelOverride: "gpt-small" },
+        extraEntries: {
+          [threadKey]: {
+            sessionId: "thread-session",
+            updatedAt: 1,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+            totalTokens: 70_000,
+            totalTokensFresh: true,
+          },
+        },
+        runSessionKey: threadKey,
+      },
+      async ({ heartbeatOnce }) => {
+        await heartbeatOnce();
+        expect(piMocks.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
+        expect(compactionsByHeartbeat()[0]).toEqual(
+          expect.objectContaining({
+            sessionId: "thread-session",
+            sessionKey: threadKey,
+            ...MODEL_A,
+          }),
+        );
+      },
+    );
+  });
+
+  it("an override not in the model allowlist falls through to the channel override, never to heartbeat.model", async () => {
+    // heartbeat.model B is allowlisted on purpose: it must still not be picked.
+    await withScenario(
+      {
+        totalTokens: 90_000,
+        heartbeat: { model: MODEL_B },
+        entry: { providerOverride: "openai", modelOverride: "gpt-small", groupId: "team-room" },
+        cfg: (cfg) =>
+          withAllowlist(["openai/gpt-test", "openai/gpt-chan", MODEL_B])(
+            withChannelOverride("team-room", "openai/gpt-chan")(cfg),
+          ),
+      },
+      async ({ cfg, heartbeatOnce }) => {
+        expect(resolveHeartbeatCompactionStatusForAgent(cfg, "main")?.threshold).toBe(80_000);
+        await heartbeatOnce();
+        expect(compactionsByHeartbeat()[0]).toEqual(expect.objectContaining(MODEL_C));
+      },
+    );
+  });
+
+  it("an override not in the model allowlist, no channel override → agent default, never heartbeat.model", async () => {
+    await withScenario(
+      {
+        totalTokens: 50_000,
+        heartbeat: { model: MODEL_B },
+        entry: { providerOverride: "openai", modelOverride: "gpt-small" },
+        cfg: withAllowlist(["openai/gpt-test", MODEL_B]),
+      },
+      async ({ cfg, heartbeatOnce }) => {
+        expect(resolveHeartbeatCompactionStatusForAgent(cfg, "main")?.threshold).toBe(100_000);
+        await heartbeatOnce();
+        // Under D's threshold; with A it would compact at 64k, with B at 32k.
+        expect(piMocks.compactEmbeddedPiSession).not.toHaveBeenCalled();
+      },
+    );
+    await withScenario(
+      {
+        totalTokens: 150_000,
+        heartbeat: { model: MODEL_B },
+        entry: { providerOverride: "openai", modelOverride: "gpt-small" },
+        cfg: withAllowlist(["openai/gpt-test", MODEL_B]),
+      },
+      async ({ heartbeatOnce }) => {
+        await heartbeatOnce();
+        expect(compactionsByHeartbeat()[0]).toEqual(expect.objectContaining(MODEL_D));
+      },
+    );
+  });
+
+  it("a wake that forces another session key compacts that session on its own model", async () => {
+    const otherKey = "agent:main:whatsapp:group:ops-room";
+    await withScenario(
+      {
+        // The default heartbeat session is also over its threshold but is not the target.
+        totalTokens: 150_000,
+        heartbeat: { model: MODEL_B },
+        extraEntries: {
+          [otherKey]: {
+            sessionId: "other-session",
+            updatedAt: 1,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+            providerOverride: "openai",
+            modelOverride: "gpt-small",
+            totalTokens: 70_000,
+            totalTokensFresh: true,
+          },
+        },
+        runSessionKey: otherKey,
+      },
+      async ({ heartbeatOnce, replySpy }) => {
+        await heartbeatOnce();
+        expect(piMocks.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
+        expect(compactionsByHeartbeat()[0]).toEqual(
+          expect.objectContaining({
+            sessionId: "other-session",
+            sessionKey: otherKey,
+            trigger: "heartbeat",
+            ...MODEL_A,
+          }),
+        );
+        expect(piMocks.runEmbeddedPiAgent).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: "other-session", ...MODEL_A }),
+        );
+        // The turn on that session still runs with heartbeat.model.
+        expect(replySpy.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({ SessionKey: otherKey }),
+        );
+        expect(heartbeatTurnOptions(replySpy)).toEqual(
+          expect.objectContaining({ isHeartbeat: true, heartbeatModelOverride: MODEL_B }),
+        );
+      },
+    );
+  });
+});
+
+describe("resolveSessionCompactionModel (ARCH §2.2)", () => {
+  const cfg = {
+    agents: { defaults: { model: "openai/gpt-test" } },
+    channels: { modelByChannel: { whatsapp: { "team-room": "openai/gpt-chan" } } },
+  } as OpenClawConfig;
+
+  it("stored override wins over the channel override", () => {
+    expect(
+      resolveSessionCompactionModel({
+        cfg,
+        agentId: "main",
+        sessionKey: "agent:main:whatsapp:group:team-room",
+        entry: {
+          sessionId: "s",
+          updatedAt: 1,
+          lastChannel: "whatsapp",
+          groupId: "team-room",
+          providerOverride: "openai",
+          modelOverride: "gpt-small",
+        },
+      }),
+    ).toEqual(MODEL_A);
+  });
+
+  it("inherits the parent session's override", () => {
+    const parentKey = "agent:main:whatsapp:group:team-room";
+    expect(
+      resolveSessionCompactionModel({
+        cfg,
+        agentId: "main",
+        sessionKey: `${parentKey}:thread:t1`,
+        entry: { sessionId: "t", updatedAt: 1 },
+        store: {
+          [parentKey]: {
+            sessionId: "p",
+            updatedAt: 1,
+            providerOverride: "openai",
+            modelOverride: "gpt-small",
+          },
+        },
+      }),
+    ).toEqual(MODEL_A);
+  });
+
+  it("a thread session picks up its parent group's channel override", () => {
+    expect(
+      resolveSessionCompactionModel({
+        cfg,
+        agentId: "main",
+        sessionKey: "agent:main:whatsapp:group:team-room:thread:t1",
+        entry: { sessionId: "t", updatedAt: 1, lastChannel: "whatsapp" },
+      }),
+    ).toEqual(MODEL_C);
+  });
+
+  it("falls back to the agent default", () => {
+    expect(
+      resolveSessionCompactionModel({
+        cfg,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        entry: { sessionId: "m", updatedAt: 1, lastChannel: "whatsapp" },
+      }),
+    ).toEqual(MODEL_D);
   });
 });
 
