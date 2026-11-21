@@ -8,7 +8,7 @@ import type { Requester, StyleRule, StyleRuleInput } from "./core/style.js";
 // here, on the authenticated sender id the gateway passes in (never on anything the
 // model writes): operators may do everything; group members may act on the group they
 // are in (style rules with that group's targetId, repaint, regenerate, restore, status,
-// audit);
+// audit, picture);
 // global rules, other groups, the profile and purge are operator-only.
 
 export const ACTIONS = [
@@ -24,6 +24,8 @@ export const ACTIONS = [
   "restore",
   "audit",
   "purge",
+  // ARCH §2c.14: the members' answer to "do you want a group picture?".
+  "picture",
 ] as const;
 export type Action = (typeof ACTIONS)[number];
 
@@ -40,6 +42,9 @@ export type ActionArgs = {
   ids?: string[];
   // purge: must be true.
   confirm?: boolean;
+  // picture: the members' answer and, optionally, what the group is for (one sentence).
+  decision?: string;
+  purpose?: string;
 };
 
 // Who is asking and from where. `senderId` is the gateway's authenticated sender id;
@@ -184,6 +189,10 @@ export function createActions(deps: ActionDeps) {
     if (s.waiting) {
       lines.push(`Waiting: ${s.waiting.reason}`);
     }
+    // ARCH §2c.14: picture: pending | asked | accepted | declined (reason).
+    if (s.picture) {
+      lines.push(`Picture: ${s.picture}`);
+    }
     if (s.queuePosition >= 0) {
       lines.push(`Queued at position ${s.queuePosition + 1}`);
     }
@@ -305,6 +314,42 @@ export function createActions(deps: ActionDeps) {
             ? "The group's own artwork is already in use."
             : "Restore queued: the group's own artwork is back.";
     return { ok: true, text, details: { ...r, ok: true, target: key } };
+  }
+
+  // ARCH §2c.14: `picture yes|no [target] [purpose]`. A member for their own group,
+  // operators anywhere (an operator can declare a new group's purpose before first sight).
+  async function picture(ctx: ActionContext, args: ActionArgs, role: Role): Promise<ActionResult> {
+    if (role.kind === "none") {
+      return refuse(whyText(role, "picture"), WHO_MEMBER);
+    }
+    const decision = String(args.decision ?? "").toLowerCase();
+    if (decision !== "yes" && decision !== "no") {
+      return fail("Usage: /badge picture yes|no [this|<target>] [purpose]");
+    }
+    const e = engineOr(ctx);
+    if (!e) {
+      return fail("Run this in the channel whose group you mean.");
+    }
+    const key = keyOf(ctx, args.target);
+    if (!key) {
+      return fail("Usage: /badge picture yes|no [this|<target>] [purpose]");
+    }
+    if (key === "profile:profile") {
+      return fail("The profile picture is not asked about; only groups are.");
+    }
+    const denied = scopeCheck(role, key, "picture");
+    if (denied) {
+      return denied;
+    }
+    const r = await e.picture(key, decision, args.purpose);
+    if (!r.ok) {
+      return fail(`Not changed: ${r.message}.`, { target: key });
+    }
+    const text =
+      r.state === "accepted"
+        ? "Thanks: the group gets a picture."
+        : "Understood: this group gets no picture and is not asked again.";
+    return { ok: true, text, details: { ok: true, target: key, picture: r.state } };
   }
 
   async function audit(ctx: ActionContext, role: Role): Promise<ActionResult> {
@@ -453,6 +498,8 @@ export function createActions(deps: ActionDeps) {
         return targetAction(action, ctx, args, role);
       case "audit":
         return audit(ctx, role);
+      case "picture":
+        return picture(ctx, args, role);
       case "purge": {
         // Destructive: operator-only by slash command and tool alike (§2c.1).
         if (role.kind !== "operator") {

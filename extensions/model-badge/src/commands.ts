@@ -55,6 +55,10 @@ export const SLASH_SUBCOMMANDS: Record<
   restore: { action: "restore", parse: (r) => ok({ target: r[0] }) },
   audit: { action: "audit", parse: () => ok() },
   purge: { action: "purge", parse: (r) => ok({ confirm: r[0] === "confirm" }) },
+  // ARCH §2c.14: `/badge picture yes|no [target] [purpose]`. The word after the decision
+  // is a target when it is "this", "group:<id>" or a single id-like token followed by
+  // nothing or more words; anything else starts the purpose.
+  picture: { action: "picture", parse: (r) => parsePicture(r) },
   "style list": { action: "style.list", parse: () => ok() },
   "style preview": {
     action: "style.preview",
@@ -76,8 +80,27 @@ export const SLASH_SUBCOMMANDS: Record<
 
 const USAGE =
   "Usage: /badge status [all|<target>] | repaint [this|<target>|profile] | audit | " +
-  "regenerate [this|<target>|profile] | restore [this|<target>] | purge confirm | style list | style preview <json> | " +
+  "regenerate [this|<target>|profile] | restore [this|<target>] | purge confirm | " +
+  "picture yes|no [this|<target>] [purpose] | style list | style preview <json> | " +
   "style add <json> | style remove <id…> | style reset";
+
+// A target word: "this", "group:<id>", or a long opaque id (group ids are base64-like).
+function isTargetWord(w: string | undefined): boolean {
+  return (
+    w !== undefined && (w === "this" || /^group:\S+$/i.test(w) || /^[A-Za-z0-9+/=_-]{16,}$/.test(w))
+  );
+}
+
+function parsePicture(rest: string[]): Parsed {
+  const [decision, ...more] = rest;
+  const d = String(decision ?? "").toLowerCase();
+  if (d !== "yes" && d !== "no") {
+    return { ok: false, text: "Usage: /badge picture yes|no [this|<target>] [purpose]" };
+  }
+  const target = isTargetWord(more[0]) ? more.shift() : undefined;
+  const purpose = more.join(" ").trim();
+  return ok({ decision: d, ...(target ? { target } : {}), ...(purpose ? { purpose } : {}) });
+}
 
 // The engine for the channel the command came from, else the only engine.
 export function engineFor(engines: Engine[], channel: string | undefined): Engine | null {

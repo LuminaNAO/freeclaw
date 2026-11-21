@@ -29,7 +29,9 @@ export const TOOL_DESCRIPTION =
   "check its status. Actions: status (this chat; operators may pass all), style.list, " +
   "style.preview, style.add, style.remove, style.reset, repaint, regenerate (a new picture " +
   "from the image model; replaces a group's own adopted artwork), restore (puts the " +
-  "group's own artwork back), audit, purge (operator-only, needs confirm). A group's own " +
+  "group's own artwork back), audit, purge (operator-only, needs confirm), picture " +
+  '(decision "yes"|"no" and purpose?: the members\' answer when you asked whether a group ' +
+  "wants a picture). A group's own " +
   "artwork is kept as its background: restyling does not replace it, only regenerate " +
   "does, so say so before regenerating. Always call " +
   "style.preview first (no side effects; shows which models/targets change, with sample " +
@@ -104,6 +106,16 @@ export function createBadgeTool(
       confirm: Type.Optional(
         Type.Boolean({ description: "purge: true only after the operator confirmed." }),
       ),
+      decision: Type.Optional(
+        Type.Union([Type.Literal("yes"), Type.Literal("no")], {
+          description: "picture: the members' answer to whether the group wants a picture.",
+        }),
+      ),
+      purpose: Type.Optional(
+        Type.String({
+          description: "picture: what the group is for, one sentence (at most 300 characters).",
+        }),
+      ),
     }),
     async execute(_id: string, args: Record<string, unknown>) {
       const raw = args.action;
@@ -125,6 +137,8 @@ export function createBadgeTool(
           rules: (Array.isArray(args.rules) ? args.rules : []) as StyleRuleInput[],
           ids: Array.isArray(args.ids) ? args.ids.map(String) : [],
           confirm: args.confirm === true,
+          ...(typeof args.decision === "string" ? { decision: args.decision } : {}),
+          ...(typeof args.purpose === "string" ? { purpose: args.purpose } : {}),
         },
         { senderId: params.senderId ? String(params.senderId) : null, engine, here },
       );
