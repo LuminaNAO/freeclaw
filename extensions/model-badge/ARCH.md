@@ -238,6 +238,55 @@ fallback for hosts with no image model at all.
       photo word; `imageGen.style` override and empty-string paths; tag bump regenerates generated bases only;
       steered prompt keeps member words first and the clause last.
 
+14. **Ask before painting a group we know nothing about (operator, 2026-11-21).** §2c.11 paints every new
+    no-avatar group from its name alone. That is right when this agent made the group (it seeded the purpose) and
+    wrong when it was added to somebody else's bare group: a name says little and nobody asked for a picture. New
+    rule for a target first seen with **no avatar** (groups only; the profile, adopted art §2c.8, excluded groups
+    and targets already painted or adopted before this change are untouched). It supersedes §2c.11's trigger for
+    unknown-purpose groups: the writer is not called until the target is accepted or its purpose is known.
+    - **Purpose known → paint, no question.** Known = group memory says so: `resolveGroupPurpose` (group-memory
+      ARCH §9) returns `known`. Its text is given to the §2c.11 writer as the first snippet (ahead of memory
+      search), with the same validation and the same private-imageGen boundary. A target with operator config
+      `targets.<id>.base: generate` also paints without a question.
+    - **Purpose unknown → `picture: pending`.** Nothing is painted (not even vector) and the extension sends
+      nothing. While pending, each periodic pass and each group-memory event re-reads the purpose; the moment it is
+      known the target paints as above (covers a creator that seeds context shortly after creating the group).
+    - **The agent asks, once, in its own reply.** On the agent's next turn in that group's session (per-turn
+      context for that session only, via the prompt-build hook) it is told: this group has no picture and its
+      purpose is unknown; in this reply ask once, in one short line and in the group's language, whether the
+      members want a group picture and what the group is for; never ask again. The extension never posts by itself
+      and never starts a turn: a group where the agent is never addressed is never asked and never painted. When a
+      reply of that turn is delivered to the group the state becomes `asked`; a turn that sends nothing stays
+      `pending`.
+    - **The answer.** While `asked`, the agent's turns in that group carry one line: if a member has answered, call
+      `model_badge` action `picture` with `{ decision: "yes" | "no", purpose? }` and record the purpose in the
+      group's memory (group-memory §4); otherwise do not mention it. `yes` → `accepted`: the purpose (one sentence,
+      at most 300 characters, stored in the state dir, never logged) is the writer's first snippet, then paint as
+      §2c.11. `no` → `declined`: never painted, never asked again. No answer within `ask.expireMs` (default 7 days)
+      → `declined (no-answer)` and the line stops. Purpose becoming known in group memory while `asked` does not
+      paint: after asking, only an answer does.
+    - **Tool and slash.** New action `picture` (slash `/badge picture yes|no [target] [purpose]`, §2c.1 parity).
+      Authority as §2c.2: a member for their own group, operators anywhere (so an operator, or the agent acting in
+      an operator's turn, can declare a group's purpose when creating it). An explicit `regenerate` by a member or
+      operator on a `pending`, `asked` or `declined` target counts as `yes` (they asked for a picture). `status`
+      shows `picture: pending | asked | accepted | declined (reason)` per target.
+    - **Config:** `ask.mode: "ask" | "paint" | "skip"` (default `ask`). `paint` = the §2c.11 behaviour before this
+      section (name-only scene, no question). `skip` = unknown-purpose groups are never painted and never asked.
+      `ask.expireMs`. Schema, uiHints and README updated.
+    - **State** survives restarts (state dir, per target); a removed target drops it (§3.3). The two agent texts
+      are fixed in code, short, and carry no group name, member names or ids.
+    - **Accepted consequence:** groups that never get an agent turn of this kind and have no group memory (e.g.
+      short-lived work groups made by the swarm extension) stay unpainted in `ask` mode.
+    - Tests: no avatar + purpose known → painted, writer got the purpose first, no text injected; no avatar +
+      unknown → nothing applied, nothing sent, pending; purpose appears while pending → painted without asking; a
+      turn in that session gets the ask text, other sessions and direct chats never do; delivered reply → asked,
+      silent turn stays pending; `picture yes` with purpose → writer input, painted; `picture no` → never painted,
+      no more text; expiry → declined, text stops; purpose known while asked → still not painted; member of another
+      group refused, operator allowed; `regenerate` on pending/asked/declined paints; `ask.mode` paint and skip;
+      adopted-art, excluded, profile and already-painted targets never asked; state survives restart; slash/tool
+      parity; injected texts contain no name or id (fixture asserts); non-private imageGen → purpose never in a
+      prompt (motif scene). Existing §2c.11 tests seed a purpose or set `ask.mode: paint`.
+
 ## 3. Lifecycle (generated and removed as the world changes)
 
 1. **Turn on** (`plugins.entries.model-badge.enabled` + provider config): first reconcile generates the required

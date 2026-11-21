@@ -86,3 +86,20 @@ Other features hang off it instead of each inventing their own detection.
 3. **No content leaves the folder.** The event carries the name and the path, never chat content or member ids.
 4. Tests: event fires once on creation and once per rename, never on ordinary updates; a throwing handler does not
    affect message handling; starter `CONTEXT.md` written only when absent and never overwrites.
+
+## 9. Purpose read for other features (operator, 2026-11-21)
+
+Features that need to know whether a group's purpose is known (first user: model-badge ARCH §2c.14) ask group memory
+instead of parsing the folder themselves.
+
+1. `resolveGroupPurpose({ cfg, agentId, channel, groupId }) → { known: boolean, text: string }`, beside the other
+   helpers in `src/agents/group-memory.ts`, exported through the plugin SDK surface of the bundled plugin that uses it.
+   It resolves the folder exactly as §2 does (same id encoding, same `contextFile` override, same legacy-layout
+   handling) and never creates or changes anything.
+2. `known` is true when `meta.json` has a non-empty `description`, or the context file exists and has content other
+   than the §8.2 starter. The starter (with or without its heading) and an empty file are not known.
+3. `text` = the description (if any) plus the context file's text without its first heading, cut to 800 characters.
+   Never `history.md`, never member ids. Empty when not known.
+4. Group memory disabled (§5) → `{ known: false, text: "" }`.
+5. Tests: starter only → not known; edited context → known with its text; description only → known; `contextFile`
+   override honoured; legacy-layout folder resolved; disabled → not known; never writes.
