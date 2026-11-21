@@ -133,6 +133,8 @@ describe("one agent tool covers every /badge subcommand (ARCH §2c.1)", () => {
         "restore",
         "audit",
         "purge",
+        // ARCH §2c.14
+        "picture",
         "style list",
         "style preview",
         "style add",

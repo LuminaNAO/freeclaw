@@ -323,6 +323,8 @@ export type WorldOpts = {
   limits?: Record<string, number>;
   profile?: boolean;
   store?: Record<string, unknown>;
+  // ARCH §2c.14: what group memory knows of each group's purpose, by target id.
+  purposes?: Record<string, string>;
 };
 
 export async function createWorld(opts: WorldOpts = {}) {
@@ -345,8 +347,16 @@ export async function createWorld(opts: WorldOpts = {}) {
     operators: ["+10000000002"],
     timing: { ...opts.timing },
     limits: { ...opts.limits },
+    // ARCH §2c.14: tests written before asking existed paint new no-avatar groups as
+    // they did (`ask.mode: paint`); §2c.14 tests set `ask` themselves.
+    ask: { mode: "paint" },
     ...opts.plugin,
   };
+  // ARCH §2c.14: group memory's purpose per group (read-only seam of resolveGroupPurpose).
+  const purposes = new Map<string, string>(
+    Object.entries(opts.purposes ?? {}).map(([id, text]) => [id.toLowerCase(), text]),
+  );
+  const purposeReads: string[] = [];
   let defaultModel = opts.defaultModel ?? "prov/fable-model";
   let extraGateway: Record<string, unknown> = {};
   const writeGateway = () =>
@@ -389,6 +399,14 @@ export async function createWorld(opts: WorldOpts = {}) {
       writeGateway();
     },
     pluginConfig: () => pluginConfig,
+    setPurpose(id: string, text: string | null) {
+      if (text === null) {
+        purposes.delete(id.toLowerCase());
+      } else {
+        purposes.set(id.toLowerCase(), text);
+      }
+    },
+    purposeReads: () => [...purposeReads],
     store: () =>
       fs.exists(paths.sessionsStore)
         ? fs.getJson<Record<string, unknown>>(paths.sessionsStore)
@@ -451,6 +469,11 @@ export async function createWorld(opts: WorldOpts = {}) {
         renderer,
         imageGenerator: extra.imageGenerator ?? null,
         sceneWriter: extra.sceneWriter ?? null,
+        purposeOf: (ref) => {
+          purposeReads.push(ref.idLower);
+          const text = purposes.get(ref.idLower) ?? "";
+          return { known: Boolean(text), text };
+        },
         random: () => 0,
         hostname: "test-host",
         instanceId: extra.instanceId ?? `inst-${w.engines.length + 1}`,

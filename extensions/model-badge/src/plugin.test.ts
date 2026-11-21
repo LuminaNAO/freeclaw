@@ -47,7 +47,8 @@ describe("plugin registration (ARCH §5.1)", () => {
       services: ["model-badge"],
       commands: ["badge"],
       tools: [BADGE_TOOL, STYLE_TOOL],
-      hooks: ["session_start", "group_memory_created"],
+      // ARCH §2c.14: the ask reaches a pending group's own turn; delivery from message_sent.
+      hooks: ["session_start", "group_memory_created", "before_prompt_build", "message_sent"],
     });
   });
 
@@ -60,6 +61,7 @@ describe("plugin registration (ARCH §5.1)", () => {
     expect(props).toEqual(
       [
         "agentId",
+        "ask",
         "badges",
         "imageGen",
         "limits",
@@ -318,6 +320,8 @@ describe.skipIf(!rasteriser)(
               enabled: true,
               config: {
                 badges: [{ pattern: "fable", letter: "F", color: "#FFD700" }],
+                // Written before §2c.14: new no-avatar groups paint without asking.
+                ask: { mode: "paint" },
                 timing: {
                   watchMs: 100,
                   debounceMs: 100,

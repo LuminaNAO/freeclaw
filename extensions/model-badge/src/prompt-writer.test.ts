@@ -751,7 +751,12 @@ describe("plugin wiring (ARCH §2c.11)", () => {
         on: ((name: string, fn: (event: unknown) => unknown) => void hooks.set(name, fn)) as never,
       }),
     );
-    expect([...hooks.keys()].toSorted()).toEqual(["group_memory_created", "session_start"]);
+    expect([...hooks.keys()].toSorted()).toEqual([
+      "before_prompt_build",
+      "group_memory_created",
+      "message_sent",
+      "session_start",
+    ]);
     // Before the service starts, an event is a no-op (never throws).
     await expect(
       Promise.resolve(
