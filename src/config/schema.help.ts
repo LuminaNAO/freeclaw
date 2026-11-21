@@ -233,9 +233,9 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.defaults.heartbeat.compactAt":
-    'Compact the heartbeat session before a heartbeat turn once its context passes this many tokens. Default: min(100000, half the model context window); explicit values are clamped to min(150000, half the window). Set "off" to disable.',
+    "Compact the heartbeat session before a heartbeat turn once its context passes this many tokens. Compaction runs on the session's own model (never heartbeat.model). Default: min(100000, half that model's context window); explicit values are clamped to min(150000, half the window). Set \"off\" to disable.",
   "agents.list[].heartbeat.compactAt":
-    'Compact the heartbeat session before a heartbeat turn once its context passes this many tokens. Default: min(100000, half the model context window); explicit values are clamped to min(150000, half the window). Set "off" to disable.',
+    "Compact the heartbeat session before a heartbeat turn once its context passes this many tokens. Compaction runs on the session's own model (never heartbeat.model). Default: min(100000, half that model's context window); explicit values are clamped to min(150000, half the window). Set \"off\" to disable.",
   "agents.defaults.heartbeat.compactInstructions":
     "Optional custom instructions passed to the compaction that runs before a heartbeat turn.",
   "agents.list[].heartbeat.compactInstructions":

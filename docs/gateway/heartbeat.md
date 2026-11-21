@@ -211,7 +211,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 ### Field notes
 
 - `every`: heartbeat interval (duration string; default unit = minutes).
-- `model`: optional model override for heartbeat runs (`provider/model`).
+- `model`: optional model override for heartbeat runs (`provider/model`). It applies to the heartbeat turn only; heartbeat session compaction always runs on the session's own model (see `compactAt`).
 - `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
 - `session`: optional session key for heartbeat runs.
@@ -230,7 +230,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `prompt`: overrides the default prompt body (not merged).
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
-- `compactAt`: heartbeat session compaction threshold in tokens. Before each heartbeat turn, if the heartbeat session's context is above it, the session is compacted first (same compaction as `/compact`, memory flush included) on the model the heartbeat turn uses, then the turn runs on the compacted session. Default (unset): `min(100000, half the model's context window)`; explicit values are clamped to `min(150000, half the window)`. Skipped while a run is active on the session or the gateway is draining (retried at the next heartbeat). Quiet: one log line, nothing sent to chats; `openclaw status` shows the heartbeat session size, threshold and last compaction. Set `"off"` to disable.
+- `compactAt`: heartbeat session compaction threshold in tokens. Before each heartbeat turn, if the heartbeat session's context is above it, the session is compacted first (same compaction as `/compact`, memory flush included) on the session's own model (the model a normal message to that session would run on: its stored model override or its parent's, else the channel model override, else the agent default), then the turn runs on the compacted session. `model` (the heartbeat turn model) is never used for compaction, so a session is never compacted by a different model than its own. Default (unset): `min(100000, half the session model's context window)`; explicit values are clamped to `min(150000, half the window)`. Skipped while a run is active on the session or the gateway is draining (retried at the next heartbeat). Quiet: one log line, nothing sent to chats; `openclaw status` shows the heartbeat session size, threshold and last compaction. Set `"off"` to disable.
 - `compactInstructions`: optional custom instructions passed to that compaction.
 - `activeHours`: restricts heartbeat runs to a time window. Object with `start` (HH:MM, inclusive; use `00:00` for start-of-day), `end` (HH:MM exclusive; `24:00` allowed for end-of-day), and optional `timezone`.
   - Omitted or `"user"`: uses your `agents.defaults.userTimezone` if set, otherwise falls back to the host system timezone.
@@ -390,4 +390,5 @@ only want internal state updates.
 
 Long-lived heartbeat sessions are compacted automatically before a turn once
 they pass `compactAt` (default 100k tokens, or half the model window if smaller),
-so their context, and with it the per-turn cost, stays bounded.
+so their context, and with it the per-turn cost, stays bounded. That compaction
+runs on the session's own model, not on a cheaper heartbeat `model`.

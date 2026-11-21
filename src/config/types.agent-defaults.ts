@@ -280,7 +280,8 @@ export type AgentDefaultsConfig = {
     lightContext?: boolean;
     /**
      * Compact the heartbeat session before a heartbeat turn once its context is above this many
-     * tokens. Default (unset): min(100k, half the model's context window). Explicit values are
+     * tokens. Compaction runs on the session's own model, never on heartbeat.model.
+     * Default (unset): min(100k, half that model's context window). Explicit values are
      * clamped to min(150k, half the window). "off" disables heartbeat compaction.
      */
     compactAt?: number | "off";
