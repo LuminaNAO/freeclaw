@@ -258,6 +258,17 @@ fallback for hosts with no image model at all.
       and never starts a turn: a group where the agent is never addressed is never asked and never painted. When a
       reply of that turn is delivered to the group the state becomes `asked`; a turn that sends nothing stays
       `pending`.
+    - **How delivery is known (core prerequisite, operator 2026-11-21).** The extension learns of a delivered
+      reply from the `message_sent` plugin hook, never from model output. Signal's reply path (`deliverReplies` in
+      src/signal/monitor.ts) fires that hook after each send, the way src/infra/outbound/deliver.ts and Telegram
+      already do: `success: true` once the send returned, `success: false` with the error when it threw (the error
+      still propagates as today). Fire-and-forget: a failing or slow hook never affects delivery.
+      `PluginHookMessageContext` gains an optional `sessionKey`; Signal's reply path sets it to the session of the
+      turn, other emitters are unchanged. The extension marks `asked` on the first `success: true` event whose
+      `sessionKey` is the pending group's session, after the ask text was injected into a turn of that session.
+      Not used: `agent_end` or `llm_output` as a stand-in for delivery, and marking at injection time. Accepted
+      consequence: an ask sent through the `message` tool instead of the reply does not count; the group stays
+      `pending` and the line is carried again on the next turn.
     - **The answer.** While `asked`, the agent's turns in that group carry one line: if a member has answered, call
       `model_badge` action `picture` with `{ decision: "yes" | "no", purpose? }` and record the purpose in the
       group's memory (group-memory §4); otherwise do not mention it. `yes` → `accepted`: the purpose (one sentence,
@@ -286,6 +297,8 @@ fallback for hosts with no image model at all.
       adopted-art, excluded, profile and already-painted targets never asked; state survives restart; slash/tool
       parity; injected texts contain no name or id (fixture asserts); non-private imageGen → purpose never in a
       prompt (motif scene). Existing §2c.11 tests seed a purpose or set `ask.mode: paint`.
+      Core prerequisite tests: Signal reply path fires `message_sent` with `sessionKey` on success and on a failed
+      send; a throwing hook does not break or reorder delivery; a `success: false` event leaves the group `pending`.
 
 ## 3. Lifecycle (generated and removed as the world changes)
 
