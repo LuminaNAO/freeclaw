@@ -162,6 +162,13 @@ export type SessionEntry = {
   fallbackNoticeActiveModel?: string;
   fallbackNoticeReason?: string;
   contextTokens?: number;
+  /**
+   * Session context limit ARCH §1.1 (operator-only): this chat's own ceiling in tokens. The
+   * effective window is the lowest of the model window, `agents.defaults.contextTokens` and this.
+   * Belongs to the session key; survives /new, /reset, compaction and model switches. Unset: no
+   * limit of our own (today's behaviour).
+   */
+  contextLimit?: number;
   compactionCount?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;

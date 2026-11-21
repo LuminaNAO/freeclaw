@@ -45,6 +45,10 @@ export type GatewaySessionRow = {
   modelProvider?: string;
   model?: string;
   contextTokens?: number;
+  /** Session context limit ARCH §1.1: the session's own limit, only when set. */
+  contextLimit?: number;
+  /** Session context limit ARCH §4: what set `contextTokens`, only when a limit is set. */
+  contextSource?: "model" | "agentContextTokens" | "sessionContextLimit";
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionEntry["lastChannel"];
   lastTo?: string;

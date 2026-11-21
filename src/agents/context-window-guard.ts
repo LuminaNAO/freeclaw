@@ -1,9 +1,19 @@
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  CONTEXT_WINDOW_HARD_MIN_TOKENS,
+  CONTEXT_WINDOW_WARN_BELOW_TOKENS,
+} from "./context-window-constants.js";
+import { applySessionContextLimit } from "./session-context-limit.js";
 
-export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 16_000;
-export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 32_000;
+export { CONTEXT_WINDOW_HARD_MIN_TOKENS, CONTEXT_WINDOW_WARN_BELOW_TOKENS };
 
-export type ContextWindowSource = "model" | "modelsConfig" | "agentContextTokens" | "default";
+export type ContextWindowSource =
+  | "model"
+  | "modelsConfig"
+  | "agentContextTokens"
+  | "default"
+  // Session context limit ARCH §1.2: the session's own `contextLimit` was the lowest.
+  | "sessionContextLimit";
 
 export type ContextWindowInfo = {
   tokens: number;
@@ -24,6 +34,11 @@ export function resolveContextWindowInfo(params: {
   modelId: string;
   modelContextWindow?: number;
   defaultTokens: number;
+  /**
+   * Session context limit ARCH §1.2: the session's own `contextLimit`. It can only lower the
+   * result; absent or invalid leaves the resolution exactly as before.
+   */
+  sessionContextLimit?: number;
 }): ContextWindowInfo {
   const fromModelsConfig = (() => {
     const providers = params.cfg?.models?.providers as
@@ -42,11 +57,12 @@ export function resolveContextWindowInfo(params: {
       : { tokens: Math.floor(params.defaultTokens), source: "default" as const };
 
   const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
-  if (capTokens && capTokens < baseInfo.tokens) {
-    return { tokens: capTokens, source: "agentContextTokens" };
-  }
+  const cappedInfo: ContextWindowInfo =
+    capTokens && capTokens < baseInfo.tokens
+      ? { tokens: capTokens, source: "agentContextTokens" }
+      : baseInfo;
 
-  return baseInfo;
+  return applySessionContextLimit(cappedInfo, params.sessionContextLimit);
 }
 
 export type ContextWindowGuardResult = ContextWindowInfo & {

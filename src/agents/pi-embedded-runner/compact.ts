@@ -22,6 +22,7 @@ import { getMemorySearchManager } from "../../memory/index.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { readSessionContextLimit } from "../../sessions/context-limit.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
@@ -534,12 +535,18 @@ export async function compactEmbeddedPiSessionDirect(
     });
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
     // threshold uses the effective limit, not the native context window.
+    // Session context limit ARCH §1.2: compaction budgets against the same lowered window.
+    const sessionContextLimit = readSessionContextLimit({
+      cfg: params.config,
+      sessionKey: params.sessionKey,
+    });
     const ctxInfo = resolveContextWindowInfo({
       cfg: params.config,
       provider,
       modelId,
       modelContextWindow: model.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      sessionContextLimit,
     });
     const effectiveModel = applyLocalNoAuthHeaderOverride(
       ctxInfo.tokens < (model.contextWindow ?? Infinity)
@@ -743,6 +750,7 @@ export async function compactEmbeddedPiSessionDirect(
         provider,
         modelId,
         model,
+        sessionContextLimit,
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.
@@ -1109,6 +1117,10 @@ export async function compactEmbeddedPiSession(
           modelId: ceModelId,
           modelContextWindow: ceModel?.contextWindow,
           defaultTokens: DEFAULT_CONTEXT_TOKENS,
+          sessionContextLimit: readSessionContextLimit({
+            cfg: params.config,
+            sessionKey: params.sessionKey,
+          }),
         });
         // When the context engine owns compaction, its compact() implementation
         // bypasses compactEmbeddedPiSessionDirect (which fires the hooks internally).

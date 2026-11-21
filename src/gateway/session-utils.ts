@@ -30,6 +30,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveListedSessionContextLimit } from "../sessions/context-limit-summary.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   AVATAR_MAX_BYTES,
@@ -245,7 +246,7 @@ export function pruneLegacyStoreKeys(params: {
 }) {
   const keysToDelete = new Set<string>();
   for (const candidate of params.candidates) {
-    const trimmed = String(candidate ?? "").trim();
+    const trimmed = (candidate ?? "").trim();
     if (!trimmed) {
       continue;
     }
@@ -936,6 +937,13 @@ export function listSessionsFromStore(params: {
       const resolvedModel = resolveSessionModelIdentityRef(cfg, entry, sessionAgentId);
       const modelProvider = resolvedModel.provider;
       const model = resolvedModel.model ?? DEFAULT_MODEL;
+      // Session context limit ARCH §4: with a limit, list the effective window and its source.
+      const listedLimit = resolveListedSessionContextLimit({
+        cfg,
+        provider: modelProvider,
+        model,
+        entry,
+      });
       return {
         key,
         spawnedBy: entry?.spawnedBy,
@@ -966,7 +974,10 @@ export function listSessionsFromStore(params: {
         responseUsage: entry?.responseUsage,
         modelProvider,
         model,
-        contextTokens: entry?.contextTokens,
+        contextTokens: listedLimit ? listedLimit.contextTokens : entry?.contextTokens,
+        ...(listedLimit
+          ? { contextLimit: listedLimit.contextLimit, contextSource: listedLimit.contextSource }
+          : {}),
         deliveryContext: deliveryFields.deliveryContext,
         lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
         lastTo: deliveryFields.lastTo ?? entry?.lastTo,

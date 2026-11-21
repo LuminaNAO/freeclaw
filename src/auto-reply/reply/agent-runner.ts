@@ -4,6 +4,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
+import { applySessionContextLimitToTokens } from "../../agents/session-context-limit.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -502,11 +503,14 @@ export async function runReplyAgent(params: {
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.sessionId?.trim()
       : undefined;
-    const contextTokensUsed =
+    // Session context limit ARCH §1.2: lowered by this session's own limit (absent: unchanged).
+    const contextTokensUsed = applySessionContextLimitToTokens(
       agentCfgContextTokens ??
-      lookupContextTokens(modelUsed) ??
-      activeSessionEntry?.contextTokens ??
-      DEFAULT_CONTEXT_TOKENS;
+        lookupContextTokens(modelUsed) ??
+        activeSessionEntry?.contextTokens ??
+        DEFAULT_CONTEXT_TOKENS,
+      activeSessionEntry?.contextLimit,
+    );
 
     await persistRunSessionUsage({
       storePath,

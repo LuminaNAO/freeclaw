@@ -26,6 +26,7 @@ import {
   runEmbeddedPiAgent,
 } from "../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
+import { applySessionContextLimitToTokens } from "../agents/session-context-limit.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { readPromptTokensFromSessionLog } from "../auto-reply/reply/agent-runner-memory.js";
 import {
@@ -184,7 +185,9 @@ export function resolveHeartbeatContextWindow(params: {
     recorded ??
     DEFAULT_CONTEXT_TOKENS;
   const cap = cfg.agents?.defaults?.contextTokens;
-  return typeof cap === "number" && cap > 0 && cap < window ? cap : window;
+  const capped = typeof cap === "number" && cap > 0 && cap < window ? cap : window;
+  // Session context limit ARCH §1.2: the session's own limit can only lower W further.
+  return applySessionContextLimitToTokens(capped, entry?.contextLimit);
 }
 
 /** The heartbeat session's current context size in tokens, if known. */

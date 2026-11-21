@@ -1920,6 +1920,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        sessionContextLimit: params.sessionContextLimit,
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.

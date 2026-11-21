@@ -2,6 +2,7 @@ import { setCliSessionId } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { applySessionContextLimitToTokens } from "../../agents/session-context-limit.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -74,7 +75,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
       model: modelUsed,
     });
     if (!overrideSelected) {
-      patch.contextTokens = contextTokens;
+      // Session context limit ARCH §1.2: the recorded window never exceeds the session limit.
+      patch.contextTokens = applySessionContextLimitToTokens(contextTokens, existing?.contextLimit);
       setSessionRuntimeModel(patch as SessionEntry, {
         provider: providerUsed,
         model: modelUsed,

@@ -57,6 +57,9 @@ export type SessionListRow = {
   sessionId?: string;
   model?: string;
   contextTokens?: number | null;
+  /** Session context limit ARCH §1.1: present only when the session has a limit. */
+  contextLimit?: number;
+  contextSource?: string;
   totalTokens?: number | null;
   thinkingLevel?: string;
   verboseLevel?: string;

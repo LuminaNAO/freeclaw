@@ -8,6 +8,10 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
+import {
+  applySessionContextLimitToTokens,
+  normalizeSessionContextLimit,
+} from "../agents/session-context-limit.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
@@ -25,6 +29,7 @@ import { resolveCommitHash } from "../infra/git-commit.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { resolveSessionContextWindowSummary } from "../sessions/context-limit-summary.js";
 import {
   getTtsMaxLength,
   getTtsProvider,
@@ -507,6 +512,22 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
   }
 
+  // Session context limit ARCH §1.2/§3.2: the session's own limit can only lower the window;
+  // when it is the lowest, say so next to the model's own window.
+  let contextLimitNote = "";
+  if (normalizeSessionContextLimit(entry?.contextLimit) !== undefined) {
+    contextTokens = applySessionContextLimitToTokens(contextTokens, entry?.contextLimit);
+    const summary = resolveSessionContextWindowSummary({
+      cfg: args.config ?? contextConfig,
+      provider: activeProvider,
+      model: activeModel,
+      entry,
+    });
+    if (summary.source === "sessionContextLimit" && contextTokens === summary.tokens) {
+      contextLimitNote = ` (limit; model ${formatTokenCount(summary.modelTokens)})`;
+    }
+  }
+
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
   const verboseLevel =
@@ -539,7 +560,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     : undefined;
 
   const contextLine = [
-    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}`,
+    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}${contextLimitNote}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
     .filter(Boolean)

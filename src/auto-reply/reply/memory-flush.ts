@@ -2,6 +2,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
+import { applySessionContextLimitToTokens } from "../../agents/session-context-limit.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
@@ -161,9 +162,12 @@ function ensureMemoryFlushSafetyHints(text: string): string {
 export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
   agentCfgContextTokens?: number;
+  /** Session context limit ARCH §1.2: the session's own limit; can only lower. */
+  sessionContextLimit?: number;
 }): number {
-  return (
-    lookupContextTokens(params.modelId) ?? params.agentCfgContextTokens ?? DEFAULT_CONTEXT_TOKENS
+  return applySessionContextLimitToTokens(
+    lookupContextTokens(params.modelId) ?? params.agentCfgContextTokens ?? DEFAULT_CONTEXT_TOKENS,
+    params.sessionContextLimit,
   );
 }
 

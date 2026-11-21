@@ -203,6 +203,15 @@ export function createSessionsListTool(opts?: {
           sessionId,
           model: typeof entry.model === "string" ? entry.model : undefined,
           contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
+          // Session context limit ARCH §4: passed through from sessions.list when set.
+          ...(typeof entry.contextLimit === "number"
+            ? {
+                contextLimit: entry.contextLimit,
+                ...(typeof entry.contextSource === "string"
+                  ? { contextSource: entry.contextSource }
+                  : {}),
+              }
+            : {}),
           totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
           thinkingLevel: typeof entry.thinkingLevel === "string" ? entry.thinkingLevel : undefined,
           verboseLevel: typeof entry.verboseLevel === "string" ? entry.verboseLevel : undefined,

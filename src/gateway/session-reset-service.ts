@@ -21,6 +21,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { pickSessionContextLimit } from "../sessions/context-limit.js";
 import { pickQuietSessionSettings } from "../sessions/quiet-settings.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
@@ -315,6 +316,8 @@ export async function performGatewaySessionReset(params: {
       contextTokens: resetEntry?.contextTokens,
       sendPolicy: currentEntry?.sendPolicy,
       ...pickQuietSessionSettings(currentEntry),
+      // Session context limit ARCH §1.1: the limit belongs to the chat, not the transcript.
+      ...pickSessionContextLimit(currentEntry),
       label: currentEntry?.label,
       displayName: currentEntry?.displayName,
       origin: snapshotSessionOrigin(currentEntry),

@@ -1,6 +1,7 @@
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { normalizeSessionContextLimit } from "../agents/session-context-limit.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -22,6 +23,8 @@ import {
 } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveListedSessionContextLimit } from "../sessions/context-limit-summary.js";
+import { formatTokenCount } from "../utils/usage-format.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
@@ -62,6 +65,11 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   }
   if (entry?.slashCommands === false) {
     flags.push("slash-commands:off");
+  }
+  // Session context limit ARCH §4.
+  const contextLimit = normalizeSessionContextLimit(entry?.contextLimit);
+  if (contextLimit !== undefined) {
+    flags.push(`ctx-limit:${formatTokenCount(contextLimit)}`);
   }
   const sessionId = entry?.sessionId as unknown;
   if (typeof sessionId === "string" && sessionId.length > 0) {
@@ -165,14 +173,22 @@ export async function getStatusSummary(
         const age = updatedAt ? now - updatedAt : null;
         const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
         const model = resolvedModel.model ?? configModel ?? null;
-        const contextTokens =
-          resolveContextTokensForModel({
-            cfg,
-            provider: resolvedModel.provider,
-            model,
-            contextTokensOverride: entry?.contextTokens,
-            fallbackContextTokens: configContextTokens ?? undefined,
-          }) ?? null;
+        // Session context limit ARCH §4: with a limit, the effective window (lowest wins).
+        const listedLimit = resolveListedSessionContextLimit({
+          cfg,
+          provider: resolvedModel.provider,
+          model: model ?? undefined,
+          entry,
+        });
+        const contextTokens = listedLimit
+          ? listedLimit.contextTokens
+          : (resolveContextTokensForModel({
+              cfg,
+              provider: resolvedModel.provider,
+              model,
+              contextTokensOverride: entry?.contextTokens,
+              fallbackContextTokens: configContextTokens ?? undefined,
+            }) ?? null);
         const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =
           typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;

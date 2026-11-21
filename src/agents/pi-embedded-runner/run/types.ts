@@ -25,6 +25,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
   contextTokenBudget?: number;
+  /** Session context limit ARCH §1.2: the session's own limit, for the compaction extensions. */
+  sessionContextLimit?: number;
   /** Auth profile resolved for this attempt's provider/model call. */
   authProfileId?: string;
   /** Source for the resolved auth profile (user-locked or automatic). */

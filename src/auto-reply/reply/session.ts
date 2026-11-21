@@ -35,6 +35,7 @@ import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenanc
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isSubagentSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import { pickSessionContextLimit } from "../../sessions/context-limit.js";
 import { pickQuietSessionSettings } from "../../sessions/quiet-settings.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -426,6 +427,8 @@ export async function initSessionState(params: {
     sendPolicy: baseEntry?.sendPolicy,
     // Quiet sessions ARCH §3.2: operator settings survive /new, /reset and idle resets.
     ...pickQuietSessionSettings(entry),
+    // Session context limit ARCH §1.1: the limit belongs to the chat, not the transcript.
+    ...pickSessionContextLimit(entry),
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,
     queueCap: baseEntry?.queueCap,

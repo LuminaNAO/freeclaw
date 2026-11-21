@@ -26,6 +26,7 @@ import {
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { applySessionContextLimitToTokens } from "../../agents/session-context-limit.js";
 import {
   countActiveDescendantRuns,
   listDescendantRunsForRequester,
@@ -730,8 +731,11 @@ export async function runCronIsolatedAgentTurn(params: {
     const promptTokens = finalRunResult.meta?.agentMeta?.promptTokens;
     const modelUsed = finalRunResult.meta?.agentMeta?.model ?? fallbackModel ?? model;
     const providerUsed = finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
-    const contextTokens =
-      agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS;
+    // Session context limit ARCH §1.2: only this cron session's own limit applies (never a parent's).
+    const contextTokens = applySessionContextLimitToTokens(
+      agentCfg?.contextTokens ?? lookupContextTokens(modelUsed) ?? DEFAULT_CONTEXT_TOKENS,
+      cronSession.sessionEntry.contextLimit,
+    );
 
     setSessionRuntimeModel(cronSession.sessionEntry, {
       provider: providerUsed,

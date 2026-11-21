@@ -2,6 +2,7 @@ import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { applySessionContextLimitToTokens } from "../../agents/session-context-limit.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -489,7 +490,11 @@ export async function resolveReplyDirectives(params: {
   directives = applyResult.directives;
   provider = applyResult.provider;
   model = applyResult.model;
-  contextTokens = applyResult.contextTokens;
+  // Session context limit ARCH §1.2: /status, /context and /compact show the lowered window.
+  contextTokens = applySessionContextLimitToTokens(
+    applyResult.contextTokens,
+    sessionEntry?.contextLimit,
+  );
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
   const execOverrides = resolveExecOverrides({ directives, sessionEntry });
 

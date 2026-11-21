@@ -291,6 +291,7 @@ export async function runMemoryFlushIfNeeded(params: {
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
+    sessionContextLimit: entry?.contextLimit,
   });
 
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(

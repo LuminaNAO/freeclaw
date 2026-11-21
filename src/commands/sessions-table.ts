@@ -1,11 +1,13 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { normalizeSessionContextLimit } from "../agents/session-context-limit.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionModelRef } from "../gateway/session-utils.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
+import { formatTokenCount } from "../utils/usage-format.js";
 
 export type SessionDisplayRow = {
   key: string;
@@ -29,6 +31,8 @@ export type SessionDisplayRow = {
   providerOverride?: string;
   modelOverride?: string;
   contextTokens?: number;
+  /** Session context limit ARCH §1.1: present only when the session has a limit. */
+  contextLimit?: number;
 };
 
 export type SessionDisplayDefaults = {
@@ -65,6 +69,9 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>): Sessi
         providerOverride: entry?.providerOverride,
         modelOverride: entry?.modelOverride,
         contextTokens: entry?.contextTokens,
+        ...(normalizeSessionContextLimit(entry?.contextLimit) !== undefined
+          ? { contextLimit: entry.contextLimit }
+          : {}),
       } satisfies SessionDisplayRow;
     })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
@@ -129,7 +136,8 @@ export function formatSessionFlagsCell(
     | "systemSent"
     | "abortedLastRun"
     | "sessionId"
-  >,
+  > &
+    Partial<Pick<SessionDisplayRow, "contextLimit">>,
   rich: boolean,
 ): string {
   const flags = [
@@ -141,6 +149,8 @@ export function formatSessionFlagsCell(
     row.groupActivation ? `activation:${row.groupActivation}` : null,
     row.systemSent ? "system" : null,
     row.abortedLastRun ? "aborted" : null,
+    // Session context limit ARCH §4.
+    row.contextLimit !== undefined ? `ctx-limit:${formatTokenCount(row.contextLimit)}` : null,
     row.sessionId ? `id:${row.sessionId}` : null,
   ].filter(Boolean);
   const label = flags.join(" ");

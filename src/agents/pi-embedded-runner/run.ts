@@ -11,6 +11,7 @@ import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { readSessionContextLimit } from "../../sessions/context-limit.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
@@ -420,12 +421,19 @@ export async function runEmbeddedPiAgent(
         });
       }
 
+      // Session context limit ARCH §1.2/§3.1: read fresh each run, so a change applies on the
+      // next turn; it can only lower the window resolved below.
+      const sessionContextLimit = readSessionContextLimit({
+        cfg: params.config,
+        sessionKey: params.sessionKey,
+      });
       const ctxInfo = resolveContextWindowInfo({
         cfg: params.config,
         provider,
         modelId,
         modelContextWindow: model.contextWindow,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
+        sessionContextLimit,
       });
       // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
       // threshold uses the effective limit, not the native context window.
@@ -966,6 +974,7 @@ export async function runEmbeddedPiAgent(
                 config: params.config,
                 contextEngine,
                 contextTokenBudget: ctxInfo.tokens,
+                sessionContextLimit,
                 skillsSnapshot: params.skillsSnapshot,
                 prompt,
                 images: params.images,

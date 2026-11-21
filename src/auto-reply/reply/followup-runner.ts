@@ -5,6 +5,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { applySessionContextLimitToTokens } from "../../agents/session-context-limit.js";
 import { assertRunDeadline, createRunDeadline, runDeadlineParams } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -251,11 +252,14 @@ export function createFollowupRunner(params: {
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
-      const contextTokensUsed =
+      // Session context limit ARCH §1.2: lowered by this session's own limit (absent: unchanged).
+      const contextTokensUsed = applySessionContextLimitToTokens(
         agentCfgContextTokens ??
-        lookupContextTokens(modelUsed) ??
-        sessionEntry?.contextTokens ??
-        DEFAULT_CONTEXT_TOKENS;
+          lookupContextTokens(modelUsed) ??
+          sessionEntry?.contextTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+        ((sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry)?.contextLimit,
+      );
 
       if (storePath && sessionKey) {
         await persistRunSessionUsage({

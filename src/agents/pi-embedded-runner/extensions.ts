@@ -17,6 +17,7 @@ function resolveContextWindowTokens(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  sessionContextLimit?: number;
 }): number {
   return resolveContextWindowInfo({
     cfg: params.cfg,
@@ -24,6 +25,7 @@ function resolveContextWindowTokens(params: {
     modelId: params.modelId,
     modelContextWindow: params.model?.contextWindow,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
+    sessionContextLimit: params.sessionContextLimit,
   }).tokens;
 }
 
@@ -33,6 +35,7 @@ function buildContextPruningFactory(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  sessionContextLimit?: number;
 }): ExtensionFactory | undefined {
   const raw = params.cfg?.agents?.defaults?.contextPruning;
   if (raw?.mode !== "cache-ttl") {
@@ -67,6 +70,8 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  /** Session context limit ARCH §1.2: can only lower the window the extensions budget against. */
+  sessionContextLimit?: number;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
@@ -78,6 +83,7 @@ export function buildEmbeddedExtensionFactories(params: {
       modelId: params.modelId,
       modelContextWindow: params.model?.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      sessionContextLimit: params.sessionContextLimit,
     });
     setCompactionSafeguardRuntime(params.sessionManager, {
       maxHistoryShare: compactionCfg?.maxHistoryShare,

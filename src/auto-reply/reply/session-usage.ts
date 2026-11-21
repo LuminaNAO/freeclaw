@@ -1,4 +1,5 @@
 import { setCliSessionId } from "../../agents/cli-session.js";
+import { applySessionContextLimitToTokens } from "../../agents/session-context-limit.js";
 import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
@@ -70,7 +71,11 @@ export async function persistSessionUsageUpdate(params: {
         storePath,
         sessionKey,
         update: async (entry) => {
-          const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
+          // Session context limit ARCH §1.2: the recorded window never exceeds the session limit.
+          const resolvedContextTokens = applySessionContextLimitToTokens(
+            params.contextTokensUsed ?? entry.contextTokens,
+            entry.contextLimit,
+          );
           // Use last-call usage for totalTokens when available. The accumulated
           // `usage.input` sums input tokens from every API call in the run
           // (tool-use loops, compaction retries), overstating actual context.
@@ -121,7 +126,10 @@ export async function persistSessionUsageUpdate(params: {
           const patch: Partial<SessionEntry> = {
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
-            contextTokens: params.contextTokensUsed ?? entry.contextTokens,
+            contextTokens: applySessionContextLimitToTokens(
+              params.contextTokensUsed ?? entry.contextTokens,
+              entry.contextLimit,
+            ),
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
