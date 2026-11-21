@@ -54,6 +54,19 @@
       "label": "Default Style Rules",
       "advanced": true
     },
+    "ask": {
+      "label": "Ask Before Painting New Groups",
+      "help": "ARCH §2c.14: a group first seen with no avatar is painted without a question when group memory knows its purpose; otherwise the agent asks once, in its own reply in that group, whether a picture is wanted and what the group is for. The extension itself never posts."
+    },
+    "ask.mode": {
+      "label": "Unknown-Purpose Groups",
+      "help": "ask (default): the agent asks once in its reply. paint: paint from the name alone, no question (the behaviour before asking existed). skip: never painted, never asked."
+    },
+    "ask.expireMs": {
+      "label": "Answer Expiry (ms)",
+      "help": "Default 604800000 (7 days). No answer this long after asking → declined (no-answer); the agent stops carrying the line.",
+      "advanced": true
+    },
     "imageGen": {
       "label": "Image Generation",
       "help": "Optional, image first: when set, every base is a real image from this generator (vector art only until a target's first image exists). OpenAI-compatible endpoint or a local command; keys by SecretRef only."
@@ -189,6 +202,22 @@
             "items": {
               "type": "object"
             }
+          }
+        }
+      },
+      "ask": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["ask", "paint", "skip"],
+            "default": "ask"
+          },
+          "expireMs": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 604800000
           }
         }
       },

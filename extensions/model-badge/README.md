@@ -59,6 +59,7 @@ bundled default). Enable it with `openclaw plugins enable model-badge`.
   "badges": [{ "pattern": "opus", "letter": "O", "color": "#9B59D0" }],
   "targets": { "<target id>": { "motif": "waves", "palette": "ocean", "base": "adopt" } }, // base: adopt (default) | generate
   "steering": { "allowGroupMembers": true, "rules": [] }, // false: operator-only
+  "ask": { "mode": "ask", "expireMs": 604800000 }, // ask | paint | skip (ARCH §2c.14)
   "imageGen": null, // or { "kind": "openai-images", "baseUrl", "model", "apiKey": <SecretRef> }
   // or { "kind": "command", "command": "/abs/path", "args": [] }
   // limits: "maxPerRun": 16, "maxPerDay": 200, "maxAttempts": 10 (defaults, sized for a
@@ -72,7 +73,8 @@ bundled default). Enable it with `openclaw plugins enable model-badge`.
 
 State lives in `<gateway state dir>/plugins/model-badge/`: `style.json` (shared) and one
 directory per provider with `applied.json`, `status.json`, `writer.lease`, `assets/` and
-`adopted/` (groups' own artwork, §2c.8), `bases/` (stored image bases plus `generations.json`, the per-target regenerate counter), `scenes/scenes.json` (per-target written scenes, §2c.11). The Signal daemon opens avatars by path, so this directory must be readable by
+`adopted/` (groups' own artwork, §2c.8), `bases/` (stored image bases plus `generations.json`, the per-target regenerate counter), `scenes/scenes.json` (per-target written scenes, §2c.11), `pictures/pictures.json` (per-target
+picture state and answered purpose, §2c.14). The Signal daemon opens avatars by path, so this directory must be readable by
 the daemon's user, and the daemon must be local (loopback HTTP or the unix socket).
 
 ## Triggers (ARCH §5.2)
@@ -153,6 +155,47 @@ never call it twice. A rename or a `regenerate` makes new inputs. Scenes are nev
 agent's default model), `timeoutMs` (default 60000), `memory` (default true; false sends the
 name only).
 
+## Ask before painting a group we know nothing about (ARCH §2c.14)
+
+A group first seen with **no avatar** is only painted when it is known what it is for:
+
+- **Purpose known → painted, no question.** Group memory knows the purpose (the group's
+  `meta.json` description or an edited context file; `resolveGroupPurpose`, group-memory
+  ARCH §9). That text is the scene writer's first snippet, ahead of memory search, with the
+  same validation and the same private-backend boundary. `targets.<id>.base: generate` also
+  paints without a question.
+- **Purpose unknown → `picture: pending`.** Nothing is painted (not even vector) and the
+  extension sends nothing. Each pass and each group-memory event re-reads the purpose; the
+  moment it is known the group is painted.
+- **The agent asks, once, in its own reply.** On the agent's next turn in that group's own
+  session (`before_prompt_build`, that session only; never a direct chat or another group)
+  it is told to ask, in one short line, whether the members want a group picture and what
+  the group is for. The extension never posts and never starts a turn.
+- **Delivery** is known from the `message_sent` plugin hook only: Signal's reply path fires
+  it after each send with the turn's `sessionKey`. The first successful send of that session
+  after the ask was given marks the group `asked`; a failed or silent turn leaves it
+  `pending` and the line is carried again next turn. An ask sent with the `message` tool does
+  not count.
+- **The answer.** While `asked`, the agent's turns in that group carry one line: if a member
+  answered, call `model_badge` action `picture` (`decision: "yes" | "no"`, `purpose?`) and
+  record the purpose in group memory. `yes` → `accepted`, painted with the purpose (one
+  sentence, at most 300 characters, kept in `pictures/pictures.json`, never logged) as the
+  writer's first snippet. `no` → `declined`: never painted, never asked again. No answer
+  within `ask.expireMs` (default 7 days) → `declined (no-answer)`. Once asked, only an answer
+  (or a `regenerate`) paints.
+- **Who:** a member for their own group, operators anywhere (an operator can declare a new
+  group's purpose before it is first seen). A `regenerate` on a pending, asked or declined
+  group counts as `yes`.
+- `/badge status` shows `Picture: pending | asked | accepted | declined (reason)`.
+
+`ask.mode`: `ask` (default), `paint` (paint from the name alone, no question: the behaviour
+before this section), `skip` (unknown-purpose groups are never painted and never asked).
+`ask.expireMs`: default 604800000.
+
+Untouched: the profile, groups on their own artwork (§2c.8), groups not selected
+(`<provider>.groups`) and targets painted or adopted before this section. In `ask` mode a
+group where the agent never gets a turn and that has no group memory stays unpainted.
+
 ## House art style (ARCH §2c.13)
 
 Every generated base (group and profile; motif, written scene and steered prompt alike) is
@@ -190,17 +233,17 @@ restart; its stored state is kept in case it is included again.
 
 Everything is reachable by asking the agent. The tool `model_badge` has the actions
 `status | style.list | style.preview | style.add | style.remove | style.reset | repaint |
-regenerate | restore | audit | purge`; `model_badge_style` is an alias that also takes the old short
+regenerate | restore | audit | purge | picture`; `model_badge_style` is an alias that also takes the old short
 style actions. `/badge` is the same set as a convenience:
 
 `/badge status [all|<target>] | repaint [this|<target>|profile] | regenerate [this|<target>|profile] |
-restore [this|<target>] | audit | purge confirm | style list | style preview <json> | style add <json> | style remove <id…> | style reset`
+restore [this|<target>] | audit | purge confirm | picture yes|no [this|<target>] [purpose] | style list | style preview <json> | style add <json> | style remove <id…> | style reset`
 
 Both go through one dispatcher, and authority is checked there on the authenticated sender
 id the gateway passes in, never on tool arguments. Operators (`operators`) may do
 everything. Group members (with `steering.allowGroupMembers`, on by default) may act on the
 group they are asking from: style rules with that group's `targetId`, repaint, regenerate,
-restore, status and audit of that group. Global rules, other groups, the profile, `status all`,
+restore, picture, status and audit of that group. Global rules, other groups, the profile, `status all`,
 `style reset` and `purge` are operator-only. A refusal says why and who can.
 
 ## Rasteriser
