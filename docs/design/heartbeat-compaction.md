@@ -14,9 +14,18 @@ It becomes built-in, default-on behaviour.
    heartbeat session's context size. If it is above the threshold (§3), run the same compaction `/compact` runs
    (`compactEmbeddedPiSession`, `trigger: "heartbeat"`, memory flush included), then run the heartbeat turn on the
    compacted session.
-2. **Model.** The compaction runs on the model the heartbeat session is already using (its override, else the
-   heartbeat model, else the agent default — whatever the turn itself would use). Never switch model for
-   compaction: it would break the cache and change quality.
+2. **Model (operator, amended 2026-11-21).** Compaction always runs on the session's own model: the model a
+   normal message to that session would run on (the session's stored model override, or its parent's; else the
+   channel model override; else the agent default). `heartbeat.model` is a per-turn choice for the heartbeat turn
+   and is **never** used to pick the compaction model, and neither is any other per-turn or per-job model. The
+   threshold window `W` (§3) and the compaction thinking level come from that same model. Never switch model for
+   compaction: it breaks the cache, changes summary quality, and replays one model's transcript to another.
+   - This holds for every session the heartbeat runner can be pointed at, including a scheduled wake that targets
+     a chat session by key, not only the default heartbeat session.
+   - One resolver, shared by the compaction, the threshold and `openclaw status`. `/compact` already uses the
+     session's model and must keep doing so; auto-compaction inside a running turn keeps using that turn's model.
+   - Bug this replaces: the first build let `heartbeat.model` win over the session's override, so a session
+     running on model A was compacted by model B whenever a scheduled wake landed on it.
 3. **Only when idle.** Skip and retry at the next heartbeat if a run is active on that session or the gateway is
    draining. Never interrupt a turn.
 4. **Instructions.** Optional `heartbeat.compactInstructions` passed as compaction custom instructions.
@@ -38,6 +47,11 @@ Let `W` = the max context window of the model the heartbeat session uses.
 - 1M model → 100k; 200k → 100k; 128k → 64k; explicit 140k on 1M → 140k; explicit 200k → clamped to 150k;
   explicit 140k on 200k → clamped to 100k.
 - Over threshold → one compaction on the session's own model, then the heartbeat turn on the compacted session.
+- Model (§2.2): session override A + `heartbeat.model` B → compaction, threshold and status all use A. No session
+  override, channel override C, `heartbeat.model` B → C. No overrides, agent default D, `heartbeat.model` B → D.
+  Parent session override is inherited. An override that is not in the model allowlist falls through to the next
+  step, never to `heartbeat.model`. A wake that forces another session key compacts that session on its own model.
+  The heartbeat turn itself still runs on `heartbeat.model` (unchanged by this section).
 - Under threshold, `off`, active run, or draining → none.
 - Compaction failure → heartbeat turn still runs, error logged, retried next time.
 - Memory flush runs as part of it.
