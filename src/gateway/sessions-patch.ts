@@ -25,6 +25,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { applyContextLimitToEntry, parseContextLimitValue } from "../sessions/context-limit.js";
 import { applyVerboseOverride, parseVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
@@ -475,6 +476,15 @@ export async function applySessionsPatchToStore(params: {
       }
       next.groupActivation = normalized;
     }
+  }
+
+  // Session context limit ARCH §2.2: same validation and effect as /context limit and the tool.
+  if ("contextLimit" in patch && patch.contextLimit !== undefined) {
+    const parsed = parseContextLimitValue(patch.contextLimit);
+    if (!parsed.ok) {
+      return invalid(parsed.error);
+    }
+    applyContextLimitToEntry(next, parsed.value);
   }
 
   store[storeKey] = next;

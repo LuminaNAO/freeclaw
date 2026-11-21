@@ -87,6 +87,8 @@ export const SessionsPatchParamsSchema = Type.Object(
     groupActivation: Type.Optional(
       Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
     ),
+    // Session context limit ARCH §2.2: tokens (validated like /context limit); null clears.
+    contextLimit: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
   },
   { additionalProperties: false },
 );

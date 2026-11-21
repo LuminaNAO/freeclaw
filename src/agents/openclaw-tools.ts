@@ -220,6 +220,7 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
       sandboxed: options?.sandboxed,
+      senderIsOwner: options?.senderIsOwner,
     }),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),

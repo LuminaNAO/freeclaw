@@ -6,6 +6,7 @@ import {
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { ReplyPayload } from "../types.js";
+import { CONTEXT_LIMIT_SUBCOMMAND, handleContextLimitCommand } from "./commands-context-limit.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -76,7 +77,13 @@ async function resolveContextReport(
 
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const args = parseContextArgs(params.command.commandBodyNormalized);
-  const sub = args.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? "";
+  const tokens = args.split(/\s+/).filter(Boolean);
+  const sub = tokens[0]?.toLowerCase() ?? "";
+
+  // Session context limit ARCH §2.1.
+  if (sub === CONTEXT_LIMIT_SUBCOMMAND) {
+    return await handleContextLimitCommand(params, tokens.slice(1));
+  }
 
   if (!sub || sub === "help") {
     return {
@@ -89,6 +96,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "- /context list   (short breakdown)",
         "- /context detail (per-file + per-tool + per-skill + system prompt size)",
         "- /context json   (same, machine-readable)",
+        "- /context limit  (this chat's context limit; operators: /context limit <tokens>|default)",
         "",
         "Inline shortcut = a command token inside a normal message (e.g. “hey /status”). It runs immediately (allowlisted senders only) and is stripped before the model sees the remaining text.",
       ].join("\n"),

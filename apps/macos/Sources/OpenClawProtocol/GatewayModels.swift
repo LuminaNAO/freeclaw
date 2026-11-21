@@ -1340,6 +1340,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let subagentcontrolscope: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
+    public let contextlimit: AnyCodable?
 
     public init(
         key: String,
@@ -1362,7 +1363,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         subagentrole: AnyCodable?,
         subagentcontrolscope: AnyCodable?,
         sendpolicy: AnyCodable?,
-        groupactivation: AnyCodable?)
+        groupactivation: AnyCodable?,
+        contextlimit: AnyCodable?)
     {
         self.key = key
         self.label = label
@@ -1385,6 +1387,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.subagentcontrolscope = subagentcontrolscope
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
+        self.contextlimit = contextlimit
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1409,6 +1412,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case subagentcontrolscope = "subagentControlScope"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
+        case contextlimit = "contextLimit"
     }
 }
 

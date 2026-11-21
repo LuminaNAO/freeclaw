@@ -22,6 +22,11 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import {
+  CONTEXT_LIMIT_OPERATOR_ONLY_ERROR,
+  parseContextLimitValue,
+  setSessionContextLimit,
+} from "../../sessions/context-limit.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { resolveAgentDir } from "../agent-scope.js";
@@ -49,6 +54,13 @@ import {
 const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
+  // Session context limit ARCH §2.3: tokens ("256000", "256k", "0.5m") or "default" to clear.
+  contextLimit: Type.Optional(
+    Type.String({
+      description:
+        'Operator only: this session\'s context limit in tokens (e.g. "256000", "256k", "0.5m"), or "default" to clear. It can only lower the context window.',
+    }),
+  ),
 });
 
 function resolveSessionEntry(params: {
@@ -177,15 +189,30 @@ export function createSessionStatusTool(opts?: {
   agentSessionKey?: string;
   config?: OpenClawConfig;
   sandboxed?: boolean;
+  /** Session context limit ARCH §2.3: `contextLimit` is applied only when this is true. */
+  senderIsOwner?: boolean;
 }): AnyAgentTool {
   return {
     label: "Session Status",
     name: "session_status",
     description:
-      "Show a /status-equivalent session status card (usage + time + cost when available). Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides).",
+      "Show a /status-equivalent session status card (usage + time + cost when available). Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides). Optional, operator senders only: contextLimit sets this session's context limit in tokens (e.g. 256k) or clears it (contextLimit=default); it can only lower the context window and applies from the next turn.",
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      // Session context limit ARCH §2.3: validate and check authority before anything is written.
+      const contextLimitRaw = params.contextLimit;
+      let contextLimitValue: number | null | undefined;
+      if (contextLimitRaw !== undefined) {
+        if (opts?.senderIsOwner !== true) {
+          throw new Error(CONTEXT_LIMIT_OPERATOR_ONLY_ERROR);
+        }
+        const parsed = parseContextLimitValue(contextLimitRaw);
+        if (!parsed.ok) {
+          throw new Error(parsed.error);
+        }
+        contextLimitValue = parsed.value;
+      }
       const cfg = opts?.config ?? loadConfig();
       const { mainKey, alias, effectiveRequesterKey } = resolveSandboxedSessionToolContext({
         cfg,
@@ -364,6 +391,22 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
+      let changedContextLimit = false;
+      if (contextLimitValue !== undefined) {
+        const result = await setSessionContextLimit({
+          storePath,
+          sessionKey: resolved.key,
+          value: contextLimitValue,
+          fallbackEntry: resolved.entry,
+        });
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+        store[resolved.key] = result.entry;
+        resolved.entry = result.entry;
+        changedContextLimit = result.changed;
+      }
+
       const agentDir = resolveAgentDir(cfg, agentId);
       const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
       const usageProvider = resolveUsageProviderId(providerForCard);
@@ -460,6 +503,9 @@ export function createSessionStatusTool(opts?: {
           ok: true,
           sessionKey: resolved.key,
           changedModel,
+          ...(contextLimitValue !== undefined
+            ? { changedContextLimit, contextLimit: contextLimitValue }
+            : {}),
           statusText,
         },
       };
