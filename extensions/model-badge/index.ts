@@ -9,7 +9,8 @@ import { TOOL_NAMES, createBadgeTool } from "./src/tool.js";
 // set of §5.2 (see README "Triggers"): startup and periodic passes, the store/models
 // watcher, and the session_start plugin event as an early nudge for new targets. ARCH
 // §2c.11: group memory's group_memory_created event names a new (or renamed) group, and
-// the agent writes its image scene.
+// the agent writes its image scene. ARCH §2c.14: before_prompt_build carries the ask to
+// a pending group's own turn; message_sent tells that the reply was delivered.
 
 export default function register(api: OpenClawPluginApi) {
   registerModelBadge(api);
@@ -85,6 +86,38 @@ export function registerModelBadge(
     for (const e of engines()) {
       if (e.provider.id === event.channel) {
         await e.groupNamed(event.groupId, event.name);
+      }
+    }
+  });
+
+  // ARCH §2c.14: the agent asks, once, in its own reply. The per-turn text reaches only a
+  // turn of the pending (or asked) group's own session; every other session gets nothing.
+  // The extension never posts and never starts a turn.
+  api.on("before_prompt_build", async (_event, ctx) => {
+    const r = runtime;
+    // A turn the members see a reply of: not a memory flush, heartbeat or cron run.
+    if (!r || !ctx.sessionKey || (ctx.trigger !== undefined && ctx.trigger !== "user")) {
+      return;
+    }
+    for (const e of engines()) {
+      const text = await e.promptContext(ctx.sessionKey);
+      if (text) {
+        return { prependContext: text };
+      }
+    }
+    return;
+  });
+
+  // ARCH §2c.14: delivery is known from the message_sent hook only (Signal's reply path
+  // sets the turn's sessionKey). A failed send changes nothing.
+  api.on("message_sent", async (event, ctx) => {
+    const r = runtime;
+    if (!r || event.success !== true || !ctx.sessionKey) {
+      return;
+    }
+    for (const e of engines()) {
+      if (e.provider.id === ctx.channelId) {
+        await e.replyDelivered(ctx.sessionKey, true);
       }
     }
   });

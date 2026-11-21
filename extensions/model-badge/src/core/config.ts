@@ -134,6 +134,36 @@ export function groupSelected(sel: GroupSelection, idLower: string): boolean {
   return sel.mode === "include" ? listed : !listed;
 }
 
+// ARCH §2c.14: what happens to a group first seen with no avatar whose purpose is unknown.
+// ask (default): the agent asks once in its own reply; paint: the §2c.11 behaviour before
+// §2c.14 (name-only scene, no question); skip: never painted, never asked.
+export type AskMode = "ask" | "paint" | "skip";
+export const ASK_MODES: readonly AskMode[] = ["ask", "paint", "skip"];
+export type AskConfig = { mode: AskMode; expireMs: number };
+// No answer within this time after asking → declined (no-answer). Default 7 days.
+export const ASK_DEFAULTS: AskConfig = { mode: "ask", expireMs: 7 * 24 * 60 * 60 * 1000 };
+
+function normalizeAsk(raw: unknown, errors: string[]): AskConfig {
+  if (raw === undefined || raw === null) {
+    return { ...ASK_DEFAULTS };
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    errors.push("ask must be an object");
+    return { ...ASK_DEFAULTS };
+  }
+  const c = obj(raw);
+  if (c.mode !== undefined && !ASK_MODES.includes(c.mode as AskMode)) {
+    errors.push(`ask.mode must be one of ${ASK_MODES.join(", ")}`);
+  }
+  if (c.expireMs !== undefined && !(Number.isInteger(c.expireMs) && (c.expireMs as number) > 0)) {
+    errors.push("ask.expireMs must be a positive integer");
+  }
+  return {
+    mode: ASK_MODES.includes(c.mode as AskMode) ? (c.mode as AskMode) : ASK_DEFAULTS.mode,
+    expireMs: posInt(c.expireMs, ASK_DEFAULTS.expireMs),
+  };
+}
+
 export type ModelBadgeConfig = {
   providers: string[];
   providerBlocks: Record<string, ProviderBlock>;
@@ -145,6 +175,7 @@ export type ModelBadgeConfig = {
   targets: Record<string, TargetOverride>;
   steering: { allowGroupMembers: boolean; rules: unknown[] };
   imageGen: ImageGenConfig | null;
+  ask: AskConfig;
   stateDir: string;
   timing: Timing;
   limits: Limits;
@@ -364,6 +395,7 @@ export function normalizeConfig(raw: unknown, ctx: { gatewayStateDir: string }):
   };
 
   const imageGen = normalizeImageGen(c.imageGen, errors);
+  const ask = normalizeAsk(c.ask, errors);
 
   const paths = obj(c.paths);
   const stateDir =
@@ -397,6 +429,7 @@ export function normalizeConfig(raw: unknown, ctx: { gatewayStateDir: string }):
     targets,
     steering,
     imageGen,
+    ask,
     stateDir,
     timing,
     limits,

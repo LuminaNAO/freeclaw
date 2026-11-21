@@ -25,6 +25,10 @@ export type SceneWriterInput = { name: string; snippets: string[] };
 export type SceneWriteRequest = {
   name: string;
   memory: boolean;
+  // ARCH §2c.14: what the group is for (group memory's purpose or the members' answer).
+  // The first snippet, ahead of memory search; cleaned like every snippet. Only set when
+  // the image backend is private (the boundary below).
+  purpose?: string;
   model?: string;
   timeoutMs: number;
 };
@@ -56,7 +60,8 @@ export function cleanSnippet(s: string): string {
 
 export function buildWriterMessage(input: SceneWriterInput): string {
   const name = input.name.replace(/[\r\n]+/g, " ").trim();
-  const lines = [`Group name: ${name}`];
+  // §2c.14: a group accepted with a purpose may not have a name yet.
+  const lines = name ? [`Group name: ${name}`] : ["Group name: (not known)"];
   const snippets = input.snippets.map(cleanSnippet).filter(Boolean).slice(0, WRITER_MAX_SNIPPETS);
   if (snippets.length) {
     lines.push("", "What your memory says about it:", ...snippets.map((s) => `- ${s}`));

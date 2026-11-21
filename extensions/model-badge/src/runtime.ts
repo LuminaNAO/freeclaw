@@ -3,6 +3,7 @@ import {
   parseConfigJson5,
   resolveAgentDir,
   resolveConfigPath,
+  resolveGroupPurpose,
   resolveSecretRefString,
   resolveStorePath,
   type OpenClawConfig,
@@ -17,6 +18,7 @@ import { realClock, type Clock, type Logger } from "./core/clock.js";
 import { normalizeConfig, type ImageGenConfig, type ModelBadgeConfig } from "./core/config.js";
 import { createEngine, type Engine } from "./core/engine.js";
 import { createNodeFs, type CoreFs } from "./core/fsio.js";
+import type { TargetRef } from "./core/provider.js";
 import { createRenderer, detectRasteriser, type Renderer } from "./core/render.js";
 import type { SceneWriter } from "./core/scene.js";
 import { createSteering, type Steering } from "./core/steering.js";
@@ -77,6 +79,8 @@ export async function buildRuntime(opts: {
   // ARCH §2c.11: the agent-run scene writer (built from the plugin runtime in index.ts).
   sceneWriter?: SceneWriter | null;
   sceneWriterFor?: (agentId: string) => SceneWriter;
+  // Test seam for the §2c.14 purpose read; the gateway uses group memory's.
+  purposeOf?: (providerId: string, ref: TargetRef) => { known: boolean; text: string };
 }): Promise<Runtime> {
   const clock = opts.clock ?? realClock;
   const fs = opts.fs ?? createNodeFs();
@@ -135,6 +139,16 @@ export async function buildRuntime(opts: {
         renderer,
         imageGenerator,
         sceneWriter,
+        // ARCH §2c.14: group memory's read-only purpose for a group (group-memory ARCH §9).
+        purposeOf: (ref) =>
+          opts.purposeOf
+            ? opts.purposeOf(id, ref)
+            : resolveGroupPurpose({
+                cfg: opts.gatewayConfig,
+                agentId,
+                channel: id,
+                groupId: provider.groupMemoryId?.(ref) ?? ref.idLower,
+              }),
         parseConfigText: (text) => {
           const r = parseConfigJson5(text);
           if (!r.ok) {

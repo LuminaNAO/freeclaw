@@ -93,13 +93,16 @@ export function createSceneWriter(opts: {
   return {
     async write(req) {
       const sessionKey = opts.newSessionKey?.() ?? writerSessionKey(opts.agentId);
-      const snippets = req.memory
-        ? await memorySnippets(runtime, {
-            gatewayConfig: opts.gatewayConfig,
-            sessionKey,
-            name: req.name,
-          })
-        : [];
+      const searched =
+        req.memory && req.name
+          ? await memorySnippets(runtime, {
+              gatewayConfig: opts.gatewayConfig,
+              sessionKey,
+              name: req.name,
+            })
+          : [];
+      // ARCH §2c.14: the group's purpose is the first snippet, ahead of memory search.
+      const snippets = req.purpose ? [req.purpose, ...searched] : searched;
       try {
         if (req.model) {
           await runtime.subagent.patchSession({

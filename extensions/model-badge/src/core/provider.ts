@@ -72,6 +72,9 @@ export interface BadgeProvider {
   // stored under them are dropped on load (the next event or a rename re-adds the name).
   miskeyedEventIds?(ref: TargetRef): string[];
   sessionKeyFor(ref: TargetRef): string | null;
+  // ARCH §2c.14: the id group memory keys this group under (group-memory ARCH §1), so
+  // the purpose read finds the group's own folder. Absent: the bare target id.
+  groupMemoryId?(ref: TargetRef): string;
   profile(): ProviderProfile | null;
 
   listTargets(): Promise<ListResult>;

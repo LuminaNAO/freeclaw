@@ -27,6 +27,15 @@ import { sha256 } from "./hash.js";
 import { createLease, type Lease } from "./lease.js";
 import { isMotif, seedFor, type BaseParams } from "./motif.js";
 import {
+  ANSWER_TEXT,
+  ASK_TEXT,
+  cleanPurpose,
+  createPictureStore,
+  describePicture,
+  type PictureReason,
+  type PictureRecord,
+} from "./picture.js";
+import {
   parseTargetKey,
   targetKey,
   type ApplyResult,
@@ -76,6 +85,9 @@ export type EngineDeps = {
   imageGenerator?: BaseArtGenerator | null;
   // ARCH §2c.11: writes a new group's scene through the plugin runtime (one agent run).
   sceneWriter?: SceneWriter | null;
+  // ARCH §2c.14: whether group memory knows a group's purpose (group-memory ARCH §9).
+  // Read-only; absent = never known.
+  purposeOf?: (ref: TargetRef) => { known: boolean; text: string };
   parseConfigText?: (text: string) => unknown;
   initialGatewayConfig?: unknown;
   instanceId?: string;
@@ -171,6 +183,8 @@ export function createEngine(deps: EngineDeps) {
   let scenesLoaded = false;
   const sceneQueue = new Set<string>();
   let sceneRun: Promise<void> | null = null;
+  // ARCH §2c.14: per group target first seen with no avatar, whether it gets a picture.
+  const pictures = createPictureStore({ fs, dir: path.join(P.stateDir, "pictures") });
   const styleStore = createStyleStore({ fs, stateDir: P.rootDir });
   const lease =
     deps.lease ??
@@ -282,6 +296,7 @@ export function createEngine(deps: EngineDeps) {
       ...status,
       imageGen: images.status(),
       adopted: adopted.status(),
+      pictures: pictures.counts(),
       ids: provider.knownIds?.() ?? status.ids,
       role,
       holder: holder
@@ -359,6 +374,7 @@ export function createEngine(deps: EngineDeps) {
     }
     await images.load();
     await adopted.load();
+    await pictures.load();
     adoptAttempts.clear();
     const merged = await scenes.load();
     const dropped = dropMiskeyedScenes(Object.keys(provider.knownIds?.() ?? status.ids ?? {}));
@@ -637,6 +653,7 @@ export function createEngine(deps: EngineDeps) {
       if (scenes.remove(want.key)) {
         await scenes.save();
       }
+      await pictures.remove(want.key);
     }
     if (had) {
       log.info(`${tag} target removed: ${why}`);
@@ -699,7 +716,7 @@ export function createEngine(deps: EngineDeps) {
       return;
     }
     const t0 = clock.now();
-    const refs = [...targets.values()].map((t) => t.ref);
+    const refs = liveRefs();
     const wants = refs
       .filter((r) => !view!.baseLocked(r))
       .map((r) => view!.imageWant(r))
@@ -804,12 +821,178 @@ export function createEngine(deps: EngineDeps) {
     return images.prune({ seeds, shas });
   }
 
+  // ---------------- ask before painting (§2c.14) ----------------
+
+  function askConfig() {
+    return (inputs?.pluginConfig ?? deps.config).ask;
+  }
+
+  function pictureKey(ref: TargetRef): string {
+    return seedFor(provider.id, ref.idLower);
+  }
+
+  // A group first seen with no avatar whose picture is not accepted: nothing is painted
+  // for it (not even vector). Targets seen before §2c.14, adopted art, the profile and
+  // groups that had an avatar never have a held record.
+  function pictureHeldRef(ref: TargetRef): boolean {
+    if (ref.kind !== "group") {
+      return false;
+    }
+    const key = pictureKey(ref);
+    const rec = pictures.get(key);
+    return Boolean(rec && rec.state !== "accepted" && adopted.record(key)?.none === "no-avatar");
+  }
+  function pictureHeld(t: TargetInfo): boolean {
+    return pictureHeldRef(t.ref);
+  }
+
+  // The targets assets are made for: every target but the held ones.
+  function liveRefs(): TargetRef[] {
+    return [...targets.values()].map((t) => t.ref).filter((r) => !pictureHeldRef(r));
+  }
+
+  function purposeKnown(ref: TargetRef): { known: boolean; text: string } {
+    try {
+      const p = deps.purposeOf?.(ref);
+      return p?.known && p.text.trim() ? p : { known: false, text: "" };
+    } catch {
+      return { known: false, text: "" };
+    }
+  }
+
+  // The purpose the writer gets first: the members' answer, else group memory's.
+  function writerPurpose(ref: TargetRef, key: string): string | null {
+    const answered = pictures.get(key)?.purpose;
+    if (answered) {
+      return answered;
+    }
+    // ask.mode paint is the behaviour before §2c.14: a name-only scene.
+    if (askConfig().mode === "paint") {
+      return null;
+    }
+    const p = purposeKnown(ref);
+    return p.known ? p.text : null;
+  }
+
+  async function setPicture(key: string, rec: PictureRecord) {
+    const before = describePicture(pictures.get(key));
+    await pictures.set(key, rec);
+    // State changes are logged without the group, its name or the purpose.
+    if (describePicture(rec) !== before) {
+      log.info(`${tag} a group's picture is ${describePicture(rec)}`);
+    }
+  }
+
+  async function accept(key: string, reason: PictureReason, purpose?: string) {
+    const prev = pictures.get(key);
+    await setPicture(key, {
+      state: "accepted",
+      since: clock.now(),
+      reason,
+      ...(purpose ? { purpose } : prev?.purpose ? { purpose: prev.purpose } : {}),
+    });
+  }
+
+  // First sight of a group with no avatar (called from adoptNew).
+  async function decideFirstSight(ref: TargetRef, key: string) {
+    if (pictures.get(key)) {
+      // Decided before first sight (an operator or member declared it): kept.
+      return;
+    }
+    const ask = askConfig();
+    if (ask.mode === "paint") {
+      await accept(key, "ask-mode-paint");
+    } else if ((inputs?.pluginConfig ?? deps.config).targets[ref.idLower]?.base === "generate") {
+      await accept(key, "operator-config");
+    } else if (purposeKnown(ref).known) {
+      await accept(key, "purpose-known");
+    } else {
+      await setPicture(key, { state: "pending", since: clock.now() });
+    }
+  }
+
+  // Each pass (and each group-memory event): a pending group whose purpose became known
+  // paints; ask.mode paint releases pending and asked groups; an unanswered ask expires.
+  // Returns whether anything was accepted (the caller rebuilds).
+  async function sweepPictures(only?: TargetRef): Promise<boolean> {
+    if (!pictures.loaded()) {
+      return false;
+    }
+    const ask = askConfig();
+    let accepted = false;
+    for (const t of only ? [{ ref: only }] : targets.values()) {
+      if (t.ref.kind !== "group" || !driven(t.ref)) {
+        continue;
+      }
+      const key = pictureKey(t.ref);
+      const rec = pictures.get(key);
+      if (!rec || rec.state === "accepted" || rec.state === "declined") {
+        continue;
+      }
+      if (ask.mode === "paint") {
+        await accept(key, "ask-mode-paint");
+        accepted = true;
+      } else if (rec.state === "pending" && purposeKnown(t.ref).known) {
+        await accept(key, "purpose-known");
+        accepted = true;
+      } else if (
+        rec.state === "asked" &&
+        clock.now() - (rec.askedAt ?? rec.since) >= ask.expireMs
+      ) {
+        await setPicture(key, {
+          ...rec,
+          state: "declined",
+          since: clock.now(),
+          reason: "no-answer",
+        });
+      }
+    }
+    if (accepted && inputs) {
+      view = makeView(inputs);
+    }
+    return accepted;
+  }
+
+  // Accepted groups are painted now: new view, assets, scenes, then the queue.
+  async function releasePictures(keys: string[]) {
+    if (!inputs || role !== "writer" || !running) {
+      return;
+    }
+    view = makeView(inputs);
+    scheduleScenes();
+    await rebuild("picture accepted");
+    for (const k of keys) {
+      if (targets.has(k)) {
+        markDirty(k);
+      }
+    }
+  }
+
+  // The group target a session key is the own session of, if any: exactly the provider's
+  // session for that group, of this agent. Direct chats, threads, other agents' sessions
+  // and other channels never match.
+  function ownGroupOf(sessionKey: string | undefined): { k: string; ref: TargetRef } | null {
+    if (!sessionKey) {
+      return null;
+    }
+    const ref = provider.targetForSessionKey(sessionKey);
+    if (!ref || ref.kind !== "group" || !driven(ref)) {
+      return null;
+    }
+    const own = provider.sessionKeyFor(ref);
+    if (!own || own.toLowerCase() !== sessionKey.toLowerCase()) {
+      return null;
+    }
+    const k = targetKey(ref);
+    return targets.has(k) ? { k, ref } : null;
+  }
+
   // ---------------- written scenes (§2c.11) ----------------
 
   // The scene the agent wrote for this base key at this generation, if it was accepted.
   function writtenScene(key: string, generation: number): string | null {
-    const name = scenes.name(key);
-    const rec = name ? scenes.record(key, name, generation) : null;
+    // A group accepted with a purpose but no name yet is written under "" (§2c.14).
+    const rec = scenes.record(key, scenes.name(key) ?? "", generation);
     return rec?.source === "writer" && rec.scene ? rec.scene : null;
   }
 
@@ -819,7 +1002,7 @@ export function createEngine(deps: EngineDeps) {
     return sceneQueue.has(key);
   }
 
-  type SceneCandidate = { key: string; name: string; generation: number };
+  type SceneCandidate = { key: string; ref: TargetRef; name: string; generation: number };
 
   // Which group targets need the writer now: a name came from the new-group event, no
   // outcome exists for (name, generation) yet, the adoption check is done and the group
@@ -838,15 +1021,20 @@ export function createEngine(deps: EngineDeps) {
         continue;
       }
       const key = view.imageWant(t.ref).key;
-      const name = scenes.name(key);
-      if (!name || awaitingAdoption(t) || view.adoptedFor(t.ref)) {
+      // §2c.14: the writer is not called until the target is accepted or its purpose known.
+      if (awaitingAdoption(t) || view.adoptedFor(t.ref) || pictureHeld(t)) {
+        continue;
+      }
+      // A group accepted with a purpose is written even before its name is known.
+      const name = scenes.name(key) ?? (pictures.get(key)?.state === "accepted" ? "" : null);
+      if (name === null || (!name && !writerPurpose(t.ref, key))) {
         continue;
       }
       const generation = images.generation(key);
       if (scenes.record(key, name, generation)) {
         continue;
       }
-      out.push({ key, name, generation });
+      out.push({ key, ref: t.ref, name, generation });
     }
     return out;
   }
@@ -862,11 +1050,15 @@ export function createEngine(deps: EngineDeps) {
     const timeout = new Promise<"timeout">((resolve) => {
       timer = clock.setTimeout(() => resolve("timeout"), pw.timeoutMs);
     });
+    // §2c.14: the group's purpose is the first snippet, ahead of memory search, behind the
+    // same private-backend boundary (checked above).
+    const purpose = writerPurpose(c.ref, c.key);
     try {
       const out = await Promise.race([
         deps.sceneWriter!.write({
           name: c.name,
           memory: pw.memory,
+          ...(purpose ? { purpose } : {}),
           ...(pw.model ? { model: pw.model } : {}),
           timeoutMs: pw.timeoutMs,
         }),
@@ -911,7 +1103,7 @@ export function createEngine(deps: EngineDeps) {
         // The inputs may have moved on (rename, regenerate) while the writer ran: then the
         // target stays queued and is written again for its new inputs.
         if (
-          scenes.name(next.key) === next.name &&
+          (scenes.name(next.key) ?? "") === next.name &&
           images.generation(next.key) === next.generation
         ) {
           sceneQueue.delete(next.key);
@@ -973,8 +1165,7 @@ export function createEngine(deps: EngineDeps) {
     if (want.style.scene) {
       return { source: "writer", text: want.style.scene };
     }
-    const name = scenes.name(want.key);
-    const rec = name ? scenes.record(want.key, name, want.generation) : null;
+    const rec = scenes.record(want.key, scenes.name(want.key) ?? "", want.generation);
     const motif = isMotif(want.style.motif) ? want.style.motif : want.target.params.motif;
     const palette = want.style.palette ?? want.target.params.palette;
     return {
@@ -1041,6 +1232,9 @@ export function createEngine(deps: EngineDeps) {
       adoptAttempts.delete(key);
       if (res.kind === "none" || res.kind === "unsupported") {
         await adopted.markSeen(key, res.kind === "none" ? "no-avatar" : "unsupported");
+        if (res.kind === "none" && t.ref.kind === "group") {
+          await decideFirstSight(t.ref, key);
+        }
       } else if (isStamped(res.bytes)) {
         await adopted.markSeen(key, "ours");
       } else {
@@ -1117,6 +1311,14 @@ export function createEngine(deps: EngineDeps) {
         since: status.waiting[k]?.since ?? clock.now(),
       };
       return { action: "skip", why: "waiting-for-adoption" };
+    }
+    // §2c.14: nothing is painted until the group's picture is accepted.
+    if (pictureHeld(t)) {
+      status.waiting[k] = {
+        reason: "waiting-for-picture",
+        since: status.waiting[k]?.since ?? clock.now(),
+      };
+      return { action: "skip", why: "waiting-for-picture" };
     }
     const d = view.desired(t.ref, t.sessionKey);
     if (!d.ok) {
@@ -1513,7 +1715,7 @@ export function createEngine(deps: EngineDeps) {
       scheduleScenes();
     }
 
-    const refs = [...targets.values()].map((t) => t.ref);
+    const refs = liveRefs();
     const fp = view!.fingerprint(refs);
     const availChanged =
       prevView !== null &&
@@ -1598,8 +1800,9 @@ export function createEngine(deps: EngineDeps) {
       }
     }
     await recordStats();
-    const refs = [...targets.values()].map((t) => t.ref);
     await adoptNew();
+    await sweepPictures();
+    const refs = liveRefs();
     scheduleScenes();
     const imagesPending =
       images.pending(
@@ -1809,8 +2012,118 @@ export function createEngine(deps: EngineDeps) {
       if (provider.sessionKeyFor(ref)) {
         nudged.add(provider.sessionKeyFor(ref)!);
       }
+      // §2c.14: a group-memory event re-reads a pending group's purpose.
+      if (role === "writer" && running && (await sweepPictures(ref))) {
+        await releasePictures([targetKey(ref)]);
+      }
       scheduleScenes();
       return { ok: true as const, changed };
+    },
+
+    // ARCH §2c.14: the per-turn text for a turn of `sessionKey`, from the prompt-build
+    // hook. Only the group's own session gets it; every other session (direct chats, other
+    // groups, other agents) gets null. Pending: the ask text, and the injection is recorded
+    // so the next delivered reply of this session marks the group asked. Asked (not
+    // expired): the answer line. Nothing else ever.
+    async promptContext(sessionKey: string | undefined): Promise<string | null> {
+      if (role !== "writer" || !running || !pictures.loaded()) {
+        return null;
+      }
+      const own = ownGroupOf(sessionKey);
+      if (!own) {
+        return null;
+      }
+      const key = pictureKey(own.ref);
+      const rec = pictures.get(key);
+      if (!rec || !pictureHeldRef(own.ref)) {
+        return null;
+      }
+      const ask = askConfig();
+      if (ask.mode !== "ask") {
+        return null;
+      }
+      if (rec.state === "pending") {
+        await setPicture(key, { ...rec, injectedAt: clock.now() });
+        return ASK_TEXT;
+      }
+      if (rec.state === "asked") {
+        if (clock.now() - (rec.askedAt ?? rec.since) >= ask.expireMs) {
+          await setPicture(key, {
+            ...rec,
+            state: "declined",
+            since: clock.now(),
+            reason: "no-answer",
+          });
+          return null;
+        }
+        return ANSWER_TEXT;
+      }
+      return null;
+    },
+
+    // ARCH §2c.14: the message_sent hook reported a delivered reply of `sessionKey`. The
+    // first one after the ask text was injected into a turn of the pending group's own
+    // session marks it asked. Failed sends and other sessions change nothing.
+    async replyDelivered(sessionKey: string | undefined, success: boolean): Promise<boolean> {
+      if (!success || role !== "writer" || !running || !pictures.loaded()) {
+        return false;
+      }
+      const own = ownGroupOf(sessionKey);
+      if (!own) {
+        return false;
+      }
+      const key = pictureKey(own.ref);
+      const rec = pictures.get(key);
+      if (rec?.state !== "pending" || rec.injectedAt === undefined || !pictureHeldRef(own.ref)) {
+        return false;
+      }
+      const now = clock.now();
+      await setPicture(key, { state: "asked", since: now, askedAt: now });
+      return true;
+    },
+
+    // ARCH §2c.14: the `picture` action. `yes` accepts (with the members' purpose, one
+    // sentence), `no` declines. A group not seen yet is decided ahead of first sight (an
+    // operator declaring a new group's purpose). A group that was never asked because it
+    // already had a picture, or was set up before asking existed, is left alone.
+    async picture(k: string, decision: "yes" | "no", purposeRaw?: unknown) {
+      return writerOnly(async () => {
+        const ref = parseTargetKey(k);
+        if (!ref || ref.kind !== "group") {
+          return { ok: false as const, message: "only a group has a picture to decide" };
+        }
+        if (!driven(ref)) {
+          return { ok: false as const, message: notDrivenOr(k) };
+        }
+        const cleaned = cleanPurpose(purposeRaw);
+        if (!cleaned.ok) {
+          return { ok: false as const, message: cleaned.error };
+        }
+        const key = pictureKey(ref);
+        const rec = pictures.get(key);
+        if (!rec && adopted.seen(key)) {
+          return {
+            ok: false as const,
+            message:
+              "this group was never asked about a picture (it already has one, or was set up before asking existed)",
+          };
+        }
+        if (decision === "no") {
+          if (rec?.state === "accepted" && !pictureHeldRef(ref) && applied.targets[k]) {
+            return { ok: false as const, message: "this group's picture is already painted" };
+          }
+          await setPicture(key, { state: "declined", since: clock.now() });
+          return { ok: true as const, state: "declined" as const };
+        }
+        await accept(key, "answer", cleaned.purpose ?? undefined);
+        await releasePictures([k]);
+        return { ok: true as const, state: "accepted" as const };
+      });
+    },
+
+    pictureState: (k: string) => {
+      const ref = parseTargetKey(k);
+      return ref?.kind === "group" ? describePicture(pictures.get(pictureKey(ref))) : null;
     },
 
     // Stepping seams for tests.
@@ -1914,6 +2227,18 @@ export function createEngine(deps: EngineDeps) {
           return { ok: false as const, message: "the profile uses profileBaseImage" };
         }
         const key = view.imageWant(t.ref).key;
+        // §2c.14: an explicit regenerate on a pending, asked or declined group is a yes.
+        if (pictureHeld(t)) {
+          await accept(key, "regenerate");
+          view = inputs ? makeView(inputs) : view;
+          await fullPass("regenerate");
+          return {
+            ok: true as const,
+            generation: images.generation(key),
+            imageGen: images.state,
+            picture: "accepted" as const,
+          };
+        }
         if (view.adoptedFor(t.ref)) {
           await adopted.setActive(key, false);
           await fullPass("regenerate");
@@ -1989,11 +2314,12 @@ export function createEngine(deps: EngineDeps) {
               hash: applied.targets[k].hash.slice(0, 12),
             }
           : null,
-        converged: d.ok && applied.targets[k]?.hash === d.hash,
+        converged: d.ok && !pictureHeld(t) && applied.targets[k]?.hash === d.hash,
         parked: status.parked[k] ?? null,
         waiting: status.waiting[k] ?? null,
         queuePosition: queue.indexOf(k),
-        scene: sceneSummary(t.ref),
+        scene: pictureHeld(t) ? null : sceneSummary(t.ref),
+        picture: t.ref.kind === "group" ? describePicture(pictures.get(pictureKey(t.ref))) : null,
       };
     },
 
@@ -2002,7 +2328,7 @@ export function createEngine(deps: EngineDeps) {
       const rows = [...targets.keys()].map((k) => ({ key: k, ...api.targetSummary(k)! }));
       let missing = 0;
       if (view && cache) {
-        for (const ref of [...targets.values()].map((t) => t.ref)) {
+        for (const ref of liveRefs()) {
           for (const job of view.requiredFor(ref)) {
             if (!(await cache.has(job.hash))) {
               missing++;

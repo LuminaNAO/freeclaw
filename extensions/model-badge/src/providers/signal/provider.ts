@@ -180,6 +180,12 @@ export function createSignalProvider(opts: {
       return id ? { kind: "group", idLower: id.toLowerCase() } : null;
     },
 
+    // Group memory keys a Signal group as "group:<id>", lowercased (from the inbound
+    // context), the same id its new-group event carries.
+    groupMemoryId(ref) {
+      return `group:${ref.idLower}`;
+    },
+
     miskeyedEventIds(ref) {
       return ref.kind === "group" ? [`group:${ref.idLower}`] : [];
     },
