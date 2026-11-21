@@ -1,5 +1,8 @@
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "./context-window-constants.js";
 
+/** Session context limit ARCH §2: the word that clears the limit (`sessions.patch` uses `null`). */
+export const CONTEXT_LIMIT_CLEAR_WORD = "default";
+
 /**
  * Session context limit ARCH §1: the pure rules for a session's own `contextLimit`.
  *

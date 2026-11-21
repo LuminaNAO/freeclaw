@@ -15,23 +15,27 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 export const CONTEXT_LIMIT_SUBCOMMAND = "limit";
 
+export const CONTEXT_LIMIT_COMMAND_REFUSAL =
+  "⚠️ Only an operator can change this chat's context limit.";
+
 const CONTEXT_LIMIT_USAGE = `Usage: /context limit [<tokens>|${CONTEXT_LIMIT_CLEAR_WORD}] (example: /context limit 256k)`;
 
 /**
  * Session context limit ARCH §2.1: `/context limit` shows the limit and the effective window with
  * its source; `/context limit <n>|default` sets or clears it for this chat. Operator (owner)
- * senders only; others get a one-line refusal. Validation is shared with `sessions.patch` and the
- * `session_status` tool.
+ * senders only; others get a one-line refusal.
+ * Validation is shared with `sessions.patch` and the `session_status` tool.
  */
 export async function handleContextLimitCommand(
   params: HandleCommandsParams,
   args: string[],
 ): Promise<ReplyPayload> {
+  // Operator (owner) senders only, for the show form too (same gate as /session quiet).
   if (!params.command.senderIsOwner) {
     logVerbose(
       `Ignoring /context limit from non-operator sender: ${params.command.senderId || "<unknown>"}`,
     );
-    return { text: "⚠️ Only an operator can change this chat's context limit." };
+    return { text: CONTEXT_LIMIT_COMMAND_REFUSAL };
   }
   const entry = params.sessionEntry;
   if (!entry || !params.sessionKey) {

@@ -1,5 +1,8 @@
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-constants.js";
-import { normalizeSessionContextLimit } from "../agents/session-context-limit.js";
+import {
+  CONTEXT_LIMIT_CLEAR_WORD,
+  normalizeSessionContextLimit,
+} from "../agents/session-context-limit.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import {
@@ -18,8 +21,7 @@ import { formatTokenCount } from "../utils/usage-format.js";
  * and write with {@link applyContextLimitToEntry}, so they behave identically.
  */
 
-/** The word that clears the limit in the command and the tool (`sessions.patch` uses `null`). */
-export const CONTEXT_LIMIT_CLEAR_WORD = "default";
+export { CONTEXT_LIMIT_CLEAR_WORD };
 
 export const CONTEXT_LIMIT_OPERATOR_ONLY_ERROR =
   "Only an operator can change a session's context limit.";

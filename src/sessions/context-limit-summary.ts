@@ -2,12 +2,12 @@ import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import {
   applySessionContextLimit,
+  CONTEXT_LIMIT_CLEAR_WORD,
   normalizeSessionContextLimit,
 } from "../agents/session-context-limit.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { formatTokenCount } from "../utils/usage-format.js";
-import { CONTEXT_LIMIT_CLEAR_WORD } from "./context-limit.js";
 
 export type SessionContextWindowSource = "model" | "agentContextTokens" | "sessionContextLimit";
 
