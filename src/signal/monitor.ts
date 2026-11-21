@@ -10,9 +10,13 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
+import { logVerbose } from "../globals.js";
+import { fireAndForgetHook } from "../hooks/fire-and-forget.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { normalizeE164 } from "../utils.js";
@@ -328,12 +332,58 @@ async function fetchAttachment(params: {
   return { path: saved.path, contentType: saved.contentType };
 }
 
-async function deliverReplies(params: {
+/**
+ * The `message_sent` plugin hook for one send of Signal's reply path (model-badge ARCH
+ * §2c.14), the way src/infra/outbound/deliver.ts and Telegram fire it. Fire-and-forget:
+ * nothing is done when no plugin registered the hook, the handlers start on a later
+ * microtask, and a failing or slow handler never affects delivery.
+ */
+function emitSignalMessageSent(params: {
+  target: string;
+  accountId?: string;
+  sessionKey?: string;
+  content: string;
+  success: boolean;
+  error?: unknown;
+}): void {
+  try {
+    const hookRunner = getGlobalHookRunner();
+    if (!hookRunner?.hasHooks("message_sent")) {
+      return;
+    }
+    const event = {
+      to: params.target,
+      content: params.content,
+      success: params.success,
+      ...(params.success
+        ? {}
+        : {
+            error: formatErrorMessage(params.error),
+          }),
+    };
+    const ctx = {
+      channelId: "signal",
+      ...(params.accountId ? { accountId: params.accountId } : {}),
+      conversationId: params.target,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    };
+    fireAndForgetHook(
+      Promise.resolve().then(() => hookRunner.runMessageSent(event, ctx)),
+      "signal: message_sent plugin hook failed",
+    );
+  } catch (err) {
+    logVerbose(`signal: message_sent plugin hook failed: ${String(err)}`);
+  }
+}
+
+export async function deliverReplies(params: {
   replies: ReplyPayload[];
   target: string;
   baseUrl: string;
   account?: string;
   accountId?: string;
+  /** The session of the turn these replies belong to (message_sent hook context). */
+  sessionKey?: string;
   runtime: RuntimeEnv;
   maxBytes: number;
   textLimit: number;
@@ -341,6 +391,32 @@ async function deliverReplies(params: {
 }) {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
+  // Each send fires message_sent after it returned (success) or threw (failure); the
+  // error propagates exactly as before.
+  const sendAndReport = async (...args: Parameters<typeof sendMessageSignal>) => {
+    const content = args[1];
+    try {
+      const result = await sendMessageSignal(...args);
+      emitSignalMessageSent({
+        target,
+        accountId,
+        sessionKey: params.sessionKey,
+        content,
+        success: true,
+      });
+      return result;
+    } catch (err) {
+      emitSignalMessageSent({
+        target,
+        accountId,
+        sessionKey: params.sessionKey,
+        content,
+        success: false,
+        error: err,
+      });
+      throw err;
+    }
+  };
   for (const payload of replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
@@ -349,7 +425,7 @@ async function deliverReplies(params: {
     }
     if (mediaList.length === 0) {
       for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
-        await sendMessageSignal(target, chunk, {
+        await sendAndReport(target, chunk, {
           baseUrl,
           account,
           maxBytes,
@@ -366,7 +442,7 @@ async function deliverReplies(params: {
       for (const url of mediaList) {
         const caption = first ? captionText : "";
         first = false;
-        await sendMessageSignal(target, caption, {
+        await sendAndReport(target, caption, {
           baseUrl,
           account,
           mediaUrl: url,
@@ -377,7 +453,7 @@ async function deliverReplies(params: {
         });
       }
       for (const chunk of followUpChunks) {
-        await sendMessageSignal(target, chunk, {
+        await sendAndReport(target, chunk, {
           baseUrl,
           account,
           maxBytes,

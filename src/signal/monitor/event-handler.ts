@@ -323,6 +323,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           baseUrl: deps.baseUrl,
           account: deps.account,
           accountId: deps.accountId,
+          // model-badge ARCH §2c.14: message_sent names the turn's session.
+          sessionKey: route.sessionKey,
           runtime: deps.runtime,
           maxBytes: deps.mediaMaxBytes,
           textLimit: deps.textLimit,

@@ -111,6 +111,8 @@ export type SignalEventHandlerDeps = {
     baseUrl: string;
     account?: string;
     accountId?: string;
+    /** The session of the turn these replies belong to (message_sent hook context). */
+    sessionKey?: string;
     runtime: RuntimeEnv;
     maxBytes: number;
     textLimit: number;

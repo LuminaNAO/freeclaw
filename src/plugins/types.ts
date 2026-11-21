@@ -665,6 +665,11 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  /**
+   * The session of the turn whose reply this is (`message_sent` only). Set by Signal's
+   * reply path (model-badge ARCH §2c.14); other emitters leave it unset.
+   */
+  sessionKey?: string;
 };
 
 // message_received hook
