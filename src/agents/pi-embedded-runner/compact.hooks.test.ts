@@ -151,6 +151,7 @@ vi.mock("../models-config.js", () => ({
 }));
 
 vi.mock("../model-auth.js", () => ({
+  applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
   getApiKeyForModel: vi.fn(async () => ({ apiKey: "test", mode: "env" })),
   resolveModelAuthMode: vi.fn(() => "env"),
 }));
@@ -324,6 +325,8 @@ vi.mock("./utils.js", () => ({
 
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
+import { markCompactionNothingToSummarize } from "../pi-extensions/compaction-safeguard-runtime.js";
+import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { compactEmbeddedPiSessionDirect, compactEmbeddedPiSession } from "./compact.js";
 
 const TEST_SESSION_ID = "session-1";
@@ -589,6 +592,45 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       },
     });
     expect(sessionHook("compact:after")?.context?.tokenCount).toBe(30);
+  });
+
+  it("a safeguard cancel for nothing to summarize is an outcome, not a failure (ARCH §2.7)", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    sessionCompactImpl.mockImplementationOnce(async () => {
+      // What the safeguard does: mark the session manager, then pi throws "Compaction cancelled".
+      markCompactionNothingToSummarize(vi.mocked(guardSessionManager).mock.results.at(-1)?.value);
+      throw new Error("Compaction cancelled");
+    });
+
+    const result = await runDirectCompaction();
+
+    expect(result).toEqual({
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages to summarize",
+      nothingToCompact: true,
+    });
+    expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+  });
+
+  it("any other compaction error stays a failure (ARCH §2.7)", async () => {
+    sessionCompactImpl.mockImplementationOnce(async () => {
+      throw new Error("Compaction cancelled");
+    });
+
+    const result = await runDirectCompaction();
+
+    expect(result.ok).toBe(false);
+    expect(result.nothingToCompact).toBeUndefined();
+    expect(result.reason).toContain("Compaction cancelled");
+  });
+
+  it("no real conversation messages at all is reported as nothing to compact (ARCH §2.7)", async () => {
+    sanitizeSessionHistoryMock.mockImplementation(async () => []);
+
+    const result = await runDirectCompaction();
+
+    expect(result).toMatchObject({ ok: true, compacted: false, nothingToCompact: true });
   });
 
   it("treats pre-compaction token estimation failures as a no-op sanity check", async () => {
@@ -877,6 +919,20 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     } finally {
       cleanup();
     }
+  });
+
+  it("passes the engine's nothing-to-compact outcome through (ARCH §2.7)", async () => {
+    contextEngineCompactMock.mockResolvedValue({
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages to summarize",
+      nothingToCompact: true,
+      result: undefined,
+    } as never);
+
+    const result = await compactEmbeddedPiSession(wrappedCompactionArgs());
+
+    expect(result).toMatchObject({ ok: true, compacted: false, nothingToCompact: true });
   });
 
   it("does not fire after_compaction when compaction fails", async () => {
