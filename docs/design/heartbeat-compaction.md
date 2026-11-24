@@ -39,6 +39,21 @@ It becomes built-in, default-on behaviour.
 5. **Quiet.** One log line per compaction (before → after tokens). Nothing is sent to any chat. `openclaw status`
    shows the heartbeat session's size, threshold and last compaction time.
 6. **Default on**, for new installs and upgrades. `heartbeat.compactAt: off` disables.
+7. **Nothing to compact (operator, 2026-11-24).** Observed on a live gateway: the heartbeat session reported
+   126k to 130k tokens against a 100k threshold. Every pre-turn compaction was cancelled by the compaction safeguard
+   ("no real conversation messages to summarize"), logged as "compaction failed (will retry next heartbeat)", and
+   tried again on every heartbeat for about 18 hours, each time after a memory flush turn. Numbers at the time: the
+   last good compaction left a summary of about 23k characters and kept about 127k characters of recent messages.
+   - A compaction that ends with nothing to summarize (the safeguard cancel, or `compacted: false` for that reason)
+     is an outcome, not a failure. Log it once at info level with the token count. Real errors keep the existing
+     rule (log, retry next heartbeat).
+   - Record on the session entry the token count at which it happened. Make no new attempt (no memory flush, no
+     compaction) until the session has grown past that count by at least 20 % of the threshold. A successful
+     compaction by any path (`/compact`, in-run) clears the record.
+   - Find out why the size test is over the threshold when nothing can be compacted (what the counted tokens are
+     made of: system prompt, tools, kept tail, summary) and state it in the DONE report with numbers. If the size
+     the test uses includes parts compaction can never reduce, report BLOCKED with the numbers and a one-line
+     proposal. Do not change the threshold maths (section 3) on your own.
 
 ## 3. Threshold (operator's rule)
 
@@ -62,3 +77,7 @@ Let `W` = the max context window of the model the heartbeat session uses.
 - Under threshold, `off`, active run, or draining → none.
 - Compaction failure → heartbeat turn still runs, error logged, retried next time.
 - Memory flush runs as part of it.
+- Nothing to compact (§2.7): over threshold, safeguard cancels → logged once at info, not as a failure; the next
+  heartbeat at the same size makes no attempt and runs no memory flush; after growth of 20 % of the threshold past
+  the recorded count, one new attempt; a successful `/compact` clears the record; a real error still retries next
+  heartbeat.
