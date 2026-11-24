@@ -178,4 +178,50 @@ describe("updateSessionStoreAfterAgentRun", () => {
     expect(persisted).not.toHaveProperty("modelProvider");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-5.2");
   });
+
+  it.each([
+    [1, undefined],
+    [0, { tokens: 126_000, at: 1, compactionCount: 2 }],
+  ] as const)(
+    "a run with %i compactions → nothing-to-compact record %o (heartbeat-compaction ARCH §2.7)",
+    async (compactionCount, expected) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+      const storePath = path.join(dir, "sessions.json");
+      const sessionKey = `agent:main:compact:${randomUUID()}`;
+      const sessionId = randomUUID();
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now(),
+          compactionCount: 2,
+          heartbeatNothingToCompact: { tokens: 126_000, at: 1, sessionId, compactionCount: 2 },
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as never,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.3-codex",
+        result: {
+          payloads: [],
+          meta: {
+            aborted: false,
+            agentMeta: { provider: "openai", model: "gpt-5.3-codex", compactionCount },
+          },
+        } as never,
+      });
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      if (expected) {
+        expect(persisted?.heartbeatNothingToCompact).toMatchObject(expected);
+      } else {
+        expect(persisted?.heartbeatNothingToCompact).toBeUndefined();
+      }
+    },
+  );
 });

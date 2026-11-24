@@ -445,6 +445,23 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].outputTokens).toBeUndefined();
   });
 
+  it("clears the heartbeat nothing-to-compact record (heartbeat-compaction ARCH §2.7)", async () => {
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      compactionCount: 2,
+      heartbeatNothingToCompact: { tokens: 126_000, at: 1, sessionId: "s1", compactionCount: 2 },
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementCompactionCount({ sessionEntry: entry, sessionStore, sessionKey, storePath });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].compactionCount).toBe(3);
+    expect(stored[sessionKey].heartbeatNothingToCompact).toBeUndefined();
+    expect(sessionStore[sessionKey]?.heartbeatNothingToCompact).toBeUndefined();
+  });
+
   it("does not update totalTokens when tokensAfter is not provided", async () => {
     const entry = {
       sessionId: "s1",

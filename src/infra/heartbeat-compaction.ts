@@ -63,6 +63,7 @@ export type HeartbeatCompactionOutcome =
   | { status: "skipped"; reason: HeartbeatCompactionSkipReason }
   | { status: "compacted"; tokensBefore: number; tokensAfter?: number }
   | { status: "not-compacted"; reason?: string }
+  | { status: "nothing-to-compact"; tokens: number }
   | { status: "failed"; error: string };
 
 export type HeartbeatCompactionSkipReason =
@@ -71,7 +72,37 @@ export type HeartbeatCompactionSkipReason =
   | "unknown-size"
   | "under-threshold"
   | "active-run"
-  | "draining";
+  | "draining"
+  | "nothing-to-compact";
+
+/**
+ * §2.7: after a nothing-to-compact outcome, no new attempt until the session has grown past the
+ * recorded count by at least this share of the threshold.
+ */
+export const HEARTBEAT_NOTHING_TO_COMPACT_REGROWTH_SHARE = 0.2;
+
+/**
+ * §2.7: true while the recorded nothing-to-compact outcome still applies: same session, no
+ * compaction since, and the session has not grown past the recorded count by 20 % of the threshold.
+ */
+export function isHeartbeatNothingToCompactPending(params: {
+  entry: SessionEntry;
+  tokens: number;
+  threshold: number;
+}): boolean {
+  const record = params.entry.heartbeatNothingToCompact;
+  if (!record || typeof record.tokens !== "number" || !Number.isFinite(record.tokens)) {
+    return false;
+  }
+  if (record.sessionId !== params.entry.sessionId) {
+    return false;
+  }
+  if (record.compactionCount !== (params.entry.compactionCount ?? 0)) {
+    return false;
+  }
+  const regrowth = params.threshold * HEARTBEAT_NOTHING_TO_COMPACT_REGROWTH_SHARE;
+  return params.tokens < record.tokens + regrowth;
+}
 
 /**
  * §2.2: the session's own model, i.e. the model a normal message to that session would run on:
@@ -374,6 +405,10 @@ export async function maybeCompactHeartbeatSession(params: {
     if (isSessionBusy(entry, sessionKey)) {
       return { status: "skipped", reason: "active-run" };
     }
+    // §2.7: nothing to compact at about this size last time: no memory flush, no compaction.
+    if (isHeartbeatNothingToCompactPending({ entry, tokens, threshold })) {
+      return { status: "skipped", reason: "nothing-to-compact" };
+    }
 
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const agentDir = resolveAgentDir(cfg, agentId);
@@ -419,6 +454,16 @@ export async function maybeCompactHeartbeatSession(params: {
       trigger: "heartbeat",
     });
 
+    if (result.ok && !result.compacted && result.nothingToCompact) {
+      // §2.7: an outcome, not a failure. Logged once; the record holds further attempts back.
+      await recordHeartbeatNothingToCompact({ storePath, sessionKey, entry, tokens });
+      log.info(
+        `heartbeat: nothing to compact at ${tokens} tokens (threshold ${threshold}); ` +
+          `next attempt after growth to ${Math.ceil(tokens + threshold * HEARTBEAT_NOTHING_TO_COMPACT_REGROWTH_SHARE)} tokens`,
+        { sessionKey, tokens, threshold },
+      );
+      return { status: "nothing-to-compact", tokens };
+    }
     if (!result.ok) {
       const error = result.reason?.trim() || "unknown error";
       log.warn(`heartbeat: compaction failed (will retry next heartbeat): ${error}`, {
@@ -460,8 +505,10 @@ async function recordHeartbeatCompaction(params: {
     if (!current) {
       return;
     }
+    // §2.7: a successful compaction clears the nothing-to-compact record.
+    const { heartbeatNothingToCompact: _cleared, ...rest } = current;
     const next: SessionEntry = {
-      ...current,
+      ...rest,
       compactionCount: (current.compactionCount ?? 0) + 1,
       heartbeatCompactedAt: now,
     };
@@ -474,6 +521,30 @@ async function recordHeartbeatCompaction(params: {
       next.cacheWrite = undefined;
     }
     store[params.sessionKey] = next;
+  });
+}
+
+/** §2.7: record the size at which compaction found nothing to summarize (updatedAt untouched). */
+async function recordHeartbeatNothingToCompact(params: {
+  storePath: string;
+  sessionKey: string;
+  entry: SessionEntry;
+  tokens: number;
+}): Promise<void> {
+  await updateSessionStore(params.storePath, (store) => {
+    const current = store[params.sessionKey];
+    if (!current || current.sessionId !== params.entry.sessionId) {
+      return;
+    }
+    store[params.sessionKey] = {
+      ...current,
+      heartbeatNothingToCompact: {
+        tokens: params.tokens,
+        at: Date.now(),
+        sessionId: current.sessionId,
+        compactionCount: current.compactionCount ?? 0,
+      },
+    };
   });
 }
 

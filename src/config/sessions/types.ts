@@ -174,6 +174,13 @@ export type SessionEntry = {
   memoryFlushCompactionCount?: number;
   /** Timestamp (ms) of the last compaction run before a heartbeat turn (heartbeat session only). */
   heartbeatCompactedAt?: number;
+  /**
+   * heartbeat-compaction ARCH §2.7: the heartbeat pre-turn compaction ended with nothing to
+   * summarize at this context size. No new attempt (memory flush or compaction) until the session
+   * has grown past `tokens` by at least 20 % of the threshold. Cleared by any successful
+   * compaction; ignored once the session id or compaction count no longer match.
+   */
+  heartbeatNothingToCompact?: HeartbeatNothingToCompactRecord;
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   label?: string;
@@ -344,6 +351,16 @@ export type SessionSkillSnapshot = {
   skillFilter?: string[];
   resolvedSkills?: Skill[];
   version?: number;
+};
+
+export type HeartbeatNothingToCompactRecord = {
+  /** Context size (tokens) at which the compaction found nothing to summarize. */
+  tokens: number;
+  /** Epoch ms of that outcome. */
+  at: number;
+  /** Session id and compaction count at that time: the record only applies to that state. */
+  sessionId: string;
+  compactionCount: number;
 };
 
 export type SessionSystemPromptReport = {

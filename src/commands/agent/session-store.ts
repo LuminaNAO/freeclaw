@@ -129,6 +129,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
     if (clearTotalTokens) {
       delete merged.totalTokens;
     }
+    if (compactionsThisRun > 0) {
+      // heartbeat-compaction ARCH §2.7: a successful compaction by any path clears the record.
+      delete merged.heartbeatNothingToCompact;
+    }
     if (overrideSelected) {
       delete merged.model;
       delete merged.modelProvider;

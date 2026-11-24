@@ -289,16 +289,19 @@ export async function incrementCompactionCount(params: {
     updates.cacheRead = undefined;
     updates.cacheWrite = undefined;
   }
+  // heartbeat-compaction ARCH §2.7: a successful compaction by any path clears the record.
+  const { heartbeatNothingToCompact: _cleared, ...entryWithoutRecord } = entry;
   sessionStore[sessionKey] = {
-    ...entry,
+    ...entryWithoutRecord,
     ...updates,
   };
   if (storePath) {
     await updateSessionStore(storePath, (store) => {
+      const { heartbeatNothingToCompact: _storedRecord, ...current } = store[sessionKey] ?? {};
       store[sessionKey] = {
-        ...store[sessionKey],
+        ...current,
         ...updates,
-      };
+      } as SessionEntry;
     });
   }
   return nextCount;

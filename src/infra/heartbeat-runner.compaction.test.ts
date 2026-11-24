@@ -403,6 +403,225 @@ describe("runHeartbeatOnce – heartbeat session compaction (ARCH §2, §4)", ()
   });
 });
 
+describe("heartbeat compaction: nothing to compact (ARCH §2.7, §4)", () => {
+  const NOTHING = {
+    ok: true,
+    compacted: false,
+    reason: "no real conversation messages to summarize",
+    nothingToCompact: true,
+  };
+
+  async function setTokens(storePath: string, sessionKey: string, totalTokens: number) {
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    store[sessionKey] = { ...store[sessionKey], totalTokens, totalTokensFresh: true };
+    await fs.writeFile(storePath, JSON.stringify(store));
+  }
+
+  function readEntry(storePath: string, sessionKey: string) {
+    return loadSessionStore(storePath, { skipCache: true })[sessionKey];
+  }
+
+  function nothingLogLines() {
+    return logMock.info.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.startsWith("heartbeat: nothing to compact"));
+  }
+
+  it("over threshold, safeguard cancels → logged once at info, not as a failure, and recorded", async () => {
+    piMocks.compactEmbeddedPiSession.mockImplementation(async () => {
+      calls.push("compact");
+      return NOTHING;
+    });
+    await withScenario(
+      { totalTokens: 126_000 },
+      async ({ storePath, sessionKey, heartbeatOnce }) => {
+        expect((await heartbeatOnce()).status).toBe("ran");
+
+        expect(calls).toEqual(["memory-flush", "compact", "turn"]);
+        expect(nothingLogLines()).toEqual([
+          "heartbeat: nothing to compact at 126000 tokens (threshold 100000); next attempt after growth to 146000 tokens",
+        ]);
+        const warnings = logMock.warn.mock.calls.map((call) => String(call[0]));
+        expect(warnings.filter((line) => line.includes("compaction failed"))).toEqual([]);
+        const entry = readEntry(storePath, sessionKey);
+        expect(entry?.heartbeatNothingToCompact).toMatchObject({
+          tokens: 126_000,
+          sessionId: SESSION_ID,
+          compactionCount: 2,
+        });
+        expect(entry?.heartbeatCompactedAt).toBeUndefined();
+        expect(entry?.compactionCount).toBe(2);
+      },
+    );
+  });
+
+  it("the next heartbeat at the same size makes no attempt and runs no memory flush", async () => {
+    piMocks.compactEmbeddedPiSession.mockImplementation(async () => {
+      calls.push("compact");
+      return NOTHING;
+    });
+    await withScenario({ totalTokens: 126_000 }, async ({ heartbeatOnce, replySpy }) => {
+      await heartbeatOnce();
+      // A fresh flush cycle would otherwise be allowed: prove the gate, not the flush dedupe, holds it.
+      calls.length = 0;
+      await heartbeatOnce();
+      await heartbeatOnce();
+
+      expect(piMocks.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
+      expect(piMocks.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+      expect(calls).toEqual(["turn", "turn"]);
+      expect(replySpy).toHaveBeenCalledTimes(3);
+      expect(nothingLogLines()).toHaveLength(1);
+    });
+  });
+
+  it("no memory flush on the held-back heartbeat even when the flush cycle was reset", async () => {
+    piMocks.compactEmbeddedPiSession.mockImplementation(async () => {
+      calls.push("compact");
+      return NOTHING;
+    });
+    await withScenario(
+      { totalTokens: 126_000 },
+      async ({ storePath, sessionKey, heartbeatOnce }) => {
+        await heartbeatOnce();
+        const store = JSON.parse(await fs.readFile(storePath, "utf-8"));
+        delete store[sessionKey].memoryFlushCompactionCount;
+        await fs.writeFile(storePath, JSON.stringify(store));
+        calls.length = 0;
+        await heartbeatOnce();
+        expect(calls).toEqual(["turn"]);
+      },
+    );
+  });
+
+  it("after growth of 20 % of the threshold past the recorded count, one new attempt", async () => {
+    piMocks.compactEmbeddedPiSession.mockImplementation(async () => {
+      calls.push("compact");
+      return NOTHING;
+    });
+    await withScenario(
+      { totalTokens: 126_000 },
+      async ({ storePath, sessionKey, heartbeatOnce }) => {
+        await heartbeatOnce();
+        // Just under the regrowth mark (126k + 20 % of 100k = 146k): still held back.
+        await setTokens(storePath, sessionKey, 145_999);
+        await heartbeatOnce();
+        expect(piMocks.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
+
+        await setTokens(storePath, sessionKey, 146_000);
+        await heartbeatOnce();
+        expect(piMocks.compactEmbeddedPiSession).toHaveBeenCalledTimes(2);
+        expect(readEntry(storePath, sessionKey)?.heartbeatNothingToCompact?.tokens).toBe(146_000);
+
+        // The new outcome is recorded at the new size: the same size holds back again.
+        await heartbeatOnce();
+        expect(piMocks.compactEmbeddedPiSession).toHaveBeenCalledTimes(2);
+        expect(nothingLogLines()).toHaveLength(2);
+      },
+    );
+  });
+
+  it("a successful /compact clears the record", async () => {
+    const { incrementCompactionCount } = await import("../auto-reply/reply/session-updates.js");
+    piMocks.compactEmbeddedPiSession.mockImplementationOnce(async () => {
+      calls.push("compact");
+      return NOTHING;
+    });
+    await withScenario(
+      { totalTokens: 126_000 },
+      async ({ storePath, sessionKey, heartbeatOnce }) => {
+        await heartbeatOnce();
+        expect(readEntry(storePath, sessionKey)?.heartbeatNothingToCompact).toBeDefined();
+
+        // What /compact does after a successful compaction.
+        const sessionStore = loadSessionStore(storePath, { skipCache: true });
+        await incrementCompactionCount({
+          sessionEntry: sessionStore[sessionKey],
+          sessionStore,
+          sessionKey,
+          storePath,
+        });
+        const entry = readEntry(storePath, sessionKey);
+        expect(entry?.heartbeatNothingToCompact).toBeUndefined();
+        expect(entry?.compactionCount).toBe(3);
+
+        // Still over the threshold at the same size: the heartbeat tries again.
+        await heartbeatOnce();
+        expect(piMocks.compactEmbeddedPiSession).toHaveBeenCalledTimes(2);
+      },
+    );
+  });
+
+  it("a record from an earlier compaction count or session does not hold the heartbeat back", async () => {
+    for (const record of [
+      { tokens: 126_000, at: 1, sessionId: SESSION_ID, compactionCount: 1 },
+      { tokens: 126_000, at: 1, sessionId: "older-session", compactionCount: 2 },
+    ]) {
+      piMocks.compactEmbeddedPiSession.mockClear();
+      await withScenario(
+        { totalTokens: 126_000, entry: { heartbeatNothingToCompact: record } },
+        async ({ heartbeatOnce }) => {
+          await heartbeatOnce();
+          expect(piMocks.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
+        },
+      );
+    }
+  });
+
+  it("a successful heartbeat compaction clears the record", async () => {
+    piMocks.compactEmbeddedPiSession.mockImplementationOnce(async () => {
+      calls.push("compact");
+      return NOTHING;
+    });
+    await withScenario(
+      { totalTokens: 126_000 },
+      async ({ storePath, sessionKey, heartbeatOnce }) => {
+        await heartbeatOnce();
+        await setTokens(storePath, sessionKey, 150_000);
+        await heartbeatOnce();
+        const entry = readEntry(storePath, sessionKey);
+        expect(entry?.heartbeatNothingToCompact).toBeUndefined();
+        expect(entry?.compactionCount).toBe(3);
+        expect(compactionLogLines()).toHaveLength(1);
+      },
+    );
+  });
+
+  it("a real error still retries next heartbeat and records nothing", async () => {
+    piMocks.compactEmbeddedPiSession
+      .mockImplementationOnce(async () => {
+        calls.push("compact");
+        return { ok: false, compacted: false, reason: "Compaction cancelled" };
+      })
+      .mockImplementationOnce(async () => {
+        calls.push("compact");
+        return { ok: true, compacted: false, reason: "below threshold" };
+      });
+    await withScenario(
+      { totalTokens: 126_000 },
+      async ({ storePath, sessionKey, heartbeatOnce }) => {
+        await heartbeatOnce();
+        expect(readEntry(storePath, sessionKey)?.heartbeatNothingToCompact).toBeUndefined();
+        await heartbeatOnce();
+        // compacted: false for another reason is not a nothing-to-compact outcome either.
+        expect(readEntry(storePath, sessionKey)?.heartbeatNothingToCompact).toBeUndefined();
+        await heartbeatOnce();
+
+        expect(piMocks.compactEmbeddedPiSession).toHaveBeenCalledTimes(3);
+        const warnings = logMock.warn.mock.calls.map((call) => String(call[0]));
+        expect(warnings).toEqual(
+          expect.arrayContaining([
+            expect.stringContaining(
+              "compaction failed (will retry next heartbeat): Compaction cancelled",
+            ),
+          ]),
+        );
+        expect(nothingLogLines()).toEqual([]);
+      },
+    );
+  });
+});
+
 const MODEL_A = { provider: "openai", model: "gpt-small" }; // session override, 128k → 64k
 const MODEL_B = "openai/gpt-beat"; // heartbeat.model, 64k → 32k
 const MODEL_C = { provider: "openai", model: "gpt-chan" }; // channel override, 160k → 80k
