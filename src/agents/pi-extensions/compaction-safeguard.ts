@@ -28,7 +28,10 @@ import {
   resolveCompactionInstructions,
   STANDING_COMPACTION_RULES,
 } from "./compaction-instructions.js";
-import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
+import {
+  getCompactionSafeguardRuntime,
+  markCompactionNothingToSummarize,
+} from "./compaction-safeguard-runtime.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
 
@@ -705,9 +708,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
     if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
-      log.warn(
+      // heartbeat-compaction ARCH §2.7: nothing to summarize is an outcome, not a failure (info, and
+      // marked so the caller can report it as such).
+      log.info(
         "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
       );
+      markCompactionNothingToSummarize(ctx.sessionManager);
       return { cancel: true };
     }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);

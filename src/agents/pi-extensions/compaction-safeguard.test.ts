@@ -11,7 +11,9 @@ import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extension
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   getCompactionSafeguardRuntime,
+  markCompactionNothingToSummarize,
   setCompactionSafeguardRuntime,
+  takeCompactionNothingToSummarize,
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
 
@@ -1526,6 +1528,32 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
     expect(result).toEqual({ cancel: true });
     expect(getApiKeyMock).not.toHaveBeenCalled();
+    // heartbeat-compaction ARCH §2.7: marked as nothing to summarize (read once).
+    expect(takeCompactionNothingToSummarize(sessionManager)).toBe(true);
+    expect(takeCompactionNothingToSummarize(sessionManager)).toBe(false);
+  });
+
+  it("does not mark other cancels as nothing to summarize (ARCH §2.7)", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: createCompactionEvent({ messageText: "real message", tokensBefore: 1500 }),
+      apiKey: null,
+    });
+    // Cancelled for a missing API key: a real failure, not "nothing to summarize".
+    expect(result).toEqual({ cancel: true });
+    expect(takeCompactionNothingToSummarize(sessionManager)).toBe(false);
+  });
+
+  it("the nothing-to-summarize mark is scoped to one session manager (ARCH §2.7)", () => {
+    const a = stubSessionManager();
+    const b = stubSessionManager();
+    markCompactionNothingToSummarize(a);
+    expect(takeCompactionNothingToSummarize(b)).toBe(false);
+    expect(takeCompactionNothingToSummarize(a)).toBe(true);
   });
 
   it("continues when messages include real conversation content", async () => {

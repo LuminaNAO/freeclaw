@@ -57,6 +57,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
+import { takeCompactionNothingToSummarize } from "../pi-extensions/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -164,6 +165,9 @@ type CompactionMessageMetrics = {
   estTokens?: number;
   contributors: Array<{ role: string; chars: number; tool?: string }>;
 };
+
+/** heartbeat-compaction ARCH §2.7: reason reported when the safeguard finds nothing to summarize. */
+const NOTHING_TO_SUMMARIZE_REASON = "no real conversation messages to summarize";
 
 function hasRealConversationContent(msg: AgentMessage): boolean {
   return msg.role === "user" || msg.role === "assistant" || msg.role === "toolResult";
@@ -924,6 +928,7 @@ export async function compactEmbeddedPiSessionDirect(
             ok: true,
             compacted: false,
             reason: "no real conversation messages",
+            nothingToCompact: true,
           };
         }
 
@@ -956,8 +961,22 @@ export async function compactEmbeddedPiSessionDirect(
           once: true,
         });
         let result: Awaited<ReturnType<typeof session.compact>>;
+        // heartbeat-compaction ARCH §2.7: drop any stale mark before this attempt.
+        takeCompactionNothingToSummarize(sessionManager);
         try {
           result = await compactWithSafetyTimeout(() => session.compact(params.customInstructions));
+        } catch (err) {
+          // The safeguard cancelled because there is nothing to summarize: an outcome, not a
+          // failure. Any other error (including other safeguard cancels) stays a failure.
+          if (takeCompactionNothingToSummarize(sessionManager) && !params.abortSignal?.aborted) {
+            return {
+              ok: true,
+              compacted: false,
+              reason: NOTHING_TO_SUMMARIZE_REASON,
+              nothingToCompact: true,
+            };
+          }
+          throw err;
         } finally {
           params.abortSignal?.removeEventListener("abort", onCallerAbort);
         }
@@ -1197,6 +1216,7 @@ export async function compactEmbeddedPiSession(
           ok: result.ok,
           compacted: result.compacted,
           reason: result.reason,
+          ...(result.nothingToCompact ? { nothingToCompact: true } : {}),
           result: result.result
             ? {
                 summary: result.result.summary ?? "",

@@ -15,6 +15,8 @@ export type CompactResult = {
   ok: boolean;
   compacted: boolean;
   reason?: string;
+  /** heartbeat-compaction ARCH §2.7: the compaction ended with nothing to summarize. */
+  nothingToCompact?: boolean;
   result?: {
     summary?: string;
     firstKeptEntryId?: string;

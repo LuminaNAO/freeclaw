@@ -108,6 +108,7 @@ export class LegacyContextEngine implements ContextEngine {
       ok: result.ok,
       compacted: result.compacted,
       reason: result.reason,
+      ...(result.nothingToCompact ? { nothingToCompact: true } : {}),
       result: result.result
         ? {
             summary: result.result.summary,

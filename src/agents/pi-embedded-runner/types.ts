@@ -85,6 +85,12 @@ export type EmbeddedPiCompactResult = {
   ok: boolean;
   compacted: boolean;
   reason?: string;
+  /**
+   * heartbeat-compaction ARCH §2.7: set (with ok: true, compacted: false) when the compaction ended
+   * because there was nothing to summarize: no real conversation messages, or the compaction
+   * safeguard cancelled for that reason. An outcome, not a failure.
+   */
+  nothingToCompact?: boolean;
   result?: {
     summary: string;
     firstKeptEntryId: string;
